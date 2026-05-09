@@ -1,5 +1,5 @@
 // src/server.js — Hidata v20
-// + Endpoint de debug para verificar conexión Gemini
+// + Endpoint de debug para Perception Layer
 
 import 'dotenv/config'
 import Fastify from 'fastify'
@@ -20,6 +20,8 @@ import {
 import { loginVendor, getVendorNames } from './routes/auth.js'
 import { ejecutarFollowup } from './motor/followupEngine.js'
 import { geminiHealthCheck } from './lib/gemini.js'
+import { analizarMensaje, analizarMensajeStateless } from './perception/perception.js'
+import { buildPerceptionContext, summarizeContext } from './perception/perception-context-builder.js'
 
 const prisma = new PrismaClient({ log: ['error'] })
 const app = Fastify({ logger: false })
@@ -47,6 +49,64 @@ app.get('/health', async () => ({
 app.get('/debug/gemini-check', async (req, reply) => {
   const result = await geminiHealthCheck()
   return reply.send(result)
+})
+
+// Perception test — POST con body { mensaje, telefono?, context? }
+// Modo 1: con telefono → analizarMensaje completo (lee BD, guarda turn_trace)
+// Modo 2: sin telefono → analizarMensajeStateless (solo Gemini, no toca BD)
+app.post('/debug/perception-test', async (req, reply) => {
+  const startTime = Date.now()
+  const { mensaje, telefono, context, tenantId = 'peru_exporta', stateless = false } = req.body || {}
+
+  if (!mensaje) {
+    return reply.status(400).send({ 
+      error: 'Body must include "mensaje" field',
+      example: {
+        mensaje: 'ya pe causa, suena bien',
+        telefono: '51938188585',
+        stateless: true
+      }
+    })
+  }
+
+  try {
+    let result
+
+    if (stateless || !telefono) {
+      // MODO STATELESS — Solo Gemini, sin BD, ideal para test rápido
+      result = await analizarMensajeStateless({
+        mensaje,
+        contexto: context || {},
+        tenantId
+      })
+      result._mode = 'stateless'
+    } else {
+      // MODO COMPLETO — Lee BD, guarda turn_trace, incrementa contador
+      result = await analizarMensaje({
+        mensaje,
+        telefono,
+        tenantId,
+        saveTrace: true
+      })
+      result._mode = 'full'
+
+      // Bonus: devolver también el contexto que se construyó
+      const builtContext = await buildPerceptionContext({
+        telefono, mensaje, tenantId
+      })
+      result._context_summary = summarizeContext(builtContext)
+    }
+
+    result._endpoint_latency_ms = Date.now() - startTime
+    return reply.send(result)
+
+  } catch (err) {
+    console.error('[Debug] Perception test error:', err)
+    return reply.status(500).send({
+      error: err.message,
+      stack: err.stack?.split('\n').slice(0, 5)
+    })
+  }
 })
 
 // ── Auth ─────────────────────────────────────────────────────
