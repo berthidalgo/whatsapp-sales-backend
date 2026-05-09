@@ -1,6 +1,5 @@
-// src/server.js — Sprint 4
-// Fix: getMensajes endpoint para historial de chat
-// Fix: variables de entorno correctas
+// src/server.js — Hidata v20
+// + Endpoint de debug para verificar conexión Gemini
 
 import 'dotenv/config'
 import Fastify from 'fastify'
@@ -20,6 +19,7 @@ import {
 } from './routes/campaigns.js'
 import { loginVendor, getVendorNames } from './routes/auth.js'
 import { ejecutarFollowup } from './motor/followupEngine.js'
+import { geminiHealthCheck } from './lib/gemini.js'
 
 const prisma = new PrismaClient({ log: ['error'] })
 const app = Fastify({ logger: false })
@@ -42,6 +42,12 @@ app.get('/health', async () => ({
   version: '4.0.0',
   timestamp: new Date().toISOString()
 }))
+
+// ── Debug ────────────────────────────────────────────────────
+app.get('/debug/gemini-check', async (req, reply) => {
+  const result = await geminiHealthCheck()
+  return reply.send(result)
+})
 
 // ── Auth ─────────────────────────────────────────────────────
 app.get('/auth/vendors',  async (req, reply) => getVendorNames(req, reply, prisma))
