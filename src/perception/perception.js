@@ -2,19 +2,10 @@
 //
 // EL CORAZÓN DEL DÍA 2
 //
-// Pipeline completo de Perception:
-//   1. Recibe {telefono, mensaje, tenantId}
-//   2. Llama context-builder (lee BD, ~50ms)
-//   3. Construye prompt (system + few-shots + input real)
-//   4. Llama Gemini 2.5 Flash con structured output
-//   5. Valida output contra schema
-//   6. Si falla → devuelve fallback (NUNCA crashea)
-//   7. Registra turn completo en turn_trace
-//   8. Incrementa contador de tenant_settings (lazy reset mensual)
-//   9. Devuelve perception output al caller
-//
-// COSTO: ~$0.0003 por turn (input + thinking + output ~2,500 tokens total)
-// LATENCIA: ~1.5-2.5s (1.5s Gemini + 0.5s context + 0.1s BD writes)
+// Pipeline completo de Perception con resiliencia mejorada:
+//   - MAX_OUTPUT_TOKENS=4096 (Gemini 2.5 thinking necesita más espacio)
+//   - JSON sanitizer defensivo (limpia markdown, texto extra)
+//   - Detección de truncamiento explícita
 
 import prisma from '../db/prisma.js'
 import { callGemini, calculateCost } from '../lib/gemini.js'
@@ -35,7 +26,50 @@ import {
 // ════════════════════════════════════════════════════════
 const MODEL = 'gemini-2.5-flash'
 const TEMPERATURE = 0.2  // Bajo para clasificación consistente
-const MAX_OUTPUT_TOKENS = 1024
+const MAX_OUTPUT_TOKENS = 4096  // Subido de 1024: Gemini 2.5 usa thinking tokens
+
+// ════════════════════════════════════════════════════════
+// SANITIZER — limpia el output antes de parsear
+// ════════════════════════════════════════════════════════
+function sanitizeJsonOutput(rawText) {
+  if (!rawText || typeof rawText !== 'string') return rawText
+  
+  let cleaned = rawText.trim()
+  
+  // Caso 1: Markdown code block tipo ```json ... ```
+  const jsonBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
+  if (jsonBlockMatch) {
+    cleaned = jsonBlockMatch[1].trim()
+  }
+  
+  // Caso 2: Texto antes del primer { o [
+  const jsonStartMatch = cleaned.match(/^[\s\S]*?(\{[\s\S]*\}|\[[\s\S]*\])\s*$/)
+  if (jsonStartMatch) {
+    cleaned = jsonStartMatch[1].trim()
+  }
+  
+  return cleaned
+}
+
+// ════════════════════════════════════════════════════════
+// DETECTOR DE TRUNCAMIENTO
+// ════════════════════════════════════════════════════════
+function isTruncated(geminiResult, parseError) {
+  if (!parseError) return false
+  
+  // Heurística 1: finishReason explícito
+  const finishReason = geminiResult?.response?.candidates?.[0]?.finishReason
+  if (finishReason === 'MAX_TOKENS') return true
+  
+  // Heurística 2: el texto no termina en } o ]
+  const text = geminiResult?.text || ''
+  const trimmed = text.trim()
+  if (trimmed.length > 100 && !trimmed.endsWith('}') && !trimmed.endsWith(']')) {
+    return true
+  }
+  
+  return false
+}
 
 // ════════════════════════════════════════════════════════
 // API PRINCIPAL — analizarMensaje()
@@ -45,7 +79,7 @@ export async function analizarMensaje({
   mensaje,
   tenantId = 'peru_exporta',
   instanciaEvolution = null,
-  saveTrace = true  // false útil en evals para no contaminar BD
+  saveTrace = true
 }) {
   const startTime = Date.now()
   const errors = []
@@ -88,36 +122,41 @@ export async function analizarMensaje({
       maxOutputTokens: MAX_OUTPUT_TOKENS
     })
 
-    // Parsear JSON (Gemini garantiza que es JSON válido por structured output)
+    // Sanitizar antes de parsear
+    const rawText = geminiResult.text || ''
+    const sanitized = sanitizeJsonOutput(rawText)
+
     try {
-      perceptionOutput = JSON.parse(geminiResult.text)
+      perceptionOutput = JSON.parse(sanitized)
     } catch (parseErr) {
-        // Capturar el output crudo para depurar
-      const rawOutput = geminiResult.text || '(empty)'
-      const rawPreview = rawOutput.length > 1000 
-        ? rawOutput.slice(0, 500) + '\n...[TRUNCADO]...\n' + rawOutput.slice(-500)
-        : rawOutput
+      const wasTruncated = isTruncated(geminiResult, parseErr)
+      const reason = wasTruncated ? 'output_truncated' : 'json_parse_failed'
       
-      console.error('[Perception] JSON.parse failed. Raw Gemini output:')
+      const rawPreview = rawText.length > 1000
+        ? rawText.slice(0, 500) + '\n...[TRUNCADO]...\n' + rawText.slice(-500)
+        : rawText
+
+      console.error(`[Perception] ${reason}. Raw output (${rawText.length} chars):`)
       console.error(rawPreview)
-      
-      errors.push({ 
-        phase: 'json_parse', 
+
+      errors.push({
+        phase: 'json_parse',
         error: parseErr.message,
+        reason,
+        was_truncated: wasTruncated,
         raw_output_preview: rawPreview,
-        raw_output_length: rawOutput.length
+        raw_output_length: rawText.length,
+        finish_reason: geminiResult?.response?.candidates?.[0]?.finishReason || 'unknown'
       })
-      perceptionOutput = fallbackPerceptionOutput('json_parse_failed')
+      perceptionOutput = fallbackPerceptionOutput(reason)
     }
 
-    // Validar output contra schema (defensa en profundidad)
+    // Validar output contra schema (si no es fallback)
     if (!perceptionOutput._is_fallback) {
       const validation = validatePerceptionOutput(perceptionOutput)
       if (!validation.valid) {
         validationErrors = validation.errors
         errors.push({ phase: 'schema_validation', errors: validation.errors })
-        // Conservamos el output pero marcamos los errores
-        // (no devolvemos fallback porque a veces validación es estricta de más)
       }
     }
   } catch (err) {
@@ -143,28 +182,22 @@ export async function analizarMensaje({
     data_quality: dataQuality,
     has_errors: errors.length > 0,
     validation_errors: validationErrors,
-    is_fallback: !!perceptionOutput._is_fallback
+    is_fallback: !!perceptionOutput._is_fallback,
+    errors: errors  // ← AHORA SÍ se devuelven al cliente para debug
   }
 
   // ─── 7. Registrar en turn_trace (si aplica) ───
   if (saveTrace && lead_id) {
     try {
       await registrarTurnTrace({
-        lead_id,
-        contexto,
-        mensaje,
-        perceptionOutput,
-        meta,
-        costInfo,
-        errors
+        lead_id, contexto, mensaje, perceptionOutput, meta, costInfo, errors
       })
     } catch (err) {
       console.error('[Perception] Error saving turn_trace:', err.message)
-      // No falla el flow principal, solo loggea
     }
   }
 
-  // ─── 8. Incrementar contador del tenant (lazy reset) ───
+  // ─── 8. Incrementar contador del tenant ───
   if (geminiResult?.usage) {
     await incrementarTurnoConsumido(tenantId).catch(err =>
       console.error('[Perception] Error incrementing tenant counter:', err.message)
@@ -186,23 +219,20 @@ async function registrarTurnTrace({
 }) {
   const { perception_version, model_used, latency_ms, data_quality } = meta
 
-  // Compactar el output para guardar (sin la meta que duplicaría info)
   const perceptionForTrace = { ...perceptionOutput }
   delete perceptionForTrace.meta
 
-  // Build model_costs object para guardar
   const model_costs = costInfo ? {
     perception: {
-      input_tokens:  costInfo.input_tokens,
+      input_tokens: costInfo.input_tokens,
       output_tokens: costInfo.output_tokens,
-      total_tokens:  costInfo.total_tokens,
-      cost_usd:      costInfo.total_cost_usd
+      total_tokens: costInfo.total_tokens,
+      cost_usd: costInfo.total_cost_usd
     },
-    total_usd:    costInfo.total_cost_usd,
+    total_usd: costInfo.total_cost_usd,
     total_tokens: costInfo.total_tokens
   } : {}
 
-  // Audit log con metadata reproducible (sin el prompt completo, solo versión)
   const promptMeta = getPromptMetadata()
   const audit_log = {
     perception_prompt: promptMeta,
@@ -214,7 +244,7 @@ async function registrarTurnTrace({
     data: {
       leadId: lead_id,
       leadIdArchived: contexto.flags.archived ? lead_id : null,
-      conversationId: null,  // se setea cuando integremos con webhook handler en Día 6/7
+      conversationId: null,
       
       resetGeneration: contexto.flags.reset_generation || 1,
       dataQuality: data_quality,
@@ -226,15 +256,15 @@ async function registrarTurnTrace({
       perceptionVersion: perception_version,
       
       stateBefore: { mode: contexto.flags.current_mode, stage: contexto.flags.current_stage },
-      stateAfter: {},  // Día 3 lo llenará
+      stateAfter: {},
       
-      modeRouterDecision: {},  // Día 4 lo llenará
+      modeRouterDecision: {},
       
-      policyDecision: {},  // Día 5 lo llenará
+      policyDecision: {},
       policyVersion: null,
       guardrailsEvaluated: [],
       
-      botResponse: null,  // Día 6 lo llenará
+      botResponse: null,
       responseVersion: null,
       
       modelUsed: model_used,
@@ -261,7 +291,6 @@ async function incrementarTurnoConsumido(tenantId) {
     return
   }
 
-  // Verificar si necesita reset mensual (lazy)
   const ahora = new Date()
   const inicioMesActualReal = new Date(ahora.getFullYear(), ahora.getMonth(), 1)
   const inicioMesGuardado = new Date(tenant.mesActualInicio)
@@ -271,7 +300,6 @@ async function incrementarTurnoConsumido(tenantId) {
     inicioMesGuardado.getMonth() < inicioMesActualReal.getMonth()
 
   if (mesGuardadoEsAntiguo) {
-    // Reset: nuevo mes empezó
     await prisma.tenantSettings.update({
       where: { tenantId },
       data: {
@@ -280,7 +308,6 @@ async function incrementarTurnoConsumido(tenantId) {
       }
     })
   } else {
-    // Incremento normal
     await prisma.tenantSettings.update({
       where: { tenantId },
       data: {
@@ -313,12 +340,13 @@ function errorMeta(err, startTime) {
 // ════════════════════════════════════════════════════════
 export async function analizarMensajeStateless({ mensaje, contexto, tenantId = 'peru_exporta' }) {
   const startTime = Date.now()
-  
+
   const promptString = buildPerceptionPrompt({ mensaje, contexto: contexto || {} })
-  
+
   let perceptionOutput = null
   let geminiResult = null
-  
+  let errors = []
+
   try {
     geminiResult = await callGemini({
       tenantId,
@@ -328,14 +356,29 @@ export async function analizarMensajeStateless({ mensaje, contexto, tenantId = '
       temperature: TEMPERATURE,
       maxOutputTokens: MAX_OUTPUT_TOKENS
     })
+
+    const rawText = geminiResult.text || ''
+    const sanitized = sanitizeJsonOutput(rawText)
     
-    perceptionOutput = JSON.parse(geminiResult.text)
+    try {
+      perceptionOutput = JSON.parse(sanitized)
+    } catch (parseErr) {
+      const wasTruncated = isTruncated(geminiResult, parseErr)
+      errors.push({
+        phase: 'json_parse',
+        error: parseErr.message,
+        was_truncated: wasTruncated,
+        raw_output_length: rawText.length
+      })
+      perceptionOutput = fallbackPerceptionOutput(wasTruncated ? 'output_truncated' : 'json_parse_failed')
+    }
   } catch (err) {
+    errors.push({ phase: 'gemini_call', error: err.message })
     perceptionOutput = fallbackPerceptionOutput(err.message)
   }
-  
+
   const costInfo = geminiResult?.usage ? calculateCost(MODEL, geminiResult.usage) : null
-  
+
   return {
     ...perceptionOutput,
     meta: {
@@ -344,7 +387,8 @@ export async function analizarMensajeStateless({ mensaje, contexto, tenantId = '
       latency_ms: Date.now() - startTime,
       tokens_used: costInfo?.total_tokens || 0,
       cost_usd: costInfo?.total_cost_usd || 0,
-      stateless: true
+      stateless: true,
+      errors: errors
     }
   }
 }
