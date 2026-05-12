@@ -234,15 +234,20 @@ export const OBJECTION_STRATEGY_METADATA = {
 // Cuando múltiples acciones aplican, gana la de mayor prioridad
 // ════════════════════════════════════════════════════════
 export const ACTION_PRIORITY = {
-  [ACTIONS.SILENCE]:                100, // PAUSED/HUMAN_ACTIVE override TODO
+  // Críticas (acciones que deben ganar cuando aplican)
   [ACTIONS.CONFIRMAR_PAGO]:          95, // Pago detectado, máxima prioridad
   [ACTIONS.MANEJAR_OBJECION]:        80, // Objeción detectada, manejar antes de avanzar
   [ACTIONS.GREET_RETURNING]:         75, // Returning lead, reconocer primero
   [ACTIONS.AGENDAR_LLAMADA]:         70, // Lead HOT pidiendo llamada
-  [ACTIONS.PRESENTAR_PROGRAMA]:      60, // Avance natural del flujo
-  [ACTIONS.PEDIR_SITUACION_EMPRESA]: 50, // Avance natural del flujo
-  [ACTIONS.PEDIR_CALIFICACION]:      40, // Avance natural del flujo
-  [ACTIONS.SALUDAR_INICIAL]:         30  // Base, primer turno
+  
+  // Avance natural del flujo
+  [ACTIONS.PRESENTAR_PROGRAMA]:      60,
+  [ACTIONS.PEDIR_SITUACION_EMPRESA]: 50,
+  [ACTIONS.PEDIR_CALIFICACION]:      40,
+  [ACTIONS.SALUDAR_INICIAL]:         30,
+  
+  // SILENCE como último recurso (solo gana si está forzado por guardrails)
+  [ACTIONS.SILENCE]:                  0
 }
 
 // ════════════════════════════════════════════════════════
