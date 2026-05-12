@@ -1,6 +1,5 @@
 // src/server.js — Hidata v20
-// + Endpoint /debug/state-test (Día 3)
-// + Endpoint /debug/run-perception-evals (Día 2)
+// Día 4: + Endpoint /debug/mode-test (con simulación de guards)
 
 import 'dotenv/config'
 import { readFile } from 'node:fs/promises'
@@ -30,6 +29,7 @@ import { classifyExpectedIntent } from './perception/perception-schema.js'
 import { actualizarEstado } from './state/state.js'
 import { summarizeTransition } from './state/state-transitions.js'
 import { describeLeadState } from './state/stage-definitions.js'
+import { decideMode, summarizeModeDecision, isValidEscalation } from './routing/mode-router.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -79,9 +79,7 @@ app.post('/debug/perception-test', async (req, reply) => {
 
     if (stateless || !telefono) {
       result = await analizarMensajeStateless({
-        mensaje,
-        contexto: context || {},
-        tenantId
+        mensaje, contexto: context || {}, tenantId
       })
       result._mode = 'stateless'
     } else {
@@ -105,23 +103,13 @@ app.post('/debug/perception-test', async (req, reply) => {
   }
 })
 
-// ════════════════════════════════════════════════════════
+// ────────────────────────────────────────────────────────────
 // ── Debug — State Layer test (Día 3) ─────────────────────────
-// Pipeline completo: Perception → State
-// 
-// Body:
-//   { mensaje: string, telefono: string, tenantId?: string }
-//
-// Devuelve:
-//   - perception output
-//   - state result (con transition y mergeResult)
-//   - resumen humano para debug
-// ════════════════════════════════════════════════════════
+// ────────────────────────────────────────────────────────────
 app.post('/debug/state-test', async (req, reply) => {
   const startTime = Date.now()
   const { mensaje, telefono, tenantId = 'peru_exporta' } = req.body || {}
 
-  // Validación
   if (!mensaje || !telefono) {
     return reply.status(400).send({
       error: 'Body must include both "mensaje" and "telefono"',
@@ -133,11 +121,7 @@ app.post('/debug/state-test', async (req, reply) => {
   }
 
   try {
-    // ─── 1. Construir contexto (para los flags) ───
-    const builtContext = await buildPerceptionContext({
-      telefono, mensaje, tenantId
-    })
-
+    const builtContext = await buildPerceptionContext({ telefono, mensaje, tenantId })
     const leadId = builtContext.contexto.lead_id
     const contextFlags = builtContext.contexto.flags
 
@@ -149,41 +133,30 @@ app.post('/debug/state-test', async (req, reply) => {
       })
     }
 
-    // ─── 2. Llamar Perception (modo full, guarda turn_trace) ───
     const perceptionStart = Date.now()
     const perception = await analizarMensaje({
-      mensaje,
-      telefono,
-      tenantId,
-      saveTrace: true
+      mensaje, telefono, tenantId, saveTrace: true
     })
     const perceptionLatency = Date.now() - perceptionStart
 
-    // ─── 3. Llamar State Layer ───
     const stateStart = Date.now()
     const stateResult = await actualizarEstado({
-      perception,
-      leadId,
-      telefono,
-      contextFlags
+      perception, leadId, telefono, contextFlags
     })
     const stateLatency = Date.now() - stateStart
 
-    // ─── 4. Construir respuesta enriquecida ───
     const totalLatency = Date.now() - startTime
 
-    const response = {
+    return reply.send({
       ok: stateResult.ok,
       _endpoint_latency_ms: totalLatency,
-      
-      // Resumen humano (lo más útil para debug rápido)
       summary: {
         lead_id: leadId,
         telefono,
         mensaje,
         perception_intents: perception.intents,
         perception_intent_specific: perception.intent_specific,
-        state_before: stateResult.stateBefore 
+        state_before: stateResult.stateBefore
           ? `[${stateResult.stateBefore.mode}] stage=${stateResult.stateBefore.stage}`
           : null,
         state_after: stateResult.leadState
@@ -192,6 +165,9 @@ app.post('/debug/state-test', async (req, reply) => {
         transition_summary: stateResult.transition
           ? summarizeTransition(stateResult.transition)
           : null,
+        mode_router_summary: stateResult.modeRouterDecision
+          ? summarizeModeDecision(stateResult.modeRouterDecision)
+          : null,
         slots_changed: stateResult.mergeResult?.change_count || 0,
         latency: {
           perception_ms: perceptionLatency,
@@ -199,8 +175,6 @@ app.post('/debug/state-test', async (req, reply) => {
           total_ms: totalLatency
         }
       },
-
-      // Datos completos para análisis profundo
       perception: {
         intents: perception.intents,
         intent_specific: perception.intent_specific,
@@ -212,22 +186,18 @@ app.post('/debug/state-test', async (req, reply) => {
         meta: perception.meta,
         is_fallback: perception._is_fallback || false
       },
-
       state: {
         ok: stateResult.ok,
         leadState: stateResult.leadState,
         transition: stateResult.transition,
         mergeResult: stateResult.mergeResult,
+        modeRouterDecision: stateResult.modeRouterDecision,
         stateBefore: stateResult.stateBefore,
         errors: stateResult.errors,
         latency_ms: stateResult.latency_ms
       },
-
-      // Context flags que recibió State Layer
       context_flags: contextFlags
-    }
-
-    return reply.send(response)
+    })
 
   } catch (err) {
     console.error('[Debug] State test error:', err)
@@ -238,9 +208,201 @@ app.post('/debug/state-test', async (req, reply) => {
   }
 })
 
-// ════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// ── Debug — Mode Router test (Día 4) ─────────────────────────────
+// Pipeline completo: Perception → State → ModeRouter
+// 
+// Body normal (con datos reales de BD):
+//   { mensaje: string, telefono: string }
+//
+// Body con simulación (override tenant/vendor para probar guards):
+//   { 
+//     mensaje: string, 
+//     telefono: string, 
+//     simulate: {
+//       tenantSettings: { estadoSuscripcion: 'past_due', turnosConsumidosMesActual: 10500, ... },
+//       vendorActivo: { activo: false }
+//     }
+//   }
+// ════════════════════════════════════════════════════════════════
+app.post('/debug/mode-test', async (req, reply) => {
+  const startTime = Date.now()
+  const { mensaje, telefono, tenantId = 'peru_exporta', simulate = null } = req.body || {}
+
+  if (!mensaje || !telefono) {
+    return reply.status(400).send({
+      error: 'Body must include both "mensaje" and "telefono"',
+      example_normal: {
+        mensaje: 'Hola, soy Juan',
+        telefono: '51938188585'
+      },
+      example_with_simulation: {
+        mensaje: 'Hola, soy Juan',
+        telefono: '51938188585',
+        simulate: {
+          tenantSettings: {
+            estadoSuscripcion: 'past_due',
+            turnosConsumidosMesActual: 10500,
+            turnosIncluidosPorVendedorMes: 10000,
+            numVendedoresPagados: 1
+          },
+          vendorActivo: { id: 1, activo: false, nombre: 'Joan' }
+        }
+      }
+    })
+  }
+
+  try {
+    // ─── 1. Construir contexto ───
+    const builtContext = await buildPerceptionContext({ telefono, mensaje, tenantId })
+    const leadId = builtContext.contexto.lead_id
+    const contextFlags = builtContext.contexto.flags
+
+    if (!leadId) {
+      return reply.status(404).send({
+        error: 'Lead does not exist.',
+        telefono
+      })
+    }
+
+    // ─── 2. Si HAY simulación, usar pipeline mockeado ───
+    if (simulate) {
+      // Cargar lead_state actual para no escribir nada
+      const currentLeadState = await prisma.leadState.findUnique({ where: { leadId } })
+      
+      if (!currentLeadState) {
+        return reply.status(404).send({
+          error: 'lead_state does not exist for this lead. Use /debug/state-test first.',
+          telefono, leadId
+        })
+      }
+
+      // Llamar Perception (sin guardar trace para no contaminar)
+      const perception = await analizarMensaje({
+        mensaje, telefono, tenantId, saveTrace: false
+      })
+
+      // Llamar Mode Router con los datos SIMULADOS
+      const modeRouterDecision = decideMode({
+        leadState: currentLeadState,
+        perception,
+        context: contextFlags,
+        tenantSettings: simulate.tenantSettings || null,
+        vendorActivo: simulate.vendorActivo || null
+      })
+
+      // Validar si la transición sería válida
+      const escalationValid = isValidEscalation(
+        currentLeadState.currentMode,
+        modeRouterDecision.decision.final_mode
+      )
+
+      return reply.send({
+        ok: true,
+        _mode: 'simulated',
+        _endpoint_latency_ms: Date.now() - startTime,
+        
+        summary: {
+          lead_id: leadId,
+          telefono,
+          mensaje,
+          mode_router_summary: summarizeModeDecision(modeRouterDecision),
+          escalation_valid: escalationValid,
+          state_unchanged: 'simulation does not persist any change'
+        },
+
+        simulation_inputs: {
+          tenantSettings: simulate.tenantSettings,
+          vendorActivo: simulate.vendorActivo
+        },
+
+        perception_summary: {
+          intents: perception.intents,
+          intent_specific: perception.intent_specific,
+          temperature: perception.sentiment?.temperature
+        },
+
+        leadState_used: {
+          currentMode: currentLeadState.currentMode,
+          currentStage: currentLeadState.currentStage,
+          slotsFilled: currentLeadState.slotsFilled
+        },
+
+        mode_router_decision: modeRouterDecision
+      })
+    }
+
+    // ─── 3. Si NO hay simulación, pipeline normal completo ───
+    const perceptionStart = Date.now()
+    const perception = await analizarMensaje({
+      mensaje, telefono, tenantId, saveTrace: true
+    })
+    const perceptionLatency = Date.now() - perceptionStart
+
+    const stateStart = Date.now()
+    const stateResult = await actualizarEstado({
+      perception, leadId, telefono, contextFlags
+    })
+    const stateLatency = Date.now() - stateStart
+
+    const totalLatency = Date.now() - startTime
+
+    return reply.send({
+      ok: stateResult.ok,
+      _mode: 'real',
+      _endpoint_latency_ms: totalLatency,
+      
+      summary: {
+        lead_id: leadId,
+        telefono,
+        mensaje,
+        state_before: stateResult.stateBefore
+          ? `[${stateResult.stateBefore.mode}] stage=${stateResult.stateBefore.stage}`
+          : null,
+        state_after: stateResult.leadState
+          ? describeLeadState(stateResult.leadState)
+          : null,
+        mode_router_summary: stateResult.modeRouterDecision
+          ? summarizeModeDecision(stateResult.modeRouterDecision)
+          : 'router not executed',
+        mode_router_overrode_state: stateResult.modeRouterDecision?.decision?.overrode_state || false,
+        guards_triggered: stateResult.modeRouterDecision?.guards_triggered || [],
+        latency: {
+          perception_ms: perceptionLatency,
+          state_ms: stateLatency,
+          total_ms: totalLatency
+        }
+      },
+
+      perception_summary: {
+        intents: perception.intents,
+        intent_specific: perception.intent_specific,
+        temperature: perception.sentiment?.temperature
+      },
+
+      state: {
+        ok: stateResult.ok,
+        leadState: stateResult.leadState,
+        transition: stateResult.transition,
+        modeRouterDecision: stateResult.modeRouterDecision,
+        errors: stateResult.errors
+      },
+
+      context_flags: contextFlags
+    })
+
+  } catch (err) {
+    console.error('[Debug] Mode test error:', err)
+    return reply.status(500).send({
+      error: err.message,
+      stack: err.stack?.split('\n').slice(0, 8)
+    })
+  }
+})
+
+// ────────────────────────────────────────────────────────────
 // ── Debug — Run Perception Evals (Día 2) ─────────────────────
-// ════════════════════════════════════════════════════════
+// ────────────────────────────────────────────────────────────
 app.post('/debug/run-perception-evals', async (req, reply) => {
   const startTime = Date.now()
   const { categoryFilter = null, idFilter = null } = req.body || {}
@@ -303,53 +465,38 @@ app.post('/debug/run-perception-evals', async (req, reply) => {
     const totalLatency = details.reduce((sum, d) => sum + (d.latency_ms || 0), 0)
     const avgLatency = details.length > 0 ? Math.round(totalLatency / details.length) : 0
 
-    const report = {
+    return reply.send({
       summary: {
         total_in_dataset: allEvals.length,
         with_perception_intent: perceptionEvals.length,
         executable: ejecutables.length,
         skipped_sequence_evals: noEjecutables.length,
-        passed,
-        failed,
-        errors,
+        passed, failed, errors,
         pass_rate: ejecutables.length > 0 ? (passed / ejecutables.length).toFixed(2) : 0,
         total_cost_usd: totalCost.toFixed(6),
         avg_latency_ms: avgLatency,
         total_runtime_ms: Date.now() - startTime
       },
       passed_evals: details.filter(d => d.status === 'passed').map(d => ({
-        id: d.eval_id,
-        category: d.category,
-        expected: d.expected_intent,
-        got: d.got_summary
+        id: d.eval_id, category: d.category,
+        expected: d.expected_intent, got: d.got_summary
       })),
       failed_evals: details.filter(d => d.status === 'failed').map(d => ({
-        id: d.eval_id,
-        category: d.category,
-        expected: d.expected_intent,
-        expected_level: d.expected_level,
-        got_intents: d.got_intents,
-        got_intent_specific: d.got_intent_specific,
-        got_pattern: d.got_pattern,
-        rationale: d.rationale,
-        diagnosis: d.diagnosis,
-        latency_ms: d.latency_ms,
-        cost_usd: d.cost_usd
+        id: d.eval_id, category: d.category,
+        expected: d.expected_intent, expected_level: d.expected_level,
+        got_intents: d.got_intents, got_intent_specific: d.got_intent_specific,
+        got_pattern: d.got_pattern, rationale: d.rationale, diagnosis: d.diagnosis,
+        latency_ms: d.latency_ms, cost_usd: d.cost_usd
       })),
       error_evals: details.filter(d => d.status === 'error').map(d => ({
-        id: d.eval_id,
-        category: d.category,
-        error: d.error,
-        latency_ms: d.latency_ms
+        id: d.eval_id, category: d.category,
+        error: d.error, latency_ms: d.latency_ms
       })),
       skipped_evals: noEjecutables.map(e => ({
-        id: e.id,
-        category: e.category,
+        id: e.id, category: e.category,
         reason: 'requires_sequence_evaluation_not_perception'
       }))
-    }
-
-    return reply.send(report)
+    })
   } catch (err) {
     console.error('[Evals] Fatal error:', err)
     return reply.status(500).send({
@@ -508,7 +655,7 @@ try {
 ╔════════════════════════════════════════╗
 ║   Hidata — WhatsApp Sales ERP v20      ║
 ║   Puerto: ${PORT}                          ║
-║   Día 3: State Layer + Context Graph   ║
+║   Día 4: + Mode Router                 ║
 ╚════════════════════════════════════════╝
   `)
 } catch (error) {
