@@ -186,10 +186,12 @@ export async function analizarMensaje({
     errors: errors  // ← AHORA SÍ se devuelven al cliente para debug
   }
 
-  // ─── 7. Registrar en turn_trace (si aplica) ───
+// ─── 7. Registrar en turn_trace (si aplica) ───
+  // Devuelve el turn_id para que State Layer pueda hacer update después
+  let turnId = null
   if (saveTrace && lead_id) {
     try {
-      await registrarTurnTrace({
+      turnId = await registrarTurnTrace({
         lead_id, contexto, mensaje, perceptionOutput, meta, costInfo, errors
       })
     } catch (err) {
@@ -208,7 +210,10 @@ export async function analizarMensaje({
   // ─── 9. Devolver output completo ───
   return {
     ...perceptionOutput,
-    meta
+      meta: {
+      ...meta,
+      turn_id: turnId  // ← agregado para que State Layer pueda hacer update
+    }
   }
 }
 
@@ -241,7 +246,7 @@ async function registrarTurnTrace({
     historial_turns_used: contexto.historial_corto.length
   }
 
-  await prisma.turnTrace.create({
+  const trace = await prisma.turnTrace.create({
     data: {
       leadId: lead_id,
       leadIdArchived: contexto.flags.archived ? lead_id : null,
@@ -277,6 +282,8 @@ async function registrarTurnTrace({
       modelCosts: model_costs
     }
   })
+  
+  return trace.turnId
 }
 
 // ════════════════════════════════════════════════════════
