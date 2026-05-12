@@ -81,11 +81,11 @@ export function resolveCandidatesByStage(currentStage, currentMode) {
         ACTIONS.MANEJAR_OBJECION
       ]
 
-    case STAGES.POST_CLOSE:
+case STAGES.POST_CLOSE:
       return [
         ACTIONS.CONFIRMAR_PAGO,
-        ACTIONS.MANEJAR_OBJECION,         // post-cierre puede tener dudas
-        ACTIONS.SILENCE                    // si lead solo conversa post-cierre
+        ACTIONS.MANEJAR_OBJECION          // post-cierre puede tener dudas
+        // SILENCE removido: solo se activa por guardrails (respect_mode_silence)
       ]
 
     case STAGES.RETURNING_RECOGNITION:
