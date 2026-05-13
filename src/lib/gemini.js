@@ -7,6 +7,8 @@
 // Multi-tenant ready: cada tenant puede tener su propio project_id futuro.
 //
 // Autenticación: Service Account JSON via GOOGLE_APPLICATION_CREDENTIALS
+//
+// FIX Día 7: pricing corregido + soporte para Flash Lite
 
 import { GoogleGenAI } from '@google/genai'
 import prisma from '../db/prisma.js'
@@ -138,37 +140,85 @@ export async function callGemini({
 }
 
 // ════════════════════════════════════════════════════════
-// CALCULADORA DE COSTOS — Gemini 2.5 Flash pricing
-// Vertex AI usa mismos precios que AI Studio paid tier
+// CALCULADORA DE COSTOS — Pricing OFICIAL de Vertex AI
+// FIX Día 7: pricing corregido + soporte Flash Lite
+// 
+// Fuente: https://cloud.google.com/vertex-ai/generative-ai/pricing
+// Verificado: Mayo 2026
 // ════════════════════════════════════════════════════════
 const PRICING_PER_1M_TOKENS = {
+  // Modelo principal — usado en Perception
   'gemini-2.5-flash': {
-    input:  0.075,   // USD por 1M tokens
-    output: 0.30     // USD por 1M tokens
+    input:  0.30,    // USD por 1M tokens (FIX: era 0.075, incorrecto)
+    output: 2.50     // USD por 1M tokens (FIX: era 0.30, incorrecto)
   },
+  
+  // Modelo ligero — usado en Response Layer (Día 6+)
+  'gemini-2.5-flash-lite': {
+    input:  0.10,    // 3x más barato que Flash regular
+    output: 0.40     // 6x más barato que Flash regular
+  },
+  
+  // Modelo flagship — reservado para casos complejos futuros
   'gemini-2.5-pro': {
     input:  1.25,
-    output: 5.00
+    output: 10.00
   }
 }
 
-export function calculateCost(model, usage) {
-  if (!usage) return null
-  
+/**
+ * Calcula el costo en USD de una llamada a Gemini.
+ * 
+ * Acepta dos signatures para compatibilidad:
+ *   1. calculateCost(model, usage)          → modo objeto (Perception)
+ *   2. calculateCost(model, inputTokens, outputTokens) → modo separado (Response)
+ * 
+ * @param {string} model - Modelo usado (gemini-2.5-flash, etc)
+ * @param {object|number} usageOrInput - Objeto usage o número de input tokens
+ * @param {number} [outputTokens] - Solo si signature #2
+ * @returns {object|number} Objeto con desglose o número simple
+ */
+export function calculateCost(model, usageOrInput, outputTokens) {
   const pricing = PRICING_PER_1M_TOKENS[model]
-  if (!pricing) return null
   
-  const inputTokens  = usage.promptTokenCount     || 0
-  const outputTokens = usage.candidatesTokenCount || 0
+  if (!pricing) {
+    console.warn(`[Gemini] No pricing defined for model: ${model}`)
+    return null
+  }
+  
+  let inputTokens = 0
+  let outTokens = 0
+  let returnSimple = false
+  
+  // Detectar signature
+  if (typeof usageOrInput === 'object' && usageOrInput !== null) {
+    // Signature #1: calculateCost(model, usage)
+    inputTokens = usageOrInput.promptTokenCount     || 0
+    outTokens   = usageOrInput.candidatesTokenCount || 0
+  } else if (typeof usageOrInput === 'number') {
+    // Signature #2: calculateCost(model, inputTokens, outputTokens)
+    inputTokens = usageOrInput
+    outTokens   = outputTokens || 0
+    returnSimple = true   // Response-llm.js espera número simple
+  } else {
+    console.warn('[Gemini] calculateCost: invalid usage param')
+    return null
+  }
   
   const inputCost  = (inputTokens  / 1_000_000) * pricing.input
-  const outputCost = (outputTokens / 1_000_000) * pricing.output
+  const outputCost = (outTokens    / 1_000_000) * pricing.output
   const totalCost  = inputCost + outputCost
   
+  // Si signature #2, devolver número simple (compatible con response-llm.js)
+  if (returnSimple) {
+    return totalCost
+  }
+  
+  // Si signature #1, devolver objeto detallado (compatible con perception.js)
   return {
-    input_tokens:  inputTokens,
-    output_tokens: outputTokens,
-    total_tokens:  inputTokens + outputTokens,
+    input_tokens:    inputTokens,
+    output_tokens:   outTokens,
+    total_tokens:    inputTokens + outTokens,
     input_cost_usd:  inputCost,
     output_cost_usd: outputCost,
     total_cost_usd:  totalCost
