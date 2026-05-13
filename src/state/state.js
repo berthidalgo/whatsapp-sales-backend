@@ -1,6 +1,6 @@
-// src/state/state.js — Hidata v20 (Día 5)
+// src/state/state.js — Hidata v20 (Día 6)
 //
-// PIPELINE COMPLETO: State + Mode Router + Policy Layer
+// PIPELINE COMPLETO: State + Mode Router + Policy + Response
 //
 // Pipeline interno:
 //   1. Lee lead_state actual (o crea uno si no existe)
@@ -10,9 +10,10 @@
 //   5. Sincroniza lead.pasoActual y campos espejo
 //   6. [Día 4] Llama Mode Router para evaluar guards operacionales
 //   7. [Día 4] Si Mode Router escaló el mode, persiste el cambio
-//   8. [NEW Día 5] Llama Policy Layer para decidir acción
-//   9. Actualiza turn_trace.stateAfter + modeRouterDecision + policyDecision
-//   10. Devuelve { leadState, transition, mergeResult, modeRouterDecision, policyDecision }
+//   8. [Día 5] Llama Policy Layer para decidir acción
+//   9. [NEW Día 6] Llama Response Layer para generar texto
+//   10. Actualiza turn_trace con TODO (stateAfter + modeRouterDecision + policyDecision + botResponse)
+//   11. Devuelve { leadState, transition, mergeResult, modeRouterDecision, policyDecision, botResponse }
 //
 // NUNCA crashea — si algo falla, devuelve estado original sin cambios
 
@@ -31,6 +32,7 @@ import {
 } from './stage-definitions.js'
 import { decideMode, summarizeModeDecision, MODE_ROUTER_VERSION } from '../routing/mode-router.js'
 import { decidirPolicy, summarizeFullPolicyDecision, POLICY_VERSION } from '../policy/policy.js'
+import { generarRespuesta, summarizeBotResponse, RESPONSE_VERSION } from '../response/response.js'
 
 // ════════════════════════════════════════════════════════
 // API PRINCIPAL — actualizarEstado()
@@ -44,8 +46,8 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     return {
       ok: false,
       errors: [{ phase: 'validation', message: 'leadId is required' }],
-      leadState: null, transition: null, mergeResult: null, 
-      modeRouterDecision: null, policyDecision: null
+      leadState: null, transition: null, mergeResult: null,
+      modeRouterDecision: null, policyDecision: null, botResponse: null
     }
   }
 
@@ -53,8 +55,8 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     return {
       ok: false,
       errors: [{ phase: 'validation', message: 'perception is required' }],
-      leadState: null, transition: null, mergeResult: null, 
-      modeRouterDecision: null, policyDecision: null
+      leadState: null, transition: null, mergeResult: null,
+      modeRouterDecision: null, policyDecision: null, botResponse: null
     }
   }
 
@@ -83,7 +85,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
 
     // ─── 5. Escribir lead_state y lead en transacción ───
     let updatedLeadState
-    
+
     updatedLeadState = await prisma.$transaction(async (tx) => {
       const newLeadState = await tx.leadState.update({
         where: { leadId },
@@ -109,12 +111,17 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     // ════════════════════════════════════════════════════════
     let modeRouterDecision = null
     let finalLeadState = updatedLeadState
-    
+    let tenantSettings = null
+    let vendorActivo = null
+
     try {
-      const [tenantSettings, vendorActivo] = await Promise.all([
+      // Cargar contexto operacional para el router (lo reutilizamos en Response)
+      const loaded = await Promise.all([
         loadTenantSettings(perception?.meta?.tenant_id || 'peru_exporta'),
         loadVendorActivo(updatedLeadState.vendorActiveId)
       ])
+      tenantSettings = loaded[0]
+      vendorActivo = loaded[1]
 
       modeRouterDecision = decideMode({
         leadState: updatedLeadState,
@@ -127,7 +134,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
       // ─── 7. [Día 4] Si Mode Router escaló, persistir ───
       if (modeRouterDecision.decision.overrode_state) {
         const newMode = modeRouterDecision.decision.final_mode
-        
+
         const newEstado = MODE_TO_LEAD_ESTADO[newMode]
         const additionalLeadUpdates = {}
         if (newEstado !== null && newEstado !== undefined) {
@@ -165,10 +172,10 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     }
 
     // ════════════════════════════════════════════════════════
-    // ─── 8. [NEW Día 5] Llamar Policy Layer ───
+    // ─── 8. [Día 5] Llamar Policy Layer ───
     // ════════════════════════════════════════════════════════
     let policyDecision = null
-    
+
     try {
       policyDecision = decidirPolicy({
         leadState: finalLeadState,
@@ -181,11 +188,32 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     } catch (err) {
       console.error('[State] Policy Layer failed:', err.message)
       errors.push({ phase: 'policy', message: err.message })
-      // Policy NUNCA crashea (tiene fallback interno), pero por si acaso
     }
 
     // ════════════════════════════════════════════════════════
-    // ─── 9. Actualizar turn_trace con TODO ───
+    // ─── 9. [NEW Día 6] Llamar Response Layer ───
+    // ════════════════════════════════════════════════════════
+    let botResponse = null
+
+    try {
+      botResponse = await generarRespuesta({
+        policyDecision,
+        leadState: finalLeadState,
+        perception,
+        vendor: vendorActivo,
+        tenantSettings,
+        ultimoMensaje: perception?.meta?.mensaje_original || ''
+      })
+
+      console.log(`[State] Response generó: ${summarizeBotResponse(botResponse)}`)
+
+    } catch (err) {
+      console.error('[State] Response Layer failed:', err.message)
+      errors.push({ phase: 'response', message: err.message })
+    }
+
+    // ════════════════════════════════════════════════════════
+    // ─── 10. Actualizar turn_trace con TODO ───
     // ════════════════════════════════════════════════════════
     const turnId = perception?.meta?.turn_id
     if (turnId) {
@@ -194,7 +222,8 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
         transition,
         mergeResult,
         modeRouterDecision,
-        policyDecision
+        policyDecision,
+        botResponse
       })
 
       await prisma.turnTrace.update({
@@ -204,7 +233,9 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
           modeRouterDecision: modeRouterDecision || {},
           policyDecision: policyDecision || {},
           policyVersion: POLICY_VERSION,
-          guardrailsEvaluated: policyDecision?.guardrails?.evaluated || []
+          guardrailsEvaluated: policyDecision?.guardrails?.evaluated || [],
+          botResponse: botResponse?.text || null,
+          responseVersion: RESPONSE_VERSION
         }
       }).catch(err => {
         console.error('[State] Error updating turn_trace:', err.message)
@@ -213,7 +244,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     }
 
     const latencyMs = Date.now() - startTime
-    
+
     // Log resumen completo
     console.log(
       `[State] ${telefono || `lead_${leadId}`} | ` +
@@ -222,6 +253,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
       `${summarizeMerge(mergeResult)} | ` +
       `router: ${modeRouterDecision ? summarizeModeDecision(modeRouterDecision) : 'skipped'} | ` +
       `policy: ${policyDecision ? summarizeFullPolicyDecision(policyDecision) : 'skipped'} | ` +
+      `response: ${botResponse ? summarizeBotResponse(botResponse) : 'skipped'} | ` +
       `${latencyMs}ms`
     )
 
@@ -232,6 +264,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
       mergeResult,
       modeRouterDecision,
       policyDecision,
+      botResponse,
       errors,
       latency_ms: latencyMs,
       stateBefore
@@ -240,7 +273,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
   } catch (err) {
     console.error('[State] Fatal error:', err.message)
     errors.push({ phase: 'fatal', message: err.message, stack: err.stack?.split('\n').slice(0, 3) })
-    
+
     return {
       ok: false,
       errors,
@@ -249,13 +282,14 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
       mergeResult: null,
       modeRouterDecision: null,
       policyDecision: null,
+      botResponse: null,
       latency_ms: Date.now() - startTime
     }
   }
 }
 
 // ════════════════════════════════════════════════════════
-// LOADERS — para Mode Router
+// LOADERS — para Mode Router (y reutilizado en Response)
 // ════════════════════════════════════════════════════════
 
 async function loadTenantSettings(tenantId) {
@@ -294,7 +328,7 @@ async function getOrCreateLeadState(leadId) {
   if (existing) return existing
 
   console.log(`[State] Creating lead_state for lead ${leadId} (first time)`)
-  
+
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
     select: { estado: true, pasoActual: true, nombreDetectado: true, productoDetectado: true, vendorId: true }
@@ -406,13 +440,13 @@ function serializeStateBefore(leadState) {
   }
 }
 
-function serializeStateAfter({ newLeadState, transition, mergeResult, modeRouterDecision, policyDecision }) {
+function serializeStateAfter({ newLeadState, transition, mergeResult, modeRouterDecision, policyDecision, botResponse }) {
   return {
     mode: newLeadState.currentMode,
     stage: newLeadState.currentStage,
     slots_filled: newLeadState.slotsFilled,
     returning_lead_flag: newLeadState.returningLeadFlag,
-    
+
     transition: {
       from_stage: transition.stayed ? newLeadState.currentStage : 'previous',
       to_stage: transition.nextStage,
@@ -421,12 +455,12 @@ function serializeStateAfter({ newLeadState, transition, mergeResult, modeRouter
       reason: transition.transition_reason,
       stayed: transition.stayed
     },
-    
+
     merge: {
       change_count: mergeResult.change_count,
       changes: mergeResult.changes
     },
-    
+
     router_summary: modeRouterDecision ? {
       overrode_state: modeRouterDecision.decision.overrode_state,
       final_mode: modeRouterDecision.decision.final_mode,
@@ -441,13 +475,22 @@ function serializeStateAfter({ newLeadState, transition, mergeResult, modeRouter
       rule_matched: policyDecision.rule_matched,
       guardrails_blocking: policyDecision.guardrails?.blocking_names || []
     } : null,
-    
+
+    response_summary: botResponse ? {
+      bot_responded: botResponse.bot_responded,
+      method: botResponse.generation?.method,
+      text_length: botResponse.text?.length || 0,
+      cost_usd: botResponse.audit?.cost_usd || 0,
+      llm_failed: botResponse.audit?.llm_failed || false
+    } : null,
+
     versions: {
       definitions: STATE_DEFINITIONS_VERSION,
       transitions: STATE_TRANSITIONS_VERSION,
       context_graph: CONTEXT_GRAPH_VERSION,
       mode_router: MODE_ROUTER_VERSION,
-      policy: POLICY_VERSION
+      policy: POLICY_VERSION,
+      response: RESPONSE_VERSION
     }
   }
 }
@@ -455,4 +498,4 @@ function serializeStateAfter({ newLeadState, transition, mergeResult, modeRouter
 // ════════════════════════════════════════════════════════
 // VERSIÓN PARA TRACKING
 // ════════════════════════════════════════════════════════
-export const STATE_VERSION = 'v3_day5'
+export const STATE_VERSION = 'v4_day6'
