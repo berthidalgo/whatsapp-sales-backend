@@ -110,19 +110,23 @@ export function checkAndMark(messageId, metadata = {}) {
  * Llamado automáticamente cada CLEANUP_INTERVAL_MS.
  */
 function cleanup() {
-  const now = Date.now()
-  let removed = 0
-  
-  for (const [messageId, entry] of processedMessages.entries()) {
-    const age = now - entry.timestamp
-    if (age > MESSAGE_TTL_MS) {
-      processedMessages.delete(messageId)
-      removed++
+  try {
+    const now = Date.now()
+    let removed = 0
+    
+    for (const [messageId, entry] of processedMessages.entries()) {
+      const age = now - entry.timestamp
+      if (age > MESSAGE_TTL_MS) {
+        processedMessages.delete(messageId)
+        removed++
+      }
     }
-  }
-  
-  if (removed > 0) {
-    console.log(`[Idempotency] Cleanup: removed ${removed} expired entries (${processedMessages.size} remaining)`)
+    
+    if (removed > 0) {
+      console.log(`[Idempotency] Cleanup: removed ${removed} expired entries (${processedMessages.size} remaining)`)
+    }
+  } catch (err) {
+    console.error('[Idempotency] Cleanup failed:', err.message)
   }
 }
 
