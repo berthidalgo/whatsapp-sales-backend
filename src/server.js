@@ -655,4 +655,166 @@ app.post('/debug/run-perception-evals', async (req, reply) => {
       passed_evals: details.filter(d => d.status === 'passed').map(d => ({ id: d.eval_id, category: d.category, expected: d.expected_intent, got: d.got_summary })),
       failed_evals: details.filter(d => d.status === 'failed').map(d => ({ id: d.eval_id, category: d.category, expected: d.expected_intent, expected_level: d.expected_level, got_intents: d.got_intents, got_intent_specific: d.got_intent_specific, got_pattern: d.got_pattern, rationale: d.rationale, diagnosis: d.diagnosis, latency_ms: d.latency_ms, cost_usd: d.cost_usd })),
       error_evals: details.filter(d => d.status === 'error').map(d => ({ id: d.eval_id, category: d.category, error: d.error, latency_ms: d.latency_ms })),
-      skipped_evals: noEjecutables.map(e => ({
+      skipped_evals: noEjecutables.map(e => ({ id: e.id, category: e.category, reason: 'requires_sequence_evaluation_not_perception' }))
+    })
+  } catch (err) {
+    console.error('[Evals] Fatal error:', err)
+    return reply.status(500).send({ error: err.message, stack: err.stack?.split('\n').slice(0, 8) })
+  }
+})
+
+async function runSingleEval(evalCase, retryCount = 0) {
+  const startTime = Date.now()
+  const expectedIntent = evalCase.expected.perception_intent
+  const expectedLevel = classifyExpectedIntent(expectedIntent)
+
+  try {
+    const result = await analizarMensajeStateless({
+      mensaje: evalCase.input.lead_message,
+      contexto: evalCase.input.context || {},
+      tenantId: 'peru_exporta'
+    })
+
+    if (result._is_fallback && retryCount < 1) {
+      await sleep(2000)
+      return runSingleEval(evalCase, retryCount + 1)
+    }
+
+    let passed = false
+    let diagnosis = null
+
+    if (expectedLevel === 'level_1') {
+      passed = result.intents?.includes(expectedIntent)
+      if (!passed) diagnosis = `Expected "${expectedIntent}" in intents[], got [${result.intents?.join(', ')}]`
+    } else if (expectedLevel === 'level_2') {
+      passed = result.intent_specific === expectedIntent
+      if (!passed) {
+        if (result.intent_specific === null) {
+          diagnosis = `Expected intent_specific="${expectedIntent}" but got null. Parent intent was [${result.intents?.join(', ')}]`
+        } else {
+          diagnosis = `Expected intent_specific="${expectedIntent}" but got "${result.intent_specific}"`
+        }
+      }
+    } else if (expectedLevel === 'level_3') {
+      passed = result.conversational_pattern?.pattern === expectedIntent
+      if (!passed) diagnosis = `Expected conversational_pattern="${expectedIntent}" but got ${result.conversational_pattern?.pattern || 'null'}`
+    } else {
+      diagnosis = `Unknown expected level for "${expectedIntent}"`
+    }
+
+    return {
+      eval_id: evalCase.id,
+      category: evalCase.category,
+      status: passed ? 'passed' : 'failed',
+      expected_intent: expectedIntent,
+      expected_level: expectedLevel,
+      got_intents: result.intents,
+      got_intent_specific: result.intent_specific,
+      got_pattern: result.conversational_pattern?.pattern || null,
+      got_summary: passed ? `${expectedIntent} ✓` : null,
+      rationale: result.rationale,
+      diagnosis,
+      latency_ms: Date.now() - startTime,
+      cost_usd: result.meta?.cost_usd || 0,
+      _retried: retryCount > 0
+    }
+  } catch (err) {
+    return {
+      eval_id: evalCase.id,
+      category: evalCase.category,
+      status: 'error',
+      error: err.message,
+      expected_intent: expectedIntent,
+      latency_ms: Date.now() - startTime,
+      cost_usd: 0
+    }
+  }
+}
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+
+// ── Auth ─────────────────────────────────────────────────────
+app.get('/auth/vendors',  async (req, reply) => getVendorNames(req, reply, prisma))
+app.post('/auth/login',   async (req, reply) => loginVendor(req, reply, prisma))
+
+// ── Webhook ──────────────────────────────────────────────────
+app.post('/webhook', async (req, reply) => handleWebhook(req, reply, prisma))
+app.get('/webhook',  async () => ({ status: 'webhook activo', version: '6.0.0' }))
+
+// ── Leads ────────────────────────────────────────────────────
+app.get('/leads',                async (req, reply) => getLeads(req, reply, prisma))
+app.put('/leads/:id',            async (req, reply) => updateLead(req, reply, prisma))
+app.post('/leads/:id/mensaje',   async (req, reply) => sendMensaje(req, reply, prisma))
+app.post('/leads/:id/accion',    async (req, reply) => doAccion(req, reply, prisma))
+app.get('/leads/:id/mensajes',   async (req, reply) => getMensajes(req, reply, prisma))
+app.get('/reportes',             async (req, reply) => getReportes(req, reply, prisma))
+
+// ── Config ───────────────────────────────────────────────────
+app.get('/config/bot',  async (req, reply) => getBotConfig(req, reply, prisma))
+app.put('/config/bot',  async (req, reply) => updateBotConfig(req, reply, prisma))
+app.get('/config/vendedores',                async (req, reply) => getVendedores(req, reply, prisma))
+app.post('/config/vendedores',               async (req, reply) => createVendedor(req, reply, prisma))
+app.put('/config/vendedores/:id',            async (req, reply) => updateVendedor(req, reply, prisma))
+app.put('/config/vendedores/:id/desactivar', async (req, reply) => desactivarVendedor(req, reply, prisma))
+
+// ── Campaigns ────────────────────────────────────────────────
+app.get('/campaigns',                      async (req, reply) => getCampaigns(req, reply, prisma))
+app.get('/campaigns/:id',                  async (req, reply) => getCampaign(req, reply, prisma))
+app.post('/campaigns',                     async (req, reply) => createCampaign(req, reply, prisma))
+app.put('/campaigns/:id',                  async (req, reply) => updateCampaign(req, reply, prisma))
+app.delete('/campaigns/:id',               async (req, reply) => deleteCampaign(req, reply, prisma))
+app.put('/campaigns/:id/steps',            async (req, reply) => saveSteps(req, reply, prisma))
+app.post('/campaigns/:id/triggers',        async (req, reply) => addTrigger(req, reply, prisma))
+app.delete('/campaigns/:id/triggers/:tid', async (req, reply) => deleteTrigger(req, reply, prisma))
+app.post('/campaigns/test-trigger',        async (req, reply) => testTrigger(req, reply, prisma))
+app.patch('/campaigns/:id/activar',        async (req, reply) => activarCampaign(req, reply, prisma))
+
+// ── Vendors ──────────────────────────────────────────────────
+app.get('/vendors', async (req, reply) => {
+  const vendors = await prisma.vendor.findMany({
+    where: { activo: true },
+    select: { id: true, nombre: true, telefono: true, role: true, instanciaEvolution: true }
+  })
+  return vendors
+})
+
+// ── Cron ─────────────────────────────────────────────────────
+app.get('/cron/followup', async (req, reply) => {
+  const secret = req.headers['x-cron-secret'] || req.query.secret
+  if (secret !== process.env.CRON_SECRET) return reply.status(401).send({ error: 'Unauthorized' })
+  try {
+    const result = await ejecutarFollowup(prisma)
+    console.log(`[Cron] Followup ejecutado: ${result.procesados} leads`)
+    return reply.send({ ok: true, ...result })
+  } catch (err) {
+    console.error('[Cron] Error:', err.message)
+    return reply.status(500).send({ error: err.message })
+  }
+})
+
+// ── Start ────────────────────────────────────────────────────
+const PORT = parseInt(process.env.PORT || '3000')
+const HOST = process.env.HOST || '0.0.0.0'
+
+try {
+  await prisma.$connect()
+  console.log('✅ PostgreSQL conectado')
+  await app.listen({ port: PORT, host: HOST })
+  console.log(`
+╔════════════════════════════════════════╗
+║   Hidata — WhatsApp Sales ERP v20      ║
+║   Puerto: ${PORT}                          ║
+║   Día 6: + Response Layer (LLM)        ║
+╚════════════════════════════════════════╝
+  `)
+} catch (error) {
+  console.error('❌ Error arrancando servidor:', error)
+  await prisma.$disconnect()
+  process.exit(1)
+}
+
+process.on('SIGTERM', async () => {
+  await app.close()
+  await prisma.$disconnect()
+  process.exit(0)
+})
