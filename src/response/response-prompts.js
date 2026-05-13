@@ -1,4 +1,4 @@
-// src/response/response-prompts.js — Hidata v20 Día 6
+// src/response/response-prompts.js — Hidata v20 Día 6 (con fix Día 7)
 //
 // CATÁLOGO DE PROMPTS Y TEMPLATES
 //
@@ -9,7 +9,7 @@
 //     AGENDAR_LLAMADA
 //   - 1 no-op: SILENCE (no genera texto)
 //
-// Cada prompt está versionado para A/B testing futuro.
+// FIX Día 7: agregada regla CRÍTICA anti-placeholders en LLM prompts
 
 import { ACTIONS, OBJECTION_STRATEGIES } from '../policy/action-types.js'
 
@@ -29,6 +29,24 @@ export const RESPONSE_STRATEGY = {
   
   [ACTIONS.SILENCE]:                  'no_response'
 }
+
+// ════════════════════════════════════════════════════════
+// REGLAS CRÍTICAS COMUNES — aplicadas a TODOS los LLM prompts
+// FIX Día 7: previene placeholders [Fecha], [Hora], etc
+// ════════════════════════════════════════════════════════
+const REGLAS_CRITICAS_OUTPUT = `
+REGLAS CRÍTICAS DE OUTPUT (OBLIGATORIAS):
+1. NUNCA uses placeholders entre corchetes como [Fecha], [Hora], [Nombre], [X], etc.
+2. Si NO tienes información concreta sobre fecha/hora:
+   → Propón 2-3 opciones específicas tipo "hoy 7pm, mañana 11am o mañana 4pm"
+   → O pregunta directamente al lead "¿qué horario te queda mejor?"
+3. Si NO tienes información de un slot (nombre, producto):
+   → Usa SOLO los valores que SÍ tienes en el contexto
+   → No inventes datos que no estén disponibles
+   → Usa términos genéricos peruanos como "compa", "amigo" si falta el nombre
+4. NUNCA digas "Como te comenté antes" si no tienes evidencia clara del contexto previo
+5. Devuelve SOLO el texto del mensaje, sin metadata, sin comillas, sin prefacios.
+`.trim()
 
 // ════════════════════════════════════════════════════════
 // TEMPLATES PUROS — substitución de variables simple
@@ -89,12 +107,13 @@ export const TEMPLATES = {
 
 // ════════════════════════════════════════════════════════
 // LLM PROMPTS — para acciones que requieren personalización
+// FIX Día 7: cada prompt incluye REGLAS_CRITICAS_OUTPUT
 // ════════════════════════════════════════════════════════
 
 // PRESENTAR_PROGRAMA — mostrar curso/precio personalizado
 export const LLM_PROMPTS = {
   [ACTIONS.PRESENTAR_PROGRAMA]: {
-    version: 'v1',
+    version: 'v2_day7_no_placeholders',
     system: `Eres asistente de Peru Exporta TV (ESCEX), programa de formación para exportadores peruanos.
 
 CONTEXTO DEL PROGRAMA:
@@ -116,8 +135,7 @@ REGLAS DE TONO:
 - Emojis moderados: 💪 🤝 ✅ 🌎 (no muchos)
 - Termina con pregunta de cierre suave que invite a llamada
 
-FORMATO DE OUTPUT:
-Devuelve SOLO el texto del mensaje, sin metadata, sin comillas, sin prefacios.`,
+${REGLAS_CRITICAS_OUTPUT}`,
     
     user_template: `INFORMACIÓN DEL LEAD:
 - Nombre: {nombre}
@@ -145,7 +163,7 @@ Genera el mensaje de presentación del programa para este lead.`,
 
   // MANEJAR_OBJECION — varía según strategy
   [ACTIONS.MANEJAR_OBJECION]: {
-    version: 'v1',
+    version: 'v2_day7_no_placeholders',
     system: `Eres asistente de Peru Exporta TV especializado en manejo de objeciones de leads peruanos.
 
 CONTEXTO COMERCIAL:
@@ -177,8 +195,7 @@ GUÍA POR STRATEGY:
 - ya_gaste_empatia_micro: empatía + micro-compromiso S/100
 - generica: manejo genérico con redirección
 
-FORMATO DE OUTPUT:
-Devuelve SOLO el texto del mensaje, sin metadata, sin comillas, sin prefacios.`,
+${REGLAS_CRITICAS_OUTPUT}`,
 
     user_template: `INFORMACIÓN DEL LEAD:
 - Nombre: {nombre}
@@ -220,7 +237,7 @@ Genera el mensaje de manejo de objeción siguiendo la strategy "{strategy}".`,
 
   // AGENDAR_LLAMADA — coordinar horario con lead
   [ACTIONS.AGENDAR_LLAMADA]: {
-    version: 'v1',
+    version: 'v2_day7_no_placeholders',
     system: `Eres asistente de Peru Exporta TV agendando una llamada con un lead.
 
 CONTEXTO:
@@ -237,8 +254,7 @@ REGLAS DE TONO:
 - Mensaje en 3-4 líneas
 - Cerrar con confirmación de horario
 
-FORMATO DE OUTPUT:
-Devuelve SOLO el texto del mensaje, sin metadata, sin comillas, sin prefacios.`,
+${REGLAS_CRITICAS_OUTPUT}`,
 
     user_template: `INFORMACIÓN DEL LEAD:
 - Nombre: {nombre}
@@ -350,4 +366,4 @@ export function substituteVariables(text, vars = {}) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const RESPONSE_PROMPTS_VERSION = 'v1_day6_hybrid_templates_llm'
+export const RESPONSE_PROMPTS_VERSION = 'v2_day7_no_placeholders'
