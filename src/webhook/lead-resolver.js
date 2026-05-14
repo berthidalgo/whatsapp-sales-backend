@@ -1,21 +1,16 @@
 // src/webhook/lead-resolver.js — Hidata v20 Día 7
 //
-// LEAD RESOLVER
+// LEAD RESOLVER (FIX Día 7)
 //
 // Resuelve el leadId a partir del número de WhatsApp (remoteJid de Evolution).
 // Si el lead no existe en BD, lo crea automáticamente.
 //
-// Pipeline interno:
-//   1. Extraer número desde remoteJid (quita @s.whatsapp.net, espacios, +, etc)
-//   2. Buscar lead por telefono en BD
-//   3. Si existe → return leadId + metadata
-//   4. Si NO existe → crear con vendor asignado a la instancia
-//   5. Si BD falla → return error, NO crash
-//
-// Vendor assignment para leads nuevos:
-//   - Busca vendor activo con la misma instanciaEvolution del payload
-//   - Si no encuentra, fallback a vendor con role=ADMIN
-//   - Si tampoco, fallback a vendor_id=1 (Joan, default)
+// FIX aplicado:
+//   - Removido campaignSlug (NO existe en schema)
+//   - Usar campaignId (que sí existe en schema)
+//   - Removido archived del select (usar archivedAt)
+//   - estado default "NUEVO" alineado con schema
+//   - pasoActual: 0 alineado con default schema
 
 import prisma from '../db/prisma.js'
 
@@ -23,8 +18,8 @@ import prisma from '../db/prisma.js'
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
 const DEFAULT_TENANT_ID = 'peru_exporta'
-const DEFAULT_CAMPAIGN_SLUG = 'MPX'
-const FALLBACK_VENDOR_ID = 1                  // Joan, por defecto si nada más funciona
+const DEFAULT_CAMPAIGN_SLUG = 'MPX'              // Para buscar campaign_id
+const FALLBACK_VENDOR_ID = 1                      // Joan, por defecto
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — resolveLead()
@@ -32,16 +27,6 @@ const FALLBACK_VENDOR_ID = 1                  // Joan, por defecto si nada más 
 
 /**
  * Resuelve o crea un lead a partir del payload de Evolution.
- * 
- * @param {object} params
- * @param {string} params.remoteJid - Ej: "51938188585@s.whatsapp.net"
- * @param {string} params.instanceName - Nombre de instancia Evolution (ej: "peru-exporta-test")
- * @param {string} params.pushName - Nombre público del WhatsApp (opcional)
- * @param {string} params.tenantId - Tenant ID (default: peru_exporta)
- * @returns {object} {
- *   ok, leadId, telefono, vendorId, vendorNombre, 
- *   isNew, tenantId, errors
- * }
  */
 export async function resolveLead({
   remoteJid,
@@ -77,20 +62,23 @@ export async function resolveLead({
     // ─── 4. Resolver vendor para la instancia ───
     const vendor = await resolveVendor(instanceName)
 
-    // ─── 5. Upsert atómico del lead ───
+    // ─── 5. Resolver campaign_id desde slug (MPX) ───
+    const campaign = await resolveCampaign(DEFAULT_CAMPAIGN_SLUG, tenantId)
+
+    // ─── 6. Upsert atómico del lead ───
     const lead = await prisma.lead.upsert({
       where: { telefono },
       update: {
         ultimoMensaje: new Date()
-        // NO actualizamos otros campos aquí (lead ya existe, su data es válida)
       },
       create: {
         telefono,
         nombreDetectado: pushName || null,
-        estado: 'EN_FLUJO',
-        pasoActual: 1,
-        campaignSlug: DEFAULT_CAMPAIGN_SLUG,
+        estado: 'NUEVO',                          // Default del schema
+        pasoActual: 0,                            // Default del schema
+        campaignId: campaign?.id || null,         // FK a Campaign (puede ser null)
         vendorId: vendor.id,
+        tenantId: tenantId,
         ultimoMensaje: new Date()
       },
       select: {
@@ -102,11 +90,11 @@ export async function resolveLead({
         nombreDetectado: true,
         productoDetectado: true,
         createdAt: true,
-        archived: true
+        archivedAt: true                          // Para detectar si está archivado
       }
     })
 
-    // ─── 6. Detectar si es nuevo (createdAt reciente = hace < 5 segundos) ───
+    // ─── 7. Detectar si es nuevo (createdAt reciente = hace < 5 segundos) ───
     const ageMs = Date.now() - new Date(lead.createdAt).getTime()
     const isNew = ageMs < 5000
 
@@ -116,7 +104,7 @@ export async function resolveLead({
       console.log(`[LeadResolver] Existing lead: ${telefono} (id: ${lead.id}, vendor: ${vendor.nombre})`)
     }
 
-    // ─── 7. Devolver resultado exitoso ───
+    // ─── 8. Devolver resultado exitoso ───
     return {
       ok: true,
       leadId: lead.id,
@@ -125,7 +113,7 @@ export async function resolveLead({
       vendorNombre: vendor.nombre,
       isNew,
       tenantId,
-      isArchived: lead.archived || false,
+      isArchived: lead.archivedAt !== null,       // Boolean derivado de archivedAt
       leadEstado: lead.estado,
       nombreDetectado: lead.nombreDetectado,
       productoDetectado: lead.productoDetectado,
@@ -143,17 +131,45 @@ export async function resolveLead({
 }
 
 // ════════════════════════════════════════════════════════
-// HELPER — Resolver vendor para una instancia
+// HELPER — Resolver campaign por slug
 // ════════════════════════════════════════════════════════
 
 /**
- * Encuentra el vendor activo asignado a una instancia Evolution.
- * Cascade fallback:
- *   1. Vendor con instanciaEvolution = instanceName
- *   2. Vendor con role = ADMIN
- *   3. Vendor con id = FALLBACK_VENDOR_ID (Joan, hardcoded)
- *   4. Si nada funciona, lanza error
+ * Encuentra el campaign activo por slug (ej: "MPX" → campaign_id)
  */
+async function resolveCampaign(slug, tenantId) {
+  if (!slug) return null
+
+  try {
+    const campaign = await prisma.campaign.findFirst({
+      where: {
+        slug,
+        tenantId,
+        activa: true
+      },
+      select: {
+        id: true,
+        slug: true,
+        nombre: true
+      }
+    })
+
+    if (!campaign) {
+      console.warn(`[LeadResolver] No active campaign found for slug "${slug}", lead will have null campaignId`)
+    }
+
+    return campaign
+
+  } catch (err) {
+    console.error('[LeadResolver] resolveCampaign failed:', err.message)
+    return null
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// HELPER — Resolver vendor para una instancia
+// ════════════════════════════════════════════════════════
+
 async function resolveVendor(instanceName) {
   try {
     // Cascade 1: vendor con instancia coincidente
@@ -216,7 +232,6 @@ async function resolveVendor(instanceName) {
       return fallbackVendor
     }
 
-    // Si llegamos aquí, no hay vendor en BD (escenario catastrófico)
     throw new Error('No vendor available in database')
 
   } catch (err) {
@@ -229,36 +244,16 @@ async function resolveVendor(instanceName) {
 // HELPERS — Phone normalization & validation
 // ════════════════════════════════════════════════════════
 
-/**
- * Extrae solo dígitos de un remoteJid o número de teléfono.
- * 
- * Inputs aceptados:
- *   - "51938188585@s.whatsapp.net" → "51938188585"
- *   - "+51-938-188-585" → "51938188585"
- *   - "whatsapp:+51938188585" → "51938188585"
- * 
- * @param {string} jid - JID o número
- * @returns {string} solo dígitos
- */
 export function normalizePhone(jid) {
   if (!jid || typeof jid !== 'string') return ''
   
-  // Remover sufijo @s.whatsapp.net si existe
   let cleaned = jid.replace(/@.+$/, '')
-  
-  // Remover prefijo whatsapp: si existe
   cleaned = cleaned.replace(/^whatsapp:/, '')
-  
-  // Remover todo lo no-numérico
   cleaned = cleaned.replace(/\D/g, '')
   
   return cleaned
 }
 
-/**
- * Detecta si un JID es de un grupo (vs individual).
- * Grupos terminan en "@g.us", individuales en "@s.whatsapp.net"
- */
 export function isGroupJid(jid) {
   if (!jid || typeof jid !== 'string') return false
   return jid.endsWith('@g.us')
@@ -307,4 +302,4 @@ export function summarizeResolution(result) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const LEAD_RESOLVER_VERSION = 'v1_day7_upsert_with_vendor_cascade'
+export const LEAD_RESOLVER_VERSION = 'v2_day7_schema_aligned'
