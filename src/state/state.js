@@ -233,7 +233,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
           modeRouterDecision: modeRouterDecision || {},
           policyDecision: policyDecision || {},
           policyVersion: POLICY_VERSION,
-          guardrailsEvaluated: policyDecision?.guardrails?.evaluated || [],
+          guardrailsEvaluated: serializeGuardrails(policyDecision?.guardrails?.evaluated),
           botResponse: botResponse?.text || null,
           responseVersion: RESPONSE_VERSION
         }
@@ -496,6 +496,58 @@ function serializeStateAfter({ newLeadState, transition, mergeResult, modeRouter
 }
 
 // ════════════════════════════════════════════════════════
+// HELPER — Serializar guardrails para schema String[]
+// ════════════════════════════════════════════════════════
+//
+// FIX Día 8: Schema Prisma espera String[] pero guardrails.evaluated
+// es Object[] con estructura: { guardrail, outcome, action?, reason?, forced_action? }
+//
+// Convertimos a strings descriptivos legibles para BD y logs.
+// La estructura completa se preserva en policyDecision (Json).
+//
+// Formato: "guardrail_name:OUTCOME:action_or_reason"
+//
+// Ejemplos:
+//   "respect_mode_silence:FORCE:silence"
+//   "no_precio_sin_calificar:ALLOW:presentar_programa"
+//   "no_precio_sin_calificar:BLOCK:missing_slots:nombre,producto"
+//
+function serializeGuardrails(evaluatedArray) {
+  if (!Array.isArray(evaluatedArray) || evaluatedArray.length === 0) {
+    return []
+  }
+
+  return evaluatedArray.map(g => {
+    const name = g?.guardrail || 'unknown'
+    const outcome = g?.outcome || 'unknown'
+
+    // Si fue FORCE → mostrar forced_action
+    if (g?.forced_action) {
+      return `${name}:${outcome}:${g.forced_action}`
+    }
+
+    // Si tiene action (ALLOW/BLOCK) → mostrar action
+    if (g?.action) {
+      // Si además hay reason útil, incluirla
+      if (g?.reason && outcome === 'BLOCK') {
+        const shortReason = String(g.reason).slice(0, 60)
+        return `${name}:${outcome}:${g.action}:${shortReason}`
+      }
+      return `${name}:${outcome}:${g.action}`
+    }
+
+    // Si solo tiene reason → mostrar reason resumida
+    if (g?.reason) {
+      const shortReason = String(g.reason).slice(0, 80)
+      return `${name}:${outcome}:${shortReason}`
+    }
+
+    // Fallback: solo nombre + outcome
+    return `${name}:${outcome}`
+  })
+}
+
+// ════════════════════════════════════════════════════════
 // VERSIÓN PARA TRACKING
 // ════════════════════════════════════════════════════════
-export const STATE_VERSION = 'v4_day6'
+export const STATE_VERSION = 'v5_day8_guardrails_serialized'
