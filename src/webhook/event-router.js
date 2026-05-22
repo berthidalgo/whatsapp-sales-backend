@@ -91,15 +91,33 @@ export async function routeEvent(payload, processPipelineFn) {
 
 async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
   const data = payload?.data || {}
-  const key = data.key || {}
-  const message = data.message || {}
+
+  // ════════════════════════════════════════════════════════
+  // FIX Día 8 — Compatibilidad con DOS estructuras de payload:
+  //
+  // Estructura A (Evolution v2.3.7 webhook real):
+  //   data.messages = [ { key, message, ... } ]
+  //
+  // Estructura B (algunos endpoints / tests):
+  //   data.key = { ... }, data.message = { ... }
+  //
+  // Detectamos cuál es y extraemos consistentemente.
+  // ════════════════════════════════════════════════════════
+  const isArrayStructure = Array.isArray(data.messages) && data.messages.length > 0
+  const msgEnvelope = isArrayStructure ? data.messages[0] : data
+
+  const key = msgEnvelope?.key || {}
+  const message = msgEnvelope?.message || {}
+  const pushName = msgEnvelope?.pushName || data?.pushName || null
   const instanceName = data.instance || payload.instance || null
 
   // ─── 1. Validar estructura mínima ───
   if (!key.remoteJid || !key.id) {
     return buildErrorResponse('messages_upsert_missing_keys', startTime, {
       hasRemoteJid: !!key.remoteJid,
-      hasId: !!key.id
+      hasId: !!key.id,
+      detectedStructure: isArrayStructure ? 'array' : 'direct',
+      payloadDataKeys: Object.keys(data)
     })
   }
 
@@ -113,13 +131,13 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
   const messageType = detectMessageType(message)
   const text = extractText(message)
 
-  console.log(`[EventRouter] messages.upsert | fromMe=${key.fromMe} | type=${messageType} | jid=${key.remoteJid}`)
+  console.log(`[EventRouter] messages.upsert | fromMe=${key.fromMe} | type=${messageType} | jid=${key.remoteJid} | struct=${isArrayStructure ? 'array' : 'direct'}`)
 
   // ─── 4. Resolver lead ───
   const leadResolution = await resolveLead({
     remoteJid: key.remoteJid,
     instanceName,
-    pushName: data.pushName || null
+    pushName
   })
 
   if (!leadResolution.ok) {
@@ -315,8 +333,12 @@ async function handleConnectionUpdate(payload, startTime) {
 // ════════════════════════════════════════════════════════
 
 async function handleSendMessage(payload, startTime) {
-  const messageId = payload?.data?.key?.id || 'unknown'
-  const remoteJid = payload?.data?.key?.remoteJid || 'unknown'
+  // FIX Día 8: compatibilidad dual de estructura
+  const data = payload?.data || {}
+  const isArrayStructure = Array.isArray(data.messages) && data.messages.length > 0
+  const msgEnvelope = isArrayStructure ? data.messages[0] : data
+  const messageId = msgEnvelope?.key?.id || 'unknown'
+  const remoteJid = msgEnvelope?.key?.remoteJid || 'unknown'
   
   console.log(`[EventRouter] ✉️ send.message confirmed: ${messageId} → ${remoteJid}`)
   
@@ -457,4 +479,4 @@ export function summarizeEventResult(result) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const EVENT_ROUTER_VERSION = 'v1_day7_dispatch_6_events'
+export const EVENT_ROUTER_VERSION = 'v2_day8_payload_compat'
