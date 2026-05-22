@@ -1,5 +1,5 @@
 // src/server.js — Hidata v20
-// Día 6: + Endpoint /debug/response-test
+// Día 8: Cleanup arquitectónico + bug guardrails fixed
 
 import 'dotenv/config'
 import { readFile } from 'node:fs/promises'
@@ -54,7 +54,7 @@ await app.register(cors, {
 app.get('/health', async () => ({
   status: 'ok',
   service: 'Hidata — WhatsApp Sales ERP',
-  version: '6.0.0',
+  version: '7.0.0',
   timestamp: new Date().toISOString()
 }))
 
@@ -739,7 +739,7 @@ app.post('/auth/login',   async (req, reply) => loginVendor(req, reply, prisma))
 
 // ── Webhook ──────────────────────────────────────────────────
 app.post('/webhook', async (req, reply) => handleWebhook(req, reply, prisma))
-app.get('/webhook',  async () => ({ status: 'webhook activo', version: '6.0.0' }))
+app.get('/webhook',  async () => ({ status: 'webhook activo', version: '7.0.0' }))
 
 // ── Leads ────────────────────────────────────────────────────
 app.get('/leads',                async (req, reply) => getLeads(req, reply, prisma))
@@ -803,8 +803,8 @@ try {
   console.log(`
 ╔════════════════════════════════════════╗
 ║   Hidata — WhatsApp Sales ERP v20      ║
-║   Puerto: ${PORT}                          ║
-║   Día 6: + Response Layer (LLM)        ║
+║   Puerto: ${PORT}                      ║
+║   Día 8: Audit + cleanup arquitectónico║
 ╚════════════════════════════════════════╝
   `)
 } catch (error) {
