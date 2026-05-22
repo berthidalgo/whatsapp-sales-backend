@@ -82,7 +82,14 @@ async function processWebhookAsync(payload, startTime) {
     }
 
     const eventType = payload.event || 'unknown'
-    const messageId = payload?.data?.key?.id || null
+
+    // ─── FIX Día 8: messageId con compatibilidad dual ───
+    // Estructura A: data.messages[0].key.id (Evolution v2.3.7 real)
+    // Estructura B: data.key.id (tests / otros endpoints)
+    const data = payload?.data || {}
+    const isArrayStructure = Array.isArray(data.messages) && data.messages.length > 0
+    const msgEnvelope = isArrayStructure ? data.messages[0] : data
+    const messageId = msgEnvelope?.key?.id || null
 
     // ─── 2. Idempotency check (solo para messages.upsert) ───
     if (eventType === 'messages.upsert' && messageId) {
@@ -247,4 +254,4 @@ export function getActivePipelines() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const HANDLER_VERSION = 'v20_day7_full_refactor'
+export const HANDLER_VERSION = 'v21_day8_payload_compat'
