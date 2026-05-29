@@ -21,7 +21,7 @@ import {
   saveSteps, addTrigger, deleteTrigger, testTrigger, activarCampaign
 } from './routes/campaigns.js'
 import { loginVendor, getVendorNames } from './routes/auth.js'
-import { ejecutarFollowup } from './motor/followupEngine.js'
+
 import { geminiHealthCheck } from './lib/gemini.js'
 import { analizarMensaje, analizarMensajeStateless } from './perception/perception.js'
 import { buildPerceptionContext, summarizeContext } from './perception/perception-context-builder.js'
@@ -778,19 +778,7 @@ app.get('/vendors', async (req, reply) => {
   return vendors
 })
 
-// ── Cron ─────────────────────────────────────────────────────
-app.get('/cron/followup', async (req, reply) => {
-  const secret = req.headers['x-cron-secret'] || req.query.secret
-  if (secret !== process.env.CRON_SECRET) return reply.status(401).send({ error: 'Unauthorized' })
-  try {
-    const result = await ejecutarFollowup(prisma)
-    console.log(`[Cron] Followup ejecutado: ${result.procesados} leads`)
-    return reply.send({ ok: true, ...result })
-  } catch (err) {
-    console.error('[Cron] Error:', err.message)
-    return reply.status(500).send({ error: err.message })
-  }
-})
+
 
 // ── Start ────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000')
