@@ -4,7 +4,7 @@
 // Fix Bug 10: sendMensaje envía por WhatsApp real
 // Fix Bug 11: doAccion cancela followup cerrando conversation
 
-import { enviarTexto } from '../whatsapp/sender.js'
+import { sendToWhatsApp } from '../webhook/sender.js'
 
 export async function getLeads(request, reply, prisma) {
   try {
@@ -132,7 +132,7 @@ export async function sendMensaje(request, reply, prisma) {
     // Enviar por WhatsApp si el vendor tiene instancia
     const instancia = lead.vendor?.instanciaEvolution
     if (instancia) {
-      await enviarTexto(instancia, lead.telefono, contenido).catch(err => {
+      await sendToWhatsApp({ telefono: lead.telefono, text: contenido, instanceName: instancia }).catch(err => {
         console.error('[API/leads] sendMensaje WhatsApp error:', err.message)
       })
     }
