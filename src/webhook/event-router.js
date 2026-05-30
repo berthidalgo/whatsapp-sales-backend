@@ -1,9 +1,22 @@
-// src/webhook/event-router.js — Hidata v20 Día 7
+// src/webhook/event-router.js — Hidata v20 · Sprint 2 (paso 1a — identidad @lid)
 //
 // EVENT ROUTER
 //
 // Recibe el payload crudo de Evolution API y dispatcha al handler correcto.
-// Cada tipo de evento tiene su handler específico.
+//
+// ─────────────────────────────────────────────────────────────────────────
+// CAMBIO Sprint 2 (paso 1a):
+//   - Extrae del payload de Baileys lo que antes se tiraba a la basura:
+//       · remoteJidAlt / senderPn  → número real cuando remoteJid es @lid
+//       · addressingMode           → 'pn' | 'lid'
+//       · contextInfo.externalAdReply / conversionSource → contexto de anuncio CTWA
+//     y se lo pasa al lead-resolver (identidad) y, vía pass-through, al
+//     Campaign Resolver del paso 1b.
+//   - RECON: cuando llega un @lid o un anuncio CTWA, lo LOGUEA en producción.
+//     Así, al correr un anuncio real, vemos en Render qué trae Baileys de verdad
+//     en NUESTRA instancia → diseñamos el Campaign Resolver con datos reales.
+//   - Endurece el filtro de no-leads: grupos + canales + broadcast (isNonLeadJid).
+// ─────────────────────────────────────────────────────────────────────────
 //
 // Eventos manejados:
 //   - messages.upsert     → mensaje nuevo (lead o vendor)
@@ -13,18 +26,19 @@
 //   - logout.instance     → ALERTA crítica (vendor debe re-escanear QR)
 //   - qrcode.updated      → log con instrucciones
 //
-// Eventos no manejados (skip con log):
-//   - cualquier otro evento que Evolution mande
-//
-// CERO BD writes directos. Delega a:
-//   - lead-resolver.js → para resolver lead
-//   - debounce.js → para encolar mensajes
-//   - state.js → para marcar HUMAN_ACTIVE
+// CERO BD writes directos. Delega a lead-resolver, debounce y state.
 //
 // API pública: routeEvent(payload, processPipelineFn)
 
 import prisma from '../db/prisma.js'
-import { resolveLead, normalizePhone, isGroupJid, summarizeResolution } from './lead-resolver.js'
+import {
+  resolveLead,
+  normalizePhone,
+  isNonLeadJid,
+  isGroupJid,
+  isLidJid,
+  summarizeResolution
+} from './lead-resolver.js'
 import { enqueueMessage, cancelDebounce } from './debounce.js'
 import { MODES } from '../state/stage-definitions.js'
 
@@ -34,7 +48,7 @@ import { MODES } from '../state/stage-definitions.js'
 
 /**
  * Dispatcha un payload de Evolution al handler correcto.
- * 
+ *
  * @param {object} payload - Payload crudo de Evolution
  * @param {function} processPipelineFn - async (leadInfo, combinedText, bufferMeta) => void
  * @returns {object} { ok, handled, eventType, action }
@@ -94,14 +108,8 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
 
   // ════════════════════════════════════════════════════════
   // FIX Día 8 — Compatibilidad con DOS estructuras de payload:
-  //
-  // Estructura A (Evolution v2.3.7 webhook real):
-  //   data.messages = [ { key, message, ... } ]
-  //
-  // Estructura B (algunos endpoints / tests):
-  //   data.key = { ... }, data.message = { ... }
-  //
-  // Detectamos cuál es y extraemos consistentemente.
+  //   Estructura A (Evolution v2.3.7 webhook real): data.messages = [ { key, message } ]
+  //   Estructura B (algunos endpoints / tests):      data.key = {...}, data.message = {...}
   // ════════════════════════════════════════════════════════
   const isArrayStructure = Array.isArray(data.messages) && data.messages.length > 0
   const msgEnvelope = isArrayStructure ? data.messages[0] : data
@@ -121,23 +129,41 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
     })
   }
 
-  // ─── 2. Rechazar grupos ───
-  if (isGroupJid(key.remoteJid)) {
-    console.log(`[EventRouter] Skipping group message: ${key.remoteJid}`)
-    return buildResponse('group_skipped', startTime, { jid: key.remoteJid })
+  // ─── 2. Rechazar no-leads (grupo / canal / broadcast) ───
+  if (isNonLeadJid(key.remoteJid)) {
+    console.log(`[EventRouter] Skipping non-lead JID: ${key.remoteJid}`)
+    return buildResponse('non_lead_skipped', startTime, { jid: key.remoteJid })
   }
 
-  // ─── 3. Detectar tipo de mensaje ───
+  // ─── 3. Extraer identificadores de direccionamiento (PN / LID / alt) ───
+  const addressing = extractAddressing(key, msgEnvelope, data)
+
+  // ─── 4. Extraer contexto de anuncio CTWA (para el Campaign Resolver, paso 1b) ───
+  const adContext = extractAdContext(message)
+
+  // ─── 5. Detectar tipo y extraer texto ───
   const messageType = detectMessageType(message)
   const text = extractText(message)
 
   console.log(`[EventRouter] messages.upsert | fromMe=${key.fromMe} | type=${messageType} | jid=${key.remoteJid} | struct=${isArrayStructure ? 'array' : 'direct'}`)
 
-  // ─── 4. Resolver lead ───
+  // ─── 5-bis. RECON: si es @lid o trae anuncio, lo logueamos para ver el payload real ───
+  if (isLidJid(addressing.remoteJid) || addressing.addressingMode === 'lid') {
+    console.log(`[EventRouter] 🔍 LID payload | remoteJid=${addressing.remoteJid} | remoteJidAlt=${addressing.remoteJidAlt} | senderPn=${addressing.senderPn} | mode=${addressing.addressingMode} | pushName=${pushName}`)
+  }
+  if (adContext?.hasAdContext) {
+    console.log(`[EventRouter] 📢 CTWA ad context: ${JSON.stringify(adContext)}`)
+  }
+
+  // ─── 6. Resolver lead (identidad) ───
   const leadResolution = await resolveLead({
     remoteJid: key.remoteJid,
+    remoteJidAlt: addressing.remoteJidAlt,
+    senderPn: addressing.senderPn,
+    addressingMode: addressing.addressingMode,
     instanceName,
-    pushName
+    pushName,
+    adContext
   })
 
   if (!leadResolution.ok) {
@@ -149,7 +175,7 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
 
   console.log(`[EventRouter] ${summarizeResolution(leadResolution)}`)
 
-  // ─── 5. Determinar acción según fromMe ───
+  // ─── 7. Determinar acción según fromMe ───
   if (key.fromMe === true) {
     // ✋ Mensaje del VENDOR (manual desde WhatsApp)
     return await handleVendorMessage({
@@ -188,10 +214,7 @@ async function handleLeadMessage({
   // ─── Mensaje sin texto procesable (audio/imagen/etc) ───
   if (!text || messageType !== 'text') {
     console.log(`[EventRouter] Non-text message from lead ${leadInfo.leadId}: ${messageType}`)
-    
-    // TODO Día 8+: transcripción de audio, OCR de imagen
-    // Por ahora: NO procesamos pero NO crasheamos
-    
+    // TODO: transcripción de audio, OCR de imagen
     return buildResponse('non_text_message_skipped', startTime, {
       leadId: leadInfo.leadId,
       messageType
@@ -211,13 +234,15 @@ async function handleLeadMessage({
     leadId: leadInfo.leadId,
     text,
     processFn: async (combinedText, bufferMetadata) => {
-      // Llamar al pipeline cognitivo via la función pasada por handler.js
+      // Pipeline cognitivo via la función pasada por handler.js
       await processPipelineFn(leadInfo, combinedText, bufferMetadata)
     },
     metadata: {
       messageId,
       messageType,
       remoteJid: leadInfo.telefono,
+      waJid: leadInfo.waJid,                    // JID real para responder (sender, paso 1c)
+      addressingMode: leadInfo.addressingMode,
       vendorId: leadInfo.vendorId
     }
   })
@@ -267,8 +292,7 @@ async function handleVendorMessage({
 
     console.log(`[EventRouter] Lead ${leadInfo.leadId} marked as HUMAN_ACTIVE`)
 
-    // ─── 3. TODO Día 8+: guardar Message en BD con origen='VENDEDOR' ───
-    // Por ahora solo log
+    // ─── 3. TODO: guardar Message en BD con origen='VENDEDOR' ───
 
     return buildResponse('vendor_message_handled', startTime, {
       leadId: leadInfo.leadId,
@@ -291,11 +315,7 @@ async function handleVendorMessage({
 // ════════════════════════════════════════════════════════
 
 async function handleMessagesUpdate(payload, startTime) {
-  console.log(`[EventRouter] messages.update event (log only, no action Day 7)`)
-  
-  // TODO Día 8+: si lead borra un mensaje crítico, puede afectar audit
-  // Por ahora solo log y skip
-  
+  console.log(`[EventRouter] messages.update event (log only, no action)`)
   return buildResponse('messages_update_logged', startTime, {})
 }
 
@@ -306,25 +326,21 @@ async function handleMessagesUpdate(payload, startTime) {
 async function handleConnectionUpdate(payload, startTime) {
   const state = payload?.data?.state || 'unknown'
   const instance = payload?.data?.instance || payload?.instance || 'unknown'
-  
+
   switch (state) {
     case 'open':
       console.log(`[EventRouter] ✅ Connection OPEN for instance ${instance}`)
       break
-    
     case 'close':
       console.error(`[EventRouter] 🔴 Connection CLOSED for instance ${instance} - vendor must reconnect`)
-      // TODO Día 8+: enviar alerta a Slack/email
       break
-    
     case 'connecting':
       console.log(`[EventRouter] 🟡 Connection connecting for instance ${instance}`)
       break
-    
     default:
       console.warn(`[EventRouter] Unknown connection state "${state}" for instance ${instance}`)
   }
-  
+
   return buildResponse('connection_update_logged', startTime, { state, instance })
 }
 
@@ -333,17 +349,14 @@ async function handleConnectionUpdate(payload, startTime) {
 // ════════════════════════════════════════════════════════
 
 async function handleSendMessage(payload, startTime) {
-  // FIX Día 8: compatibilidad dual de estructura
   const data = payload?.data || {}
   const isArrayStructure = Array.isArray(data.messages) && data.messages.length > 0
   const msgEnvelope = isArrayStructure ? data.messages[0] : data
   const messageId = msgEnvelope?.key?.id || 'unknown'
   const remoteJid = msgEnvelope?.key?.remoteJid || 'unknown'
-  
+
   console.log(`[EventRouter] ✉️ send.message confirmed: ${messageId} → ${remoteJid}`)
-  
-  // TODO Día 8+: actualizar status en outbound_message_log
-  
+
   return buildResponse('send_message_logged', startTime, { messageId, remoteJid })
 }
 
@@ -353,14 +366,9 @@ async function handleSendMessage(payload, startTime) {
 
 async function handleLogoutInstance(payload, startTime) {
   const instance = payload?.data?.instance || payload?.instance || 'unknown'
-  
+
   console.error(`[EventRouter] 🚨 LOGOUT_INSTANCE for ${instance} - VENDOR ACTION REQUIRED: rescan QR`)
-  
-  // TODO Día 8+: 
-  //   - Enviar alerta inmediata a Slack/email
-  //   - Marcar vendor.activo = false en BD
-  //   - Notificar al admin
-  
+
   return buildResponse('logout_instance_alerted', startTime, {
     instance,
     severity: 'critical',
@@ -374,9 +382,9 @@ async function handleLogoutInstance(payload, startTime) {
 
 async function handleQrcodeUpdated(payload, startTime) {
   const instance = payload?.data?.instance || payload?.instance || 'unknown'
-  
+
   console.log(`[EventRouter] 📱 QR code updated for ${instance} - vendor can scan to connect`)
-  
+
   return buildResponse('qrcode_updated_logged', startTime, { instance })
 }
 
@@ -386,23 +394,68 @@ async function handleQrcodeUpdated(payload, startTime) {
 
 async function handleUnknownEvent(eventType, payload, startTime) {
   console.warn(`[EventRouter] Unknown event type: ${eventType}`)
-  
   return buildResponse('unknown_event_skipped', startTime, { eventType })
 }
 
 // ════════════════════════════════════════════════════════
-// HELPERS — Detección de tipo de mensaje
+// HELPERS — Extracción de direccionamiento y contexto de anuncio
 // ════════════════════════════════════════════════════════
 
 /**
- * Detecta el tipo de mensaje según el payload de Evolution.
- * 
- * @param {object} message - Objeto message del payload
- * @returns {string} 'text', 'audio', 'image', 'video', 'document', 'sticker', 'unknown'
+ * Extrae los identificadores de direccionamiento del payload.
+ * Distintas versiones de Evolution los ponen en sitios distintos → defensivo.
+ *
+ * @returns {{ remoteJid, remoteJidAlt, senderPn, addressingMode }}
  */
+function extractAddressing(key, msgEnvelope, data) {
+  return {
+    remoteJid: key.remoteJid || null,
+    remoteJidAlt: key.remoteJidAlt || null,
+    senderPn:
+      msgEnvelope?.senderPn ||
+      data?.senderPn ||
+      key?.senderPn ||
+      null,
+    addressingMode: key.addressingMode || null
+  }
+}
+
+/**
+ * Extrae el contexto de anuncio CTWA (click-to-WhatsApp / Meta Ads) del mensaje.
+ * Lo consume el Campaign Resolver (paso 1b): Plan B (adReplyTitle) y Plan D
+ * (conversionSource). Aquí solo se extrae y se pasa.
+ *
+ * @returns {object|null}
+ */
+function extractAdContext(message) {
+  const ctx =
+    message?.extendedTextMessage?.contextInfo ||
+    message?.imageMessage?.contextInfo ||
+    message?.videoMessage?.contextInfo ||
+    null
+
+  if (!ctx) return null
+
+  const ext = ctx.externalAdReply || null
+
+  return {
+    adReplyTitle: ext?.title || null,
+    adReplyBody: ext?.body || null,
+    sourceId: ext?.sourceId || null,
+    sourceUrl: ext?.sourceUrl || null,
+    conversionSource: ctx.conversionSource || null,
+    entryPointConversionApp: ctx.entryPointConversionApp || null,
+    hasAdContext: !!(ext || ctx.conversionSource)
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// HELPERS — Detección de tipo de mensaje y texto
+// ════════════════════════════════════════════════════════
+
 function detectMessageType(message) {
   if (!message || typeof message !== 'object') return 'unknown'
-  
+
   if (message.conversation) return 'text'
   if (message.extendedTextMessage) return 'text'
   if (message.audioMessage) return 'audio'
@@ -412,29 +465,21 @@ function detectMessageType(message) {
   if (message.stickerMessage) return 'sticker'
   if (message.locationMessage) return 'location'
   if (message.contactMessage) return 'contact'
-  
+
   return 'unknown'
 }
 
-/**
- * Extrae el texto del mensaje (solo para tipo 'text').
- * 
- * @param {object} message
- * @returns {string} texto o ''
- */
 function extractText(message) {
   if (!message || typeof message !== 'object') return ''
-  
-  // Mensaje simple
+
   if (typeof message.conversation === 'string') {
     return message.conversation.trim()
   }
-  
-  // Mensaje extendido (con menciones, reply, etc)
+
   if (message.extendedTextMessage?.text) {
     return message.extendedTextMessage.text.trim()
   }
-  
+
   return ''
 }
 
@@ -468,15 +513,15 @@ function buildErrorResponse(errorCode, startTime, metadata = {}) {
 
 export function summarizeEventResult(result) {
   if (!result) return 'no result'
-  
+
   if (!result.ok) {
     return `❌ event error: ${result.error} (${result.latency_ms}ms)`
   }
-  
+
   return `✅ ${result.action} (${result.latency_ms}ms)`
 }
 
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const EVENT_ROUTER_VERSION = 'v2_day8_payload_compat'
+export const EVENT_ROUTER_VERSION = 'v3_sprint2_lid_extract'
