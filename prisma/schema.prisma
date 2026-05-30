@@ -50,6 +50,14 @@ model Campaign {
   leads         Lead[]
   conversations Conversation[]
   botPrompt     String?        @db.Text
+
+  // ── Config declarativa del agente (Sprint 2) ──
+  // La "pizarra" editable por el usuario desde su dashboard:
+  // factSheet (precio/incluye/NO_incluye), agentGoal, autonomyLevel,
+  // persona del agente, circuitBreaker, handoff, extras de atribución.
+  // Los triggers y steps siguen como tablas (se editan pieza por pieza).
+  config        Json?
+
   version       Int            @default(1)
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -86,7 +94,7 @@ model FlowStep {
 model Lead {
   id                Int                 @id @default(autoincrement())
   tenantId          String              @default("peru_exporta") @map("tenant_id")
-  telefono          String              @unique
+  telefono          String
   campaignId        Int?
   campaign          Campaign?           @relation(fields: [campaignId], references: [id])
   vendorId          Int?
@@ -97,6 +105,12 @@ model Lead {
   estado            String              @default("NUEVO")
   nombreDetectado   String?
   productoDetectado String?
+
+  // ── Direccionamiento WhatsApp (Sprint 2 — soporte @lid) ──
+  // waJid: JID real al que responder (PN preferido, @lid como fallback).
+  // addressingMode: 'pn' | 'lid' | 'lid_unrecovered' | 'unknown'.
+  waJid             String?             @map("wa_jid")
+  addressingMode    String?             @map("addressing_mode")
   
   // Soft delete fields (v20)
   archivedAt        DateTime?           @map("archived_at")
@@ -115,6 +129,9 @@ model Lead {
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
+  // Multitenancy: el teléfono es único POR TENANT, no global.
+  // Evita que un mismo número robe el lead de un tenant a otro.
+  @@unique([tenantId, telefono])
   @@index([tenantId])
   @@map("leads")
 }
