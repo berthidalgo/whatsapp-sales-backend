@@ -33,6 +33,7 @@ import {
 import { decideMode, summarizeModeDecision, MODE_ROUTER_VERSION } from '../routing/mode-router.js'
 import { decidirPolicy, summarizeFullPolicyDecision, POLICY_VERSION } from '../policy/policy.js'
 import { generarRespuesta, summarizeBotResponse, RESPONSE_VERSION } from '../response/response.js'
+import { loadFactSheetVars } from '../response/factsheet-loader.js'
 
 // ════════════════════════════════════════════════════════
 // API PRINCIPAL — actualizarEstado()
@@ -113,15 +114,18 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
     let finalLeadState = updatedLeadState
     let tenantSettings = null
     let vendorActivo = null
+    let factSheetVars = {}
 
     try {
       // Cargar contexto operacional para el router (lo reutilizamos en Response)
       const loaded = await Promise.all([
         loadTenantSettings(perception?.meta?.tenant_id || 'peru_exporta'),
-        loadVendorActivo(updatedLeadState.vendorActiveId)
+        loadVendorActivo(updatedLeadState.vendorActiveId),
+        loadFactSheetVars({ leadId })   // factSheet de la campaña del lead (oleada 2)
       ])
       tenantSettings = loaded[0]
       vendorActivo = loaded[1]
+      factSheetVars = loaded[2] || {}
 
       modeRouterDecision = decideMode({
         leadState: updatedLeadState,
@@ -202,6 +206,7 @@ export async function actualizarEstado({ perception, leadId, telefono, contextFl
         perception,
         vendor: vendorActivo,
         tenantSettings,
+        factSheetVars,
         ultimoMensaje: perception?.meta?.mensaje_original || ''
       })
 
