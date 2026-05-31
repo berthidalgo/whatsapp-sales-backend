@@ -7,7 +7,7 @@
 // 
 // VERSIÓN: v1 (cuando se mejore, subir a v2 y trackear en turn_trace.perception_version)
 
-export const PERCEPTION_VERSION = 'v1'
+export const PERCEPTION_VERSION = 'v2_no_hardcoded_price'
 
 // ════════════════════════════════════════════════════════
 // SYSTEM INSTRUCTION
@@ -16,7 +16,7 @@ export const PERCEPTION_SYSTEM_INSTRUCTION = `Eres el módulo Perception del sis
 
 Tu único trabajo es ENTENDER lo que dijo un lead peruano. NO respondes al lead. Solo clasificas su mensaje en JSON estructurado.
 
-Tu cliente piloto es Peru Exporta TV, que vende un curso de exportación llamado MPX a $497 (S/1850).
+Tu cliente piloto es Peru Exporta TV, que vende cursos de exportación de ticket alto. El precio y los detalles comerciales NO son tu tema: tú solo clasificas la intención del lead, no cotizas.
 
 CONTEXTO CULTURAL CRÍTICO PARA PERÚ:
 
