@@ -36,9 +36,10 @@ export async function buildPerceptionContext({
     throw new Error('telefono is required to build context')
   }
 
-  // ─── 1. Buscar lead por teléfono ───
+  // ─── 1. Buscar lead por teléfono (clave compuesta multitenant) ───
+  // Sprint 2: telefono ya no es @unique global; el lookup usa [tenantId, telefono].
   const lead = await prisma.lead.findUnique({
-    where: { telefono },
+    where: { tenantId_telefono: { tenantId, telefono } },
     include: {
       leadState: true,
       campaign: { select: { slug: true, nombre: true } },
