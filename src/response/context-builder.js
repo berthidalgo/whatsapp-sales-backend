@@ -52,6 +52,7 @@ export function buildResponseContext({
   perception = {},
   vendor = {},
   tenantSettings = {},
+  factSheetVars = {},
   ultimoMensaje = ''
 }) {
   // ─── Extraer slots con defaults seguros ───
@@ -102,6 +103,7 @@ export function buildResponseContext({
     // ════════════════════════════════════════════════════
     case ACTIONS.PRESENTAR_PROGRAMA:
       return {
+        ...factSheetVars,            // precioTexto, nombreProducto, incluyeTexto, factSheetBloque...
         nombre: safeName,
         producto: safeProducto,
         empresa_status: empresaStatus,
@@ -111,6 +113,7 @@ export function buildResponseContext({
 
     case ACTIONS.MANEJAR_OBJECION:
       return {
+        ...factSheetVars,            // precioTexto para el reframe de precio
         nombre: safeName,
         producto: safeProducto,
         stage: leadState?.currentStage || 'unknown',
@@ -121,6 +124,7 @@ export function buildResponseContext({
 
     case ACTIONS.AGENDAR_LLAMADA:
       return {
+        ...factSheetVars,
         nombre: safeName,
         producto: safeProducto,
         stage: leadState?.currentStage || 'unknown',
@@ -201,4 +205,4 @@ export function summarizeContext(context) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const CONTEXT_BUILDER_VERSION = 'v1_day6_selective_per_action'
+export const CONTEXT_BUILDER_VERSION = 'v2_factsheet_injection_sprint2'

@@ -61,6 +61,7 @@ export async function generarRespuesta({
   perception,
   vendor = {},
   tenantSettings = {},
+  factSheetVars = {},
   ultimoMensaje = ''
 }) {
   const startTime = Date.now()
@@ -102,6 +103,7 @@ export async function generarRespuesta({
       perception,
       vendor,
       tenantSettings,
+      factSheetVars,
       ultimoMensaje
     })
 
@@ -329,4 +331,4 @@ export function summarizeBotResponse(botResponse) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const RESPONSE_VERSION = 'v1_day6_pipeline'
+export const RESPONSE_VERSION = 'v2_factsheet_sprint2'

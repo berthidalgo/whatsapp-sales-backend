@@ -1,15 +1,22 @@
-// src/response/response-prompts.js — Hidata v20 Día 6 (con fix Día 7)
+// src/response/response-prompts.js — Hidata v20 · Sprint 2 (oleada 2 — AGNÓSTICO)
 //
 // CATÁLOGO DE PROMPTS Y TEMPLATES
 //
-// Estructura híbrida para 9 action types:
-//   - 4 templates puros: SALUDAR_INICIAL, PEDIR_CALIFICACION, 
-//     PEDIR_SITUACION_EMPRESA, GREET_RETURNING, CONFIRMAR_PAGO
-//   - 4 LLM prompts: PRESENTAR_PROGRAMA, MANEJAR_OBJECION, 
-//     AGENDAR_LLAMADA
-//   - 1 no-op: SILENCE (no genera texto)
+// ─────────────────────────────────────────────────────────────────────────
+// CAMBIO Sprint 2 (oleada 2): PROMPTS AGNÓSTICOS.
+//   Antes: el precio (S/2,997), el nombre del producto y qué incluye estaban
+//          HARDCODEADOS aquí. El bot le dijo a un lead real S/2,997 (FALSO; el
+//          real es S/1,500).
+//   Ahora: los prompts NO saben el precio. Reciben variables del factSheet de
+//          la campaña: {precioTexto}, {nombreProducto}, {incluyeTexto},
+//          {factSheetBloque}. El context-builder las llena vía el factsheet-loader.
 //
-// FIX Día 7: agregada regla CRÍTICA anti-placeholders en LLM prompts
+//   Regla de oro nueva: este archivo NO contiene NINGÚN precio, nombre de
+//   producto ni "qué incluye" literal. Todo eso entra por variable.
+//
+//   Si {precioTexto} llega vacío (campaña sin factSheet), las REGLAS_CRITICAS
+//   le ordenan al LLM NO inventar precio y derivar a un asesor.
+// ─────────────────────────────────────────────────────────────────────────
 
 import { ACTIONS, OBJECTION_STRATEGIES } from '../policy/action-types.js'
 
@@ -22,17 +29,16 @@ export const RESPONSE_STRATEGY = {
   [ACTIONS.PEDIR_SITUACION_EMPRESA]:  'template',
   [ACTIONS.GREET_RETURNING]:          'template',
   [ACTIONS.CONFIRMAR_PAGO]:           'template',
-  
+
   [ACTIONS.PRESENTAR_PROGRAMA]:       'llm',
   [ACTIONS.MANEJAR_OBJECION]:         'llm',
   [ACTIONS.AGENDAR_LLAMADA]:          'llm',
-  
+
   [ACTIONS.SILENCE]:                  'no_response'
 }
 
 // ════════════════════════════════════════════════════════
 // REGLAS CRÍTICAS COMUNES — aplicadas a TODOS los LLM prompts
-// FIX Día 7: previene placeholders [Fecha], [Hora], etc
 // ════════════════════════════════════════════════════════
 const REGLAS_CRITICAS_OUTPUT = `
 REGLAS CRÍTICAS DE OUTPUT (OBLIGATORIAS):
@@ -45,18 +51,22 @@ REGLAS CRÍTICAS DE OUTPUT (OBLIGATORIAS):
    → No inventes datos que no estén disponibles
    → Usa términos genéricos peruanos como "compa", "amigo" si falta el nombre
 4. NUNCA digas "Como te comenté antes" si no tienes evidencia clara del contexto previo
-5. Devuelve SOLO el texto del mensaje, sin metadata, sin comillas, sin prefacios.
+5. PRECIO — REGLA DURA: usa ÚNICAMENTE el precio que aparece en la FICHA COMERCIAL
+   de este mensaje. Si la ficha NO trae precio, NO inventes ninguno: dile al lead
+   que un asesor le confirma el detalle de la inversión. NUNCA inventes descuentos,
+   promociones ni cifras que no estén en la ficha.
+6. Devuelve SOLO el texto del mensaje, sin metadata, sin comillas, sin prefacios.
 `.trim()
 
 // ════════════════════════════════════════════════════════
 // TEMPLATES PUROS — substitución de variables simple
-// Cada template tiene versión y array de variantes (futuro A/B)
+// (Estos NO tienen precio; usan {vendorNombre}, {nombre}, {producto})
 // ════════════════════════════════════════════════════════
 
 export const TEMPLATES = {
-  // SALUDAR_INICIAL — primer contacto, sin contexto del lead
+  // SALUDAR_INICIAL — primer contacto
   [ACTIONS.SALUDAR_INICIAL]: {
-    version: 'v1',
+    version: 'v2_agnostic',
     variants: [
       "¡Hola! Soy {vendorNombre} de Peru Exporta TV 🇵🇪\n\nTe damos la bienvenida al programa que ya formó a +1,300 exportadores peruanos.\n\nPara ayudarte mejor, ¿me dices tu nombre y qué producto te interesa exportar?",
       "¡Buenas! Soy {vendorNombre} del equipo Peru Exporta TV.\n\nNos da gusto que te animes a exportar 💪\n\n¿Me cuentas tu nombre y qué producto manejas?"
@@ -64,9 +74,9 @@ export const TEMPLATES = {
     variables: ['vendorNombre']
   },
 
-  // PEDIR_CALIFICACION — ya saludamos, falta nombre o producto
+  // PEDIR_CALIFICACION
   [ACTIONS.PEDIR_CALIFICACION]: {
-    version: 'v1',
+    version: 'v2_agnostic',
     variants: [
       "Perfecto. ¿Me ayudas con un par de datos?\n\n1) Tu nombre\n2) Qué producto exportas o quieres exportar\n3) Si ya tienes experiencia exportando o estás comenzando",
       "Súper. Para asesorarte mejor necesito saber:\n\n• Tu nombre\n• El producto que manejas\n• Si ya exportaste antes o es tu primera vez"
@@ -74,9 +84,9 @@ export const TEMPLATES = {
     variables: []
   },
 
-  // PEDIR_SITUACION_EMPRESA — ya tenemos nombre+producto
+  // PEDIR_SITUACION_EMPRESA
   [ACTIONS.PEDIR_SITUACION_EMPRESA]: {
-    version: 'v1',
+    version: 'v2_agnostic',
     variants: [
       "Excelente {nombre}, {producto} tiene muy buena demanda internacional 🌎\n\nUna pregunta clave:\n¿Tienes empresa constituida (RUC, SUNAT) o vas a empezar como persona natural?",
       "Genial {nombre}, {producto} es producto estrella de exportación peruana 💪\n\nCuéntame, ¿ya tienes empresa formal o estás empezando como independiente?"
@@ -84,9 +94,9 @@ export const TEMPLATES = {
     variables: ['nombre', 'producto']
   },
 
-  // GREET_RETURNING — lead que vuelve después de 30+ días
+  // GREET_RETURNING
   [ACTIONS.GREET_RETURNING]: {
-    version: 'v1',
+    version: 'v2_agnostic',
     variants: [
       "¡{nombre}! Qué bueno verte por aquí de nuevo 🤝\n\nVeo que conversamos hace un tiempo sobre exportar {producto}. ¿Cómo va todo? ¿Retomamos donde lo dejamos o hay algún cambio en tu plan?",
       "¡Hola {nombre}! Tiempo sin saber de ti 💪\n\nAntes hablamos sobre {producto}. ¿Sigues con la idea de exportar o cambiaron las cosas? Cuéntame y vemos cómo seguir."
@@ -94,9 +104,9 @@ export const TEMPLATES = {
     variables: ['nombre', 'producto']
   },
 
-  // CONFIRMAR_PAGO — recibimos comprobante o lead afirma pago
+  // CONFIRMAR_PAGO
   [ACTIONS.CONFIRMAR_PAGO]: {
-    version: 'v1',
+    version: 'v2_agnostic',
     variants: [
       "¡Perfecto {nombre}! 🎉\n\nRecibido tu pago. En breve {vendorNombre} te confirma todos los detalles del programa y la fecha de inicio.\n\n¡Bienvenido oficialmente a Peru Exporta TV! 🇵🇪",
       "¡Excelente {nombre}! ✅\n\nPago confirmado. Ya {vendorNombre} se contacta contigo para la siguiente etapa y darte acceso al programa.\n\nFelicidades, ya eres parte del equipo 💪"
@@ -106,37 +116,36 @@ export const TEMPLATES = {
 }
 
 // ════════════════════════════════════════════════════════
-// LLM PROMPTS — para acciones que requieren personalización
-// FIX Día 7: cada prompt incluye REGLAS_CRITICAS_OUTPUT
+// LLM PROMPTS — AGNÓSTICOS (reciben la ficha comercial por variable)
 // ════════════════════════════════════════════════════════
 
-// PRESENTAR_PROGRAMA — mostrar curso/precio personalizado
 export const LLM_PROMPTS = {
+  // PRESENTAR_PROGRAMA — presenta el curso usando la FICHA del factSheet
   [ACTIONS.PRESENTAR_PROGRAMA]: {
-    version: 'v2_day7_no_placeholders',
+    version: 'v3_agnostic',
     system: `Eres asistente de Peru Exporta TV (ESCEX), programa de formación para exportadores peruanos.
 
-CONTEXTO DEL PROGRAMA:
-- Programa MPX (Master Programa de Exportación): 12 sesiones online + asesorías 1:1
-- Precio actual: S/2,997 (regular S/4,500)
-- Modalidad: clases en vivo + grabaciones + comunidad WhatsApp
-- Resultados: +1,300 exportadores formados, casos de éxito en mango, palta, café, textil
+FICHA COMERCIAL DE ESTE PROGRAMA (única fuente de verdad — NO uses datos fuera de aquí):
+Programa: {nombreProducto}
+{factSheetBloque}
+
+Resultados generales: +1,300 exportadores formados, casos de éxito en distintos productos.
 
 TU TAREA:
-Presentar el programa al lead de forma PERSONALIZADA según su producto y situación.
+Presentar el programa al lead de forma PERSONALIZADA según su producto y situación,
+usando SOLO los datos de la ficha comercial de arriba.
 
 REGLAS DE TONO:
 - Español peruano informal pero profesional
 - Usa el nombre del lead naturalmente
 - Conecta el programa con SU producto específico
-- Menciona casos de éxito si el producto coincide
 - NO uses "estimado/a", "cordialmente", "atentamente" (suena gringo)
 - Mensaje en 4-6 líneas máximo
 - Emojis moderados: 💪 🤝 ✅ 🌎 (no muchos)
 - Termina con pregunta de cierre suave que invite a llamada
 
 ${REGLAS_CRITICAS_OUTPUT}`,
-    
+
     user_template: `INFORMACIÓN DEL LEAD:
 - Nombre: {nombre}
 - Producto: {producto}
@@ -145,32 +154,34 @@ ${REGLAS_CRITICAS_OUTPUT}`,
 
 ÚLTIMO MENSAJE DEL LEAD: "{ultimo_mensaje}"
 
-Genera el mensaje de presentación del programa para este lead.`,
+Genera el mensaje de presentación del programa para este lead, usando SOLO la ficha comercial.`,
 
     examples: [
       {
-        input: { 
-          nombre: 'Juan', 
-          producto: 'palta hass',
+        input: {
+          nombre: 'Juan',
+          producto: 'palta',
           empresa_status: 'sin empresa formal',
           experiencia_status: 'primera vez exportando',
           ultimo_mensaje: 'cuéntame del programa'
         },
-        output: `Juan, te cuento del programa MPX 💪\n\nEs una formación de 12 sesiones donde te llevamos paso a paso desde cero hasta tu primera exportación. La palta hass es producto bandera, hemos formado exportadores que cerraron su primer contenedor a USA en 4-6 meses.\n\nLa inversión es S/2,997 (regular S/4,500) e incluye:\n• 12 sesiones en vivo\n• Asesorías personalizadas 1:1\n• Comunidad WhatsApp para resolver dudas en tiempo real\n\n¿Te parece si conversamos en una llamada de 15 min para diseñarte tu plan?`
+        // Ejemplo AGNÓSTICO: no menciona precio fijo, usa la estructura no el número
+        output: `Juan, te cuento del programa 💪\n\nEs una formación que te lleva paso a paso desde cero hasta tu primera exportación. La palta es producto bandera, hemos acompañado a exportadores que cerraron su primer contenedor en pocos meses.\n\nIncluye sesiones en vivo, asesorías personalizadas y una comunidad activa para resolver dudas.\n\n¿Te parece si conversamos en una llamada de 15 min para ver tu caso y los detalles de la inversión?`
       }
     ]
   },
 
-  // MANEJAR_OBJECION — varía según strategy
+  // MANEJAR_OBJECION — usa la ficha para el reframe de precio
   [ACTIONS.MANEJAR_OBJECION]: {
-    version: 'v2_day7_no_placeholders',
+    version: 'v3_agnostic',
     system: `Eres asistente de Peru Exporta TV especializado en manejo de objeciones de leads peruanos.
 
-CONTEXTO COMERCIAL:
-- Programa MPX a S/2,997 (regular S/4,500)
-- Opciones de pago: contado, 50/50, hasta 3 cuotas
-- Modalidad híbrida: en vivo + grabaciones
-- Vamos a generar respuestas según la STRATEGY específica detectada
+FICHA COMERCIAL DE ESTE PROGRAMA (única fuente de verdad — NO uses datos fuera de aquí):
+Programa: {nombreProducto}
+{factSheetBloque}
+
+Opciones de pago según la ficha. Si la ficha no detalla cuotas, ofrece conversar
+las opciones de pago con un asesor (no inventes planes de cuotas específicos).
 
 REGLAS DE TONO:
 - Español peruano informal pero respetuoso
@@ -183,16 +194,16 @@ REGLAS DE TONO:
 STRATEGY ACTIVA: {strategy}
 
 GUÍA POR STRATEGY:
-- precio_reframe: comparar inversión vs ROI/costo de no exportar
+- precio_reframe: comparar inversión vs ROI/costo de no exportar (usa el precio de la ficha, no inventes otro)
 - decision_qualify: pedir fecha específica de re-confirmación
-- timing_fragmentar: ofrecer 50/50 o cuotas
+- timing_fragmentar: ofrecer conversar opciones de pago con asesor
 - estacional_sincronizar: sincronizar curso con calendario del lead
 - validacion_enviar_assets: ofrecer enviar casos de éxito
 - tiempo_cascada_flexible: grabaciones + asesorías flexibles
-- dinero_50_50_default: separar 50% + saldo
+- dinero_50_50_default: mencionar que hay opciones de pago a coordinar con asesor
 - familia_fecha_especifica: acordar fecha re-confirmación
 - horario_cascada: flexibilidad de horarios
-- ya_gaste_empatia_micro: empatía + micro-compromiso S/100
+- ya_gaste_empatia_micro: empatía + invitar a conversar opciones con asesor
 - generica: manejo genérico con redirección
 
 ${REGLAS_CRITICAS_OUTPUT}`,
@@ -207,7 +218,7 @@ OBJECIÓN DETECTADA:
 - Mensaje del lead: "{ultimo_mensaje}"
 - Razón Perception: {rationale}
 
-Genera el mensaje de manejo de objeción siguiendo la strategy "{strategy}".`,
+Genera el mensaje de manejo de objeción siguiendo la strategy "{strategy}", usando SOLO la ficha comercial.`,
 
     examples: [
       {
@@ -219,25 +230,15 @@ Genera el mensaje de manejo de objeción siguiendo la strategy "{strategy}".`,
           ultimo_mensaje: 'está caro pe, mucha plata',
           rationale: 'objeción de precio post-presentación'
         },
-        output: `Te entiendo María, S/2,997 suena fuerte si lo ves solo como gasto 🤝\n\nPero piénsalo así: con UN contenedor de café exportado recuperas eso 5 veces. Y el programa te da las herramientas para hacer 3-4 exportaciones al año.\n\n¿Qué tal si conversamos 15 minutos y te muestro cómo otros productores de café están exportando con esta inversión?`
-      },
-      {
-        input: {
-          nombre: 'Carlos',
-          producto: 'palta',
-          stage: 'presenting',
-          strategy: 'dinero_50_50_default',
-          ultimo_mensaje: 'no tengo toda la plata ahora',
-          rationale: 'objeción de dinero sin recursos inmediatos'
-        },
-        output: `Te entiendo Carlos, entrar a una formación así es decisión grande 💪\n\nTenemos una opción: separas con el 50% (S/1,500) y el saldo lo pagas antes de iniciar las sesiones. Así aseguras tu cupo y tienes tiempo de organizar el resto.\n\n¿Te funciona esa modalidad?`
+        // Ejemplo AGNÓSTICO: el reframe no cita un número fijo
+        output: `Te entiendo María, toda inversión suena fuerte si la ves solo como gasto 🤝\n\nPero piénsalo así: con UN contenedor de café exportado recuperas esa inversión varias veces. Y el programa te da las herramientas para hacerlo de forma sostenida.\n\n¿Qué tal si conversamos 15 minutos y te muestro cómo otros productores de café lo están logrando?`
       }
     ]
   },
 
-  // AGENDAR_LLAMADA — coordinar horario con lead
+  // AGENDAR_LLAMADA — coordinar horario (no menciona precio)
   [ACTIONS.AGENDAR_LLAMADA]: {
-    version: 'v2_day7_no_placeholders',
+    version: 'v3_agnostic',
     system: `Eres asistente de Peru Exporta TV agendando una llamada con un lead.
 
 CONTEXTO:
@@ -277,19 +278,19 @@ Genera el mensaje de agendamiento.`,
           ultimo_mensaje: 'sí dale, llámame',
           vendorNombre: 'Cristina'
         },
-        output: `Perfecto Joan 🤝\n\nTe llama Cristina, especialista en exportación de palta. Te propongo:\n\n• Hoy a las 7pm\n• Mañana 11am\n• Mañana 4pm\n\n¿Cuál te queda mejor?`
+        output: `Perfecto Joan 🤝\n\nTe llama Cristina, especialista en exportación. Te propongo:\n\n• Hoy a las 7pm\n• Mañana 11am\n• Mañana 4pm\n\n¿Cuál te queda mejor?`
       }
     ]
   }
 }
 
 // ════════════════════════════════════════════════════════
-// FALLBACK TEMPLATES — cuando LLM falla
-// Mensajes seguros que NUNCA generan respuesta vacía
+// FALLBACK TEMPLATES — AGNÓSTICOS (cuando LLM falla)
+// NO mencionan precio: derivan el detalle de inversión a la llamada/asesor.
 // ════════════════════════════════════════════════════════
 export const FALLBACK_TEMPLATES = {
-  [ACTIONS.PRESENTAR_PROGRAMA]: 
-    "{nombre}, te cuento del programa MPX 💪\n\nEs una formación de 12 sesiones diseñada para llevar a exportadores como tú de cero a tu primera exportación.\n\nInversión: S/2,997 (regular S/4,500). Incluye sesiones en vivo, asesorías personalizadas y comunidad WhatsApp.\n\n¿Conversamos en una llamada de 15 minutos?",
+  [ACTIONS.PRESENTAR_PROGRAMA]:
+    "{nombre}, te cuento del programa 💪\n\nEs una formación diseñada para llevar a exportadores como tú de cero a su primera exportación. Incluye sesiones en vivo, asesorías personalizadas y comunidad de apoyo.\n\n¿Conversamos en una llamada de 15 minutos y vemos los detalles de la inversión y tu caso?",
 
   [ACTIONS.MANEJAR_OBJECION]:
     "{nombre}, te entiendo 🤝\n\nVamos a buscar la mejor forma de que esto te funcione. ¿Tienes 10 minutos para una llamada y vemos qué opción se ajusta mejor a tu situación?",
@@ -299,24 +300,17 @@ export const FALLBACK_TEMPLATES = {
 }
 
 // ════════════════════════════════════════════════════════
-// HELPERS — para que response.js use estos prompts
+// HELPERS
 // ════════════════════════════════════════════════════════
 
-/**
- * Devuelve la strategy de generación para una action
- */
 export function getResponseStrategy(action_type) {
   return RESPONSE_STRATEGY[action_type] || 'no_response'
 }
 
-/**
- * Devuelve template (para strategy='template')
- * Selecciona random entre variants
- */
 export function getTemplate(action_type) {
   const template = TEMPLATES[action_type]
   if (!template) return null
-  
+
   const variant = template.variants[Math.floor(Math.random() * template.variants.length)]
   return {
     text: variant,
@@ -325,45 +319,37 @@ export function getTemplate(action_type) {
   }
 }
 
-/**
- * Devuelve prompt LLM completo (system + user template + examples)
- */
 export function getLLMPrompt(action_type) {
   return LLM_PROMPTS[action_type] || null
 }
 
-/**
- * Devuelve template de fallback para una action
- */
 export function getFallbackTemplate(action_type) {
   return FALLBACK_TEMPLATES[action_type] || null
 }
 
 /**
- * Sustituye variables en un template
- * @param {string} text - Template con {variable}
- * @param {object} vars - Objeto con valores
+ * Sustituye variables {var} en un template.
+ * Las variables del factSheet (precioTexto, factSheetBloque, etc.) entran por aquí.
  */
 export function substituteVariables(text, vars = {}) {
   if (!text) return ''
-  
+
   let result = text
   for (const [key, value] of Object.entries(vars)) {
     const placeholder = `{${key}}`
     const safeValue = value === null || value === undefined ? '' : String(value)
     result = result.replaceAll(placeholder, safeValue)
   }
-  
-  // Si quedaron placeholders sin reemplazar, los marcamos pero NO crasheamos
+
   const unfilled = result.match(/\{[^}]+\}/g)
   if (unfilled && unfilled.length > 0) {
     console.warn(`[Response] Template tiene placeholders sin reemplazar: ${unfilled.join(',')}`)
   }
-  
+
   return result
 }
 
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const RESPONSE_PROMPTS_VERSION = 'v2_day7_no_placeholders'
+export const RESPONSE_PROMPTS_VERSION = 'v3_agnostic_sprint2'
