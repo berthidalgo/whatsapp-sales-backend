@@ -163,7 +163,8 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
     addressingMode: addressing.addressingMode,
     instanceName,
     pushName,
-    adContext
+    adContext,
+    firstMessageText: text        // para el Campaign Resolver (solo se usa en primer contacto)
   })
 
   if (!leadResolution.ok) {

@@ -34,12 +34,15 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import prisma from '../db/prisma.js'
+import {
+  resolveCampaign as resolveCampaignForLead,
+  summarizeCampaignResolution
+} from './campaign-resolver.js'
 
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
 const DEFAULT_TENANT_ID = 'peru_exporta'
-const DEFAULT_CAMPAIGN_SLUG = 'MPX'   // ⚠️ TEMPORAL — lo mata el Campaign Resolver (paso 1b)
 const FALLBACK_VENDOR_ID = 1
 
 // Sufijos de JID que NO representan un lead individual
@@ -70,6 +73,7 @@ export async function resolveLead({
   instanceName,
   pushName = null,
   adContext = null,
+  firstMessageText = '',
   tenantId = DEFAULT_TENANT_ID
 }) {
   const startTime = Date.now()
@@ -104,27 +108,45 @@ export async function resolveLead({
     // ─── 4. Resolver vendor para la instancia ───
     const vendor = await resolveVendor(instanceName)
 
-    // ─── 5. Resolver campaign_id (⚠️ TEMPORAL: default MPX — lo reemplaza el paso 1b) ───
-    const campaign = await resolveCampaign(DEFAULT_CAMPAIGN_SLUG, tenantId)
+    // ─── 5. ¿El lead ya existe? Decide si resolvemos campaña o respetamos la suya ───
+    // Regla de ownership: la campaña se asigna SOLO en el primer contacto.
+    // Un lead existente NUNCA cambia de campaña aunque mencione otra keyword.
+    const existingLead = await prisma.lead.findUnique({
+      where: { tenantId_telefono: { tenantId, telefono: dedupKey } },
+      select: { id: true }
+    })
+
+    // ─── 5b. Si es NUEVO, el Campaign Resolver decide la campaña por trigger ───
+    // (mata el hardcode MPX). Si es existente, no tocamos su campaña.
+    let resolvedCampaignId = null
+    let campaignResolution = null
+    if (!existingLead) {
+      campaignResolution = await resolveCampaignForLead({
+        text: firstMessageText,
+        adContext,
+        tenantId
+      })
+      resolvedCampaignId = campaignResolution?.campaignId || null
+      console.log(`[LeadResolver] ${summarizeCampaignResolution(campaignResolution)}`)
+    }
 
     // ─── 6. Upsert atómico del lead (dedup por [tenantId, telefono]) ───
-    // OJO: el schema ahora tiene @@unique([tenantId, telefono]), por eso el
-    // where usa la clave compuesta tenantId_telefono (no telefono suelto).
     const lead = await prisma.lead.upsert({
       where: { tenantId_telefono: { tenantId, telefono: dedupKey } },
       update: {
         ultimoMensaje: new Date()
+        // NO tocamos campaignId en update → ownership permanente
       },
       create: {
         telefono: dedupKey,
         nombreDetectado: pushName || null,
-        estado: 'NUEVO',                          // Default del schema
-        pasoActual: 0,                            // Default del schema
-        campaignId: campaign?.id || null,         // FK a Campaign (puede ser null)
+        estado: 'NUEVO',
+        pasoActual: 0,
+        campaignId: resolvedCampaignId,           // del Campaign Resolver (no hardcode)
         vendorId: vendor.id,
         tenantId: tenantId,
-        waJid: identity.waJid,                    // JID real para responder (sender, oleada 3)
-        addressingMode: identity.addressingMode,  // 'pn' | 'lid' | 'lid_unrecovered'
+        waJid: identity.waJid,
+        addressingMode: identity.addressingMode,
         ultimoMensaje: new Date()
       },
       select: {
@@ -255,42 +277,11 @@ function resolveIdentity({ remoteJid, remoteJidAlt, senderPn }) {
 }
 
 // ════════════════════════════════════════════════════════
-// HELPER — Resolver campaign por slug
 // ════════════════════════════════════════════════════════
-
-/**
- * Encuentra el campaign activo por slug (ej: "MPX" → campaign_id).
- * ⚠️ TEMPORAL: el Campaign Resolver (paso 1b) reemplaza este default por
- *    matcheo de triggers contra el texto del lead.
- */
-async function resolveCampaign(slug, tenantId) {
-  if (!slug) return null
-
-  try {
-    const campaign = await prisma.campaign.findFirst({
-      where: {
-        slug,
-        tenantId,
-        activa: true
-      },
-      select: {
-        id: true,
-        slug: true,
-        nombre: true
-      }
-    })
-
-    if (!campaign) {
-      console.warn(`[LeadResolver] No active campaign found for slug "${slug}", lead will have null campaignId`)
-    }
-
-    return campaign
-
-  } catch (err) {
-    console.error('[LeadResolver] resolveCampaign failed:', err.message)
-    return null
-  }
-}
+// (La vieja resolveCampaign por slug fue eliminada en la oleada 2.
+//  Ahora la campaña se resuelve por trigger vía campaign-resolver.js,
+//  importado como resolveCampaignForLead, y SOLO en primer contacto.)
+// ════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════
 // HELPER — Resolver vendor para una instancia
@@ -466,4 +457,4 @@ export function summarizeResolution(result) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const LEAD_RESOLVER_VERSION = 'v4_sprint2_composite_key'
+export const LEAD_RESOLVER_VERSION = 'v5_sprint2_campaign_resolver_wired'
