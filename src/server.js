@@ -36,6 +36,8 @@ import { summarizeBotResponse } from './response/response.js'
 
 // ── Sprint 3: Cerebro unificado (banco de pruebas aislado) ──
 import { pensarYResponder, summarizeBrainResult } from './brain/agent-brain.js'
+import { juzgarRespuesta } from './brain/brain-judge.js'
+import { BRAIN_EVALS } from './brain/brain-evals-dataset.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -690,6 +692,118 @@ app.post('/debug/brain-test', async (req, reply) => {
     return reply.code(500).send({ ok: false, error: err.message, total_ms: Date.now() - startTime })
   }
 })
+
+// ════════════════════════════════════════════════════════════════
+// ── Debug — Brain Evals (Sprint 3) — EVALUADOR HÍBRIDO ───────────
+// Corre los 26 casos conversacionales: cada uno por CEREBRO + JUEZ LLM.
+// Devuelve reporte con PASS/PARCIAL/FAIL para que Joan ponga el sello final.
+//
+// Body (opcional): { "campaignSlug": "MPX", "idFilter": ["C001","C006"] }
+// Sin body corre los 26. Tarda ~1-2 min (chunks de 3).
+// ════════════════════════════════════════════════════════════════
+app.post('/debug/brain-evals', async (req, reply) => {
+  const startTime = Date.now()
+  const { campaignSlug = 'MPX', idFilter = null } = req.body || {}
+
+  try {
+    let campaignConfig = null
+    const campaign = await prisma.campaign.findFirst({
+      where: { slug: campaignSlug },
+      select: { config: true, slug: true }
+    })
+    campaignConfig = campaign?.config || null
+
+    let casos = BRAIN_EVALS
+    if (idFilter && Array.isArray(idFilter)) {
+      casos = BRAIN_EVALS.filter(c => idFilter.includes(c.id))
+    }
+
+    const CHUNK_SIZE = 3
+    const PAUSE_MS = 1200
+    const resultados = []
+
+    for (let i = 0; i < casos.length; i += CHUNK_SIZE) {
+      const chunk = casos.slice(i, i + CHUNK_SIZE)
+      const chunkResults = await Promise.all(chunk.map(caso => correrUnCasoEval(caso, campaignConfig)))
+      resultados.push(...chunkResults)
+      if (i + CHUNK_SIZE < casos.length) await sleep(PAUSE_MS)
+    }
+
+    const pass = resultados.filter(r => r.veredicto === 'PASS').length
+    const parcial = resultados.filter(r => r.veredicto === 'PARCIAL').length
+    const fail = resultados.filter(r => r.veredicto === 'FAIL').length
+    const conRedFlags = resultados.filter(r => r.red_flags && r.red_flags.length > 0)
+    const avgScore = resultados.length
+      ? Math.round(resultados.reduce((s, r) => s + (r.score || 0), 0) / resultados.length)
+      : 0
+    const costoTotal = resultados.reduce((s, r) => s + (r.costo_caso_usd || 0), 0)
+
+    return reply.send({
+      resumen: {
+        total_casos: resultados.length,
+        PASS: pass, PARCIAL: parcial, FAIL: fail,
+        pass_rate: resultados.length ? `${Math.round(pass / resultados.length * 100)}%` : '0%',
+        score_promedio: avgScore,
+        casos_con_red_flags: conRedFlags.length,
+        costo_total_usd: costoTotal.toFixed(5),
+        tiempo_total_ms: Date.now() - startTime,
+        campaign_usada: campaignConfig ? campaignSlug : 'NINGUNA (genérico)'
+      },
+      requieren_revision: resultados
+        .filter(r => r.veredicto !== 'PASS')
+        .map(r => ({
+          id: r.id, categoria: r.categoria, veredicto: r.veredicto, score: r.score,
+          razon_juez: r.razon_juez, red_flags: r.red_flags,
+          mensaje_lead: r.input_lead, respuesta_cerebro: r.respuesta_cerebro, esperado: r.esperado
+        })),
+      todos_los_casos: resultados.map(r => ({
+        id: r.id, categoria: r.categoria, veredicto: r.veredicto, score: r.score,
+        input_lead: r.input_lead, esperado: r.esperado, respuesta_cerebro: r.respuesta_cerebro,
+        slots: r.slots, stage: r.stage, escalo_humano: r.escalo_humano,
+        razon_juez: r.razon_juez, red_flags: r.red_flags
+      }))
+    })
+
+  } catch (err) {
+    console.error('[BrainEvals] Fatal:', err)
+    return reply.status(500).send({ error: err.message, stack: err.stack?.split('\n').slice(0, 6) })
+  }
+})
+
+async function correrUnCasoEval(caso, campaignConfig) {
+  const t0 = Date.now()
+  try {
+    const brainResult = await pensarYResponder({
+      mensajeActual: caso.input.mensajeActual,
+      historial: caso.input.historial || [],
+      estadoLead: caso.input.estadoLead || {},
+      campaignConfig,
+      vendorNombre: 'Cristina'
+    })
+
+    const veredicto = await juzgarRespuesta({ caso, brainResult })
+    const costoCerebro = brainResult?.audit?.cost_usd?.total_cost_usd || 0
+
+    return {
+      id: caso.id, categoria: caso.category,
+      veredicto: veredicto.veredicto, score: veredicto.score,
+      razon_juez: veredicto.razon, red_flags: veredicto.red_flags || [],
+      input_lead: caso.input.mensajeActual, esperado: caso.expected,
+      respuesta_cerebro: brainResult?.mensaje || `(sin respuesta — error: ${brainResult?.error})`,
+      slots: brainResult?.slots_detectados || {}, stage: brainResult?.stage_sugerido,
+      escalo_humano: brainResult?.debe_escalar_humano,
+      costo_caso_usd: costoCerebro, _ms: Date.now() - t0
+    }
+  } catch (err) {
+    return {
+      id: caso.id, categoria: caso.category, veredicto: 'FAIL', score: 0,
+      razon_juez: `Error corriendo el caso: ${err.message}`, red_flags: ['caso_exception'],
+      input_lead: caso.input.mensajeActual, esperado: caso.expected,
+      respuesta_cerebro: '(crash)', slots: {}, stage: null, escalo_humano: false,
+      costo_caso_usd: 0, _ms: Date.now() - t0
+    }
+  }
+}
 
 // ────────────────────────────────────────────────────────────
 // ── Debug — Run Perception Evals (Día 2) ─────────────────────
