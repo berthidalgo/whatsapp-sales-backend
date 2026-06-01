@@ -1,5 +1,6 @@
 // src/server.js — Hidata v20
 // Día 8: Cleanup arquitectónico + bug guardrails fixed
+// Sprint 3: + endpoint /debug/brain-test (banco de pruebas del cerebro, aislado)
 
 import 'dotenv/config'
 import { readFile } from 'node:fs/promises'
@@ -32,6 +33,9 @@ import { describeLeadState } from './state/stage-definitions.js'
 import { decideMode, summarizeModeDecision, isValidEscalation } from './routing/mode-router.js'
 import { summarizeFullPolicyDecision } from './policy/policy.js'
 import { summarizeBotResponse } from './response/response.js'
+
+// ── Sprint 3: Cerebro unificado (banco de pruebas aislado) ──
+import { pensarYResponder, summarizeBrainResult } from './brain/agent-brain.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -597,6 +601,93 @@ app.post('/debug/response-test', async (req, reply) => {
   }
 })
 
+// ════════════════════════════════════════════════════════════════
+// ── Debug — Brain test (Sprint 3) — CEREBRO UNIFICADO AISLADO ────
+// Prueba el cerebro nuevo SIN tocar el pipeline real ni ningún lead.
+// Le mandas una conversación y devuelve qué responde el cerebro.
+//
+// Body:
+//   {
+//     "mensajeActual": "string (requerido)",
+//     "historial": [ { "rol": "lead"|"agente", "texto": "..." } ],
+//     "estadoLead": { "stage": "presenting", "slots": { "nombre": "Joan" } },
+//     "campaignSlug": "MPX"   (carga el factSheet de esa campaña desde la BD)
+//   }
+// ════════════════════════════════════════════════════════════════
+app.post('/debug/brain-test', async (req, reply) => {
+  const startTime = Date.now()
+  try {
+    const {
+      mensajeActual,
+      historial = [],
+      estadoLead = {},
+      campaignSlug = 'MPX',
+      campaignConfig = null
+    } = req.body || {}
+
+    if (!mensajeActual) {
+      return reply.code(400).send({
+        ok: false,
+        error: 'Body must include "mensajeActual"',
+        example: {
+          mensajeActual: 'mándame los casos de éxito y dime cuándo empiezan las clases y hasta cuándo pago',
+          historial: [
+            { rol: 'lead', texto: 'Hola, info de cursos de exportación' },
+            { rol: 'agente', texto: 'Perfecto, ¿tu nombre y producto?' },
+            { rol: 'lead', texto: 'Joan, con RUC' }
+          ],
+          estadoLead: { stage: 'presenting', slots: { nombre: 'Joan', empresa: 'con RUC' } },
+          campaignSlug: 'MPX'
+        }
+      })
+    }
+
+    // Cargar el config de la campaña desde la BD (o usar el que pasen directo)
+    let config = campaignConfig
+    if (!config && campaignSlug) {
+      const campaign = await prisma.campaign.findFirst({
+        where: { slug: campaignSlug },
+        select: { config: true, nombre: true, slug: true }
+      })
+      config = campaign?.config || null
+      if (!config) {
+        console.warn(`[BrainTest] Campaña ${campaignSlug} sin config en BD — el cerebro hablará genérico`)
+      }
+    }
+
+    // Llamar al cerebro REAL
+    const result = await pensarYResponder({
+      mensajeActual,
+      historial,
+      estadoLead,
+      campaignConfig: config,
+      vendorNombre: estadoLead?.vendorNombre || 'Cristina'
+    })
+
+    console.log(`[BrainTest] ${summarizeBrainResult(result)}`)
+
+    return reply.send({
+      ok: result.ok,
+      // Lo que el lead VERÍA:
+      mensaje_al_lead: result.mensaje,
+      // Lo interno (auditoría):
+      razonamiento: result.razonamiento,
+      slots_detectados: result.slots_detectados,
+      stage_sugerido: result.stage_sugerido,
+      debe_escalar_humano: result.debe_escalar_humano,
+      temperatura_lead: result.temperatura_lead,
+      guardrail_flags: result.guardrail_flags,
+      audit: result.audit,
+      campaign_usada: config ? campaignSlug : 'NINGUNA (genérico)',
+      total_ms: Date.now() - startTime
+    })
+
+  } catch (err) {
+    console.error('[BrainTest] Error:', err.message)
+    return reply.code(500).send({ ok: false, error: err.message, total_ms: Date.now() - startTime })
+  }
+})
+
 // ────────────────────────────────────────────────────────────
 // ── Debug — Run Perception Evals (Día 2) ─────────────────────
 // ────────────────────────────────────────────────────────────
@@ -746,7 +837,7 @@ app.get('/leads',                async (req, reply) => getLeads(req, reply, pris
 app.put('/leads/:id',            async (req, reply) => updateLead(req, reply, prisma))
 app.post('/leads/:id/mensaje',   async (req, reply) => sendMensaje(req, reply, prisma))
 app.post('/leads/:id/accion',    async (req, reply) => doAccion(req, reply, prisma))
-app.get('/leads/:id/mensajes',   async (req, reply) => getMensajes(req, reply, prisma))
+app.get('/leads/:id/mensajes',   async (req, reply) => getMensajes(req, reply, prisma)) 
 app.get('/reportes',             async (req, reply) => getReportes(req, reply, prisma))
 
 // ── Config ───────────────────────────────────────────────────
