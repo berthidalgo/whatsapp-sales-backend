@@ -61,14 +61,14 @@ const BRAIN_RESPONSE_SCHEMA = {
     },
     slots_detectados: {
       type: 'object',
-      description: 'Datos que el lead reveló en ESTE mensaje. Solo lo que dijo EXPLÍCITAMENTE. NO inventar.',
+      description: 'Datos que el lead reveló EXPLÍCITAMENTE en la conversación. Regla de oro: si tienes dudas de a qué slot pertenece algo, NO lo pongas. Solo incluye un slot si el lead lo dijo CLARAMENTE y encaja en su definición exacta. Deja fuera (no incluyas la clave) cualquier slot que el lead no haya dado.',
       properties: {
-        nombre: { type: 'string' },
-        producto: { type: 'string' },
-        empresa: { type: 'string' },
-        experiencia: { type: 'string' },
-        pais_destino: { type: 'string' },
-        fecha_hora: { type: 'string' }
+        nombre: { type: 'string', description: 'El nombre propio del lead. Ej: "Joan", "María". NO un saludo ni una empresa.' },
+        producto: { type: 'string', description: 'El PRODUCTO físico que el lead exporta o quiere exportar. Ej: "palta", "café", "textiles", "teléfonos". NUNCA pongas aquí su situación de empresa ("con RUC"), su experiencia, ni nada que no sea un producto concreto. Si el lead no nombró un producto, DEJA ESTE SLOT FUERA.' },
+        empresa: { type: 'string', description: 'La situación de empresa del lead. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC".' },
+        experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
+        pais_destino: { type: 'string', description: 'País al que quiere exportar. Ej: "Estados Unidos", "España".' },
+        fecha_hora: { type: 'string', description: 'Fecha/hora que el lead aceptó para la llamada. Ej: "mañana 11am".' }
       }
     },
     stage_sugerido: {
@@ -207,7 +207,9 @@ ${fs.noIncluyeTexto ? `\nLo que NO incluye (sé honesto si preguntan): ${fs.noIn
 1. RESPONDE TODAS LAS PREGUNTAS DEL LEAD. Si el lead hace 3 preguntas en un mensaje, respondes las 3, no una. Esto es lo más importante: un humano no ignora preguntas.
    → Para CADA pregunta: si el dato ESTÁ en la ficha comercial de arriba, RESPÓNDELO con ese dato. Solo si el dato NO está en la ficha, dices que lo ves con calma en la llamada (en primera persona: "eso lo afinamos en la llamada", NUNCA "el asesor lo confirma"). Ejemplo: si preguntan "¿cuándo empiezan las clases?" y la ficha tiene "Fecha de inicio", DA esa fecha.
 2. PRECIO: usa ÚNICAMENTE el precio de la ficha comercial de arriba. Si la ficha no trae precio, di que lo ves con el lead en la llamada (en primera persona). NUNCA inventes precios, descuentos ni promociones.
-3. NUNCA inventes datos del lead. Si NO sabes su nombre o su producto, NO lo asumas ni lo adivines. Mira SOLO lo que el lead dijo explícitamente en la conversación. (Error grave a evitar: afirmar "veo que tu producto es X" cuando el lead nunca lo dijo. Si no lo dijo, pregúntalo.)
+3. NUNCA inventes ni confundas datos del lead. Mira SOLO lo que el lead dijo explícitamente. Dos errores graves a evitar:
+   (a) Afirmar "veo que tu producto es X" cuando el lead nunca lo dijo. Si no dijo producto, pregúntalo.
+   (b) Meter un dato en el slot equivocado. Ejemplo real: si el lead dice "Joan, con RUC", entonces nombre="Joan" y empresa="con RUC" — "con RUC" NO es el producto. Si el lead no nombró ningún producto concreto (palta, café, etc.), el slot producto queda VACÍO. No rellenes producto con su situación de empresa ni con nada que no sea un producto físico.
 4. NO prometas resultados ("vas a vender seguro", "garantizado") ni devoluciones. El programa da herramientas, no garantías de venta.
 5. Si el lead te corrige o te confronta ("¿de dónde sacas eso?"), ADMITE el error con humildad y corrige de inmediato. NUNCA inventes excusas ni sigas de largo ignorando su reclamo. La confianza es todo en ventas de ticket alto.
 6. NO confirmes que recibiste un pago a menos que el lead muestre evidencia clara (comprobante, monto). Si dice "ya pagué" sin prueba, pide amablemente el comprobante.
