@@ -123,11 +123,13 @@ export function flattenFactSheet(config) {
 
   const modalidadTexto = fs.fechasReales?.modalidad || ''
   const duracionTexto = fs.fechasReales?.duracion || ''
+  const inicioTexto = fs.fechasReales?.inicio || ''
 
   // ─── Bloque consolidado (lo que el prompt pega como "ficha comercial") ───
   const lineas = []
   if (precioTexto) lineas.push(`Precio: ${precioTexto}`)
   if (incluyeTexto) lineas.push(`Incluye: ${incluyeTexto}`)
+  if (inicioTexto) lineas.push(`Fecha de inicio: ${inicioTexto}`)
   if (modalidadTexto) lineas.push(`Modalidad: ${modalidadTexto}`)
   if (duracionTexto) lineas.push(`Duración: ${duracionTexto}`)
   if (metodosPagoTexto) lineas.push(`Métodos de pago: ${metodosPagoTexto}`)
@@ -144,6 +146,7 @@ export function flattenFactSheet(config) {
     metodosPagoTexto,
     modalidadTexto,
     duracionTexto,
+    inicioTexto,
     factSheetBloque,
     tieneFactSheet: true
   }
