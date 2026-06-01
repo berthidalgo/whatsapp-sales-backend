@@ -42,7 +42,7 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // ════════════════════════════════════════════════════════
 const BRAIN_MODEL = 'gemini-2.5-flash'   // El cerebro necesita razonar → Flash (no Lite)
 const TEMPERATURE = 0.6                    // Equilibrio: natural pero no descontrolado
-const MAX_OUTPUT_TOKENS = 1200
+const MAX_OUTPUT_TOKENS = 2000
 
 // ════════════════════════════════════════════════════════
 // SCHEMA de salida estructurada (Gemini lo respeta con responseSchema)
@@ -134,9 +134,17 @@ export async function pensarYResponder({
 
     let parsed
     try {
-      parsed = JSON.parse(result.text)
+      // Gemini a veces envuelve el JSON en ```json ... ``` — lo limpiamos
+      const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim()
+      parsed = JSON.parse(limpio)
     } catch (e) {
-      return buildError('brain_json_parse_failed', startTime, { raw: result.text?.slice(0, 200) })
+      return buildError('brain_json_parse_failed', startTime, {
+        parse_error: e.message,
+        raw_length: result.text?.length || 0,
+        raw_preview: result.text?.slice(0, 300),
+        raw_tail: result.text?.slice(-150),
+        finish_reason: result.response?.candidates?.[0]?.finishReason || 'unknown'
+      })
     }
 
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
@@ -191,8 +199,9 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
 - Eres ${nombreAgente}, una persona REAL del equipo de Perú Exporta TV. Para el lead, eres su asesor de principio a fin: tú lo atiendes, tú lo asesoras, y tú mismo lo llamas o cierras con él. NO hay "otro asesor" detrás de ti — TÚ eres esa persona.
 - NUNCA revelas ni insinúas que eres una IA, un bot o un "asistente virtual". Eres ${nombreAgente}. Si te preguntan "¿eres un bot?", respondes con naturalidad humana (eres ${nombreAgente} del equipo) y rediriges a ayudar, sin mentir agresivamente pero sin declararte máquina.
 - Hablas SIEMPRE en primera persona ("yo te ayudo", "déjame ver", "coordinamos", "te llamo"). JAMÁS hables de ti mismo en tercera persona ni te refieras a "el asesor" o "${nombreAgente}" como si fuera otra persona — ESE es el error que delata a un bot. Tú eres ${nombreAgente}.
-- Hablas español peruano natural, cálido, directo. Mensajes cortos de WhatsApp (2-5 líneas). Emojis con moderación (💪 🤝 🌎 🥑), no en cada línea.
-- NUNCA usas "estimado/a", "cordialmente", "atentamente" — suena acartonado y gringo.
+- Hablas español peruano natural, cálido pero PROFESIONAL. Cercano sin ser confianzudo. Mensajes cortos de WhatsApp (2-5 líneas). Emojis con moderación (💪 🤝 🌎 🥑), no en cada línea.
+- EVITA diminutivos acaramelados que restan seriedad a un programa de ticket alto: nada de "llamadita", "espacito", "cosita", "ratito", "minutitos". Di "una llamada", "una llamada corta", "unos minutos", "15 minutos". Eres un asesor profesional que trata al lead como un adulto que va a invertir en serio, no un vendedor meloso.
+- NUNCA usas "estimado/a", "cordialmente", "atentamente" — eso es el otro extremo, suena acartonado y gringo. El punto medio: profesional y humano a la vez.
 
 # TU META (esto te GUÍA, no te encadena)
 ${metaTexto}
@@ -323,8 +332,11 @@ function validarSalida(parsed, fs) {
 // ════════════════════════════════════════════════════════
 
 function buildError(code, startTime, metadata = {}) {
+  console.error(`[AgentBrain] FALLO: ${code}`, JSON.stringify(metadata).slice(0, 300))
   return {
     ok: false,
+    error: code,
+    error_metadata: metadata,
     mensaje: null,
     razonamiento: '',
     slots_detectados: {},
@@ -332,8 +344,6 @@ function buildError(code, startTime, metadata = {}) {
     debe_escalar_humano: false,
     temperatura_lead: 'warm',
     guardrail_flags: [],
-    error: code,
-    metadata,
     audit: { latency_ms: Date.now() - startTime }
   }
 }
