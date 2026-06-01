@@ -668,6 +668,9 @@ app.post('/debug/brain-test', async (req, reply) => {
 
     return reply.send({
       ok: result.ok,
+      // Si falló, el motivo exacto (diagnóstico):
+      error: result.error || null,
+      error_metadata: result.error_metadata || null,
       // Lo que el lead VERÍA:
       mensaje_al_lead: result.mensaje,
       // Lo interno (auditoría):
