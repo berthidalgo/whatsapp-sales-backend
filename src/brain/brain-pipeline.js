@@ -17,6 +17,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { pensarYResponder, summarizeBrainResult } from './agent-brain.js'
+import prisma from '../db/prisma.js'
 
 // Orden del embudo (para proteger contra retrocesos de stage)
 // Índice mayor = más avanzado en la venta. El stage solo AVANZA, no retrocede
@@ -61,7 +62,6 @@ async function construirHistorial(prisma, leadId, limite = 12) {
  * Procesa un mensaje entrante usando el cerebro unificado.
  *
  * @param {object} args
- * @param {object} args.prisma         - cliente Prisma
  * @param {number} args.leadId         - id del lead
  * @param {string} args.telefono       - teléfono del lead
  * @param {string} args.mensajeActual  - el texto que el lead acaba de enviar (combinado)
@@ -69,7 +69,7 @@ async function construirHistorial(prisma, leadId, limite = 12) {
  * @param {string} args.vendorNombre   - nombre del agente/vendedor (la identidad del bot)
  * @returns {Promise<object>} { ok, botResponse, brainResult, stateAfter }
  */
-export async function procesarConCerebro({ prisma, leadId, telefono, mensajeActual, tenantId = 'peru_exporta', vendorNombre = 'Daniel' }) {
+export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = 'peru_exporta', vendorNombre = 'Daniel' }) {
   const startTime = Date.now()
 
   try {
