@@ -111,7 +111,7 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
       systemInstruction,
       contents: userPrompt,
       temperature: JUDGE_TEMPERATURE,
-      maxOutputTokens: 1000,
+      maxOutputTokens: 1200,
       responseSchema: JUDGE_SCHEMA,
       tenantId: 'peru_exporta'
     })
