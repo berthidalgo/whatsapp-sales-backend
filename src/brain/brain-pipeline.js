@@ -5,34 +5,74 @@
 //
 // Reemplaza la cadena vieja Perception→ModeRouter→Policy→Response cuando el
 // interruptor USAR_CEREBRO_NUEVO está activo. Hace 5 cosas:
-//   1. Arma el historial de la conversación desde la BD (lo que el cerebro necesita)
-//   2. Carga el estado del lead (stage, slots) y el config de su campaña
-//   3. Llama al cerebro (pensarYResponder)
-//   4. PROTEGE el stage: si el cerebro sugiere retroceder sin razón, lo ignora
-//   5. Guarda el estado actualizado en la BD (lead_state) + persiste slots
+// 1. Arma el historial de la conversación desde la BD (lo que el cerebro necesita)
+// 2. Carga el estado del lead (stage, slots) y el config de su campaña
+// 3. Llama al cerebro (pensarYResponder)
+// 4. PROTEGE el stage: si el cerebro sugiere retroceder sin razón, lo ignora
+// 5. Guarda el estado actualizado en la BD (lead_state) + persiste slots
 //
 // Devuelve un objeto con la MISMA forma que espera el handler:
-//   { ok, botResponse: { text, bot_responded, ... }, ... }
+// { ok, botResponse: { text, bot_responded, ... }, ... }
 // para que el handler no note la diferencia y el envío por Evolution sea igual.
+//
+// ════════════════════════════════════════════════════════════════════════
+// FIX Sprint 3 (post-producción, 02-jun-2026) — dos bugs del mismo origen:
+//
+// BUG #4 (crash en cada escalada): el código escribía currentMode:'HUMANO_ACTIVO'
+//   (string en español, a mano). La BD solo acepta 'HUMAN_ACTIVE' (constraint
+//   valid_mode). Cada vez que el cerebro escalaba a humano, el upsert reventaba
+//   y el lead se quedaba sin respuesta. → Ahora se importa MODES del catálogo
+//   maestro (igual que event-router) y se usa MODES.HUMAN_ACTIVE / MODES.AUTO_CONSULTIVO.
+//   Si el valor está mal, ni arranca. El bug no puede renacer.
+//
+// BUG #5 (leads HOT atascados): el STAGE_ORDER estaba hardcodeado a mano e
+//   incompleto — inventaba stages que no existen ('greeting','qualifying',
+//   'objection_handling') y le FALTABA 'call_confirmed'. Como call_confirmed no
+//   estaba en la lista, stageRank() devolvía 0, y el avance legítimo
+//   call_scheduling→call_confirmed se interpretaba como "retroceso" y se bloqueaba.
+//   → Ahora STAGE_ORDER se deriva del catálogo maestro STAGES (única fuente de verdad).
+//
+// DECISIÓN DE NEGOCIO (Camino 2 — validación humana del cierre):
+//   Para MPX (ticket alto S/1,500, agentGoal=AGENDAR_LLAMADA), el "sí" de WhatsApp
+//   NO es el cierre real — el cierre real es la llamada. Por eso el bot llega hasta
+//   call_scheduling (coordina horario, su trabajo) pero NUNCA marca call_confirmed
+//   por su cuenta: ese stage lo valida el humano (Joan) o el registro de la llamada.
+//   Así el embudo no se infla con "confirmados" que luego no contestan el teléfono.
+//   El cerebro IGUAL responde con calidez al lead que confirma; solo el dato interno
+//   espera el visto bueno humano.
 // ════════════════════════════════════════════════════════════════════════
 
 import { pensarYResponder, summarizeBrainResult } from './agent-brain.js'
 import prisma from '../db/prisma.js'
+import { STAGES, MODES } from '../state/stage-definitions.js'
 
-// Orden del embudo (para proteger contra retrocesos de stage)
-// Índice mayor = más avanzado en la venta. El stage solo AVANZA, no retrocede
-// (salvo que el cerebro escale a humano o detecte algo que justifique reset).
+// ─────────────────────────────────────────────────────────────────────────
+// Orden del embudo (para proteger contra retrocesos de stage).
+// DERIVADO del catálogo maestro STAGES — NO hardcodear strings a mano (eso causó
+// el bug #5). Índice mayor = más avanzado. El stage solo AVANZA, no retrocede,
+// salvo que el cerebro escale a humano.
+// ─────────────────────────────────────────────────────────────────────────
 const STAGE_ORDER = [
-  'first_contact',
-  'greeting',
-  'discovery',
-  'qualifying_empresa',
-  'qualifying',
-  'presenting',
-  'objection_handling',
-  'call_scheduling',
-  'post_close'
+  STAGES.FIRST_CONTACT,          // 0
+  STAGES.DISCOVERY,              // 1
+  STAGES.QUALIFYING_EMPRESA,     // 2
+  STAGES.PRESENTING,             // 3
+  STAGES.CALL_SCHEDULING,        // 4
+  STAGES.CALL_CONFIRMED,         // 5
+  STAGES.POST_CLOSE              // 6
 ]
+// Nota: RETURNING_RECOGNITION se maneja por escalada/reactivación, no por el
+// orden lineal del embudo, así que no entra en este array de avance.
+
+// ─────────────────────────────────────────────────────────────────────────
+// CAMINO 2 — Stages que el CEREBRO NO puede asignar por su cuenta.
+// Estos los valida un humano (o el registro real del evento). Si el cerebro los
+// sugiere, respondemos normal pero mantenemos el stage anterior.
+// Para MPX: call_confirmed = "el lead confirmó la llamada DE VERDAD" → lo marca Joan.
+// ─────────────────────────────────────────────────────────────────────────
+const STAGES_SOLO_HUMANO = new Set([
+  STAGES.CALL_CONFIRMED
+])
 
 function stageRank(stage) {
   const i = STAGE_ORDER.indexOf(stage)
@@ -62,11 +102,11 @@ async function construirHistorial(prisma, leadId, limite = 12) {
  * Procesa un mensaje entrante usando el cerebro unificado.
  *
  * @param {object} args
- * @param {number} args.leadId         - id del lead
- * @param {string} args.telefono       - teléfono del lead
- * @param {string} args.mensajeActual  - el texto que el lead acaba de enviar (combinado)
- * @param {string} args.tenantId       - tenant
- * @param {string} args.vendorNombre   - nombre del agente/vendedor (la identidad del bot)
+ * @param {number} args.leadId - id del lead
+ * @param {string} args.telefono - teléfono del lead
+ * @param {string} args.mensajeActual - el texto que el lead acaba de enviar (combinado)
+ * @param {string} args.tenantId - tenant
+ * @param {string} args.vendorNombre - nombre del agente/vendedor (la identidad del bot)
  * @returns {Promise<object>} { ok, botResponse, brainResult, stateAfter }
  */
 export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = 'peru_exporta', vendorNombre = 'Daniel' }) {
@@ -97,7 +137,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
 
     // ─── 3. Armar el estadoLead que el cerebro espera ───
     const estadoLead = {
-      stage: leadState?.currentStage || 'first_contact',
+      stage: leadState?.currentStage || STAGES.FIRST_CONTACT,
       slots: leadState?.slotsFilled || {},
       tenantId,
       vendorNombre
@@ -124,14 +164,21 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       }
     }
 
-    // ─── 5. PROTEGER EL STAGE (no retroceder sin razón) ───
-    const stageActual = leadState?.currentStage || 'first_contact'
+    // ─── 5. PROTEGER EL STAGE (no retroceder sin razón + bloqueo Camino 2) ───
+    const stageActual = leadState?.currentStage || STAGES.FIRST_CONTACT
     const stageSugerido = brainResult.stage_sugerido || stageActual
     let stageFinal = stageActual
 
     if (brainResult.debe_escalar_humano) {
       // Si escala a humano, respetamos lo que diga el cerebro (puede ser cualquier stage)
-      stageFinal = stageSugerido
+      // — salvo que sea un stage de solo-humano (no tendría sentido auto-asignarlo).
+      stageFinal = STAGES_SOLO_HUMANO.has(stageSugerido) ? stageActual : stageSugerido
+    } else if (STAGES_SOLO_HUMANO.has(stageSugerido) && stageSugerido !== stageActual) {
+      // CAMINO 2: el cerebro quiere marcar call_confirmed por su cuenta → NO se lo
+      // permitimos. Respondemos normal (con calidez), pero el stage espera validación
+      // humana. Esto evita inflar el embudo con confirmaciones de WhatsApp no validadas.
+      console.log(`[BrainPipeline] 🔒 Stage de validación humana: cerebro sugirió "${stageSugerido}", se mantiene "${stageActual}" (lo marca el humano)`)
+      stageFinal = stageActual
     } else if (stageRank(stageSugerido) >= stageRank(stageActual)) {
       // Solo avanza o se mantiene. NUNCA retrocede sin razón.
       stageFinal = stageSugerido
@@ -153,19 +200,20 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     }
 
     // ─── 7. Guardar el estado actualizado en la BD ───
+    // currentMode usa el catálogo MODES (NO strings a mano — eso causó el bug #4).
     await prisma.leadState.upsert({
       where: { leadId },
       update: {
         currentStage: stageFinal,
         slotsFilled: slotsFusionados,
         lastMessageAt: new Date(),
-        ...(brainResult.debe_escalar_humano ? { currentMode: 'HUMANO_ACTIVO' } : {})
+        ...(brainResult.debe_escalar_humano ? { currentMode: MODES.HUMAN_ACTIVE } : {})
       },
       create: {
         leadId,
         currentStage: stageFinal,
         slotsFilled: slotsFusionados,
-        currentMode: brainResult.debe_escalar_humano ? 'HUMANO_ACTIVO' : 'AUTO_CONSULTIVO'
+        currentMode: brainResult.debe_escalar_humano ? MODES.HUMAN_ACTIVE : MODES.AUTO_CONSULTIVO
       }
     })
 
@@ -174,7 +222,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       ok: true,
       botResponse: {
         text: brainResult.mensaje,
-        bot_responded: !brainResult.debe_escalar_humano,  // si escala a humano, el bot NO responde (espera al humano)
+        bot_responded: !brainResult.debe_escalar_humano, // si escala a humano, el bot NO responde (espera al humano)
         generation: {
           method: 'agent_brain_v1',
           reason: brainResult.debe_escalar_humano ? 'escalado_a_humano' : 'brain_response'
@@ -197,4 +245,4 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
   }
 }
 
-export const BRAIN_PIPELINE_VERSION = 'v1_sprint3'
+export const BRAIN_PIPELINE_VERSION = 'v2_sprint3_modes_stageorder_fix'
