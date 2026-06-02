@@ -64,7 +64,7 @@ const BRAIN_RESPONSE_SCHEMA = {
       description: 'Datos que el lead reveló EXPLÍCITAMENTE en la conversación. Regla de oro: si tienes dudas de a qué slot pertenece algo, NO lo pongas. Solo incluye un slot si el lead lo dijo CLARAMENTE y encaja en su definición exacta. Deja fuera (no incluyas la clave) cualquier slot que el lead no haya dado.',
       properties: {
         nombre: { type: 'string', description: 'El nombre propio del lead. Ej: "Joan", "María". NO un saludo ni una empresa.' },
-        producto: { type: 'string', description: 'El PRODUCTO físico que el lead exporta o quiere exportar. Ej: "palta", "café", "textiles", "teléfonos". NUNCA pongas aquí su situación de empresa ("con RUC"), su experiencia, ni nada que no sea un producto concreto. Si el lead no nombró un producto, DEJA ESTE SLOT FUERA.' },
+        producto: { type: 'string', description: 'El PRODUCTO físico que el lead exporta o quiere exportar. Ej: "palta", "café", "textiles", "teléfonos". NUNCA pongas aquí su situación de empresa ("con RUC"), su experiencia, ni nada que no sea un producto concreto. Si el lead NO nombró un producto, OMITE esta clave por completo (no la incluyas en el objeto). JAMÁS escribas explicaciones como valor (mal: "vacío, no nombró producto"); si no hay producto, la clave simplemente no aparece.' },
         empresa: { type: 'string', description: 'La situación de empresa del lead. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC".' },
         experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
         pais_destino: { type: 'string', description: 'País al que quiere exportar. Ej: "Estados Unidos", "España".' },
@@ -118,33 +118,52 @@ export async function pensarYResponder({
   const userPrompt = construirUserPrompt({ mensajeActual, historial, estadoLead })
 
   try {
-    const result = await callGemini({
-      model: BRAIN_MODEL,
-      systemInstruction,
-      contents: userPrompt,
-      temperature: TEMPERATURE,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
-      responseSchema: BRAIN_RESPONSE_SCHEMA,
-      tenantId: estadoLead?.tenantId || 'peru_exporta'
-    })
+    // Reintento automático: si Gemini falla por error transitorio (timeout, rate
+    // limit), reintentamos 1 vez tras una pausa. Esto evita crashes como C035.
+    let result = null
+    let lastErr = null
+    for (let intento = 0; intento < 2; intento++) {
+      try {
+        result = await callGemini({
+          model: BRAIN_MODEL,
+          systemInstruction,
+          contents: userPrompt,
+          temperature: TEMPERATURE,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          responseSchema: BRAIN_RESPONSE_SCHEMA,
+          tenantId: estadoLead?.tenantId || 'peru_exporta'
+        })
+        if (result?.text) break   // éxito
+      } catch (callErr) {
+        lastErr = callErr
+        if (intento === 0) await new Promise(r => setTimeout(r, 1500))  // pausa antes de reintentar
+      }
+    }
 
     if (!result?.text) {
-      return buildError('empty_brain_response', startTime)
+      return buildError('empty_brain_response', startTime, { last_error: lastErr?.message || 'sin texto tras reintento' })
     }
 
     let parsed
     try {
       // Gemini a veces envuelve el JSON en ```json ... ``` — lo limpiamos
-      const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim()
+      const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       parsed = JSON.parse(limpio)
     } catch (e) {
-      return buildError('brain_json_parse_failed', startTime, {
-        parse_error: e.message,
-        raw_length: result.text?.length || 0,
-        raw_preview: result.text?.slice(0, 300),
-        raw_tail: result.text?.slice(-150),
-        finish_reason: result.response?.candidates?.[0]?.finishReason || 'unknown'
-      })
+      // Rescate: intentar extraer el bloque {...} si vino con basura alrededor
+      const match = result.text.match(/\{[\s\S]*\}/)
+      if (match) {
+        try { parsed = JSON.parse(match[0]) } catch (_) { /* cae al error */ }
+      }
+      if (!parsed) {
+        return buildError('brain_json_parse_failed', startTime, {
+          parse_error: e.message,
+          raw_length: result.text?.length || 0,
+          raw_preview: result.text?.slice(0, 300),
+          raw_tail: result.text?.slice(-150),
+          finish_reason: result.response?.candidates?.[0]?.finishReason || 'unknown'
+        })
+      }
     }
 
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
