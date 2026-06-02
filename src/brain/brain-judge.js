@@ -88,7 +88,7 @@ CRITERIOS DE EVALUACIÓN (en orden de importancia):
    - ¿Suena humano, cálido pero profesional (sin diminutivos acaramelados, sin formalismo gringo)?
    - ¿Avanza hacia la meta sin ser robótico?
 
-Sé concreto en tu razón. Si algo es PARCIAL, di exactamente qué le faltó.`
+Sé concreto en tu razón pero BREVE: máximo 25 palabras. No uses comillas dobles dentro de la razón (rompen el JSON), usa comillas simples si necesitas citar. Si algo es PARCIAL, di exactamente qué le faltó en pocas palabras.`
 
   const userPrompt = `CASO DE PRUEBA:
 - ID: ${caso.id}
@@ -111,7 +111,7 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
       systemInstruction,
       contents: userPrompt,
       temperature: JUDGE_TEMPERATURE,
-      maxOutputTokens: 600,
+      maxOutputTokens: 1000,
       responseSchema: JUDGE_SCHEMA,
       tenantId: 'peru_exporta'
     })
@@ -120,8 +120,35 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
       return { veredicto: 'PARCIAL', score: 50, razon: 'El juez no pudo evaluar (respuesta vacía).', red_flags: ['juez_sin_respuesta'], _judge_error: true }
     }
 
-    const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*$/g, '').trim()
-    const parsed = JSON.parse(limpio)
+    // Parseo robusto: limpia fences, y si falla, intenta rescatar el primer objeto JSON
+    let parsed
+    const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+    try {
+      parsed = JSON.parse(limpio)
+    } catch (e1) {
+      // Rescate 1: extraer el bloque {...} más externo
+      const match = limpio.match(/\{[\s\S]*\}/)
+      if (match) {
+        try { parsed = JSON.parse(match[0]) } catch (e2) { /* sigue al rescate 2 */ }
+      }
+      // Rescate 2: extraer campos sueltos con regex si el JSON quedó cortado
+      if (!parsed) {
+        const vMatch = limpio.match(/"veredicto"\s*:\s*"(PASS|PARCIAL|FAIL)"/i)
+        const sMatch = limpio.match(/"score"\s*:\s*(\d+)/)
+        const rMatch = limpio.match(/"razon"\s*:\s*"([^"]*)/)
+        if (vMatch) {
+          parsed = {
+            veredicto: vMatch[1].toUpperCase(),
+            score: sMatch ? parseInt(sMatch[1]) : 50,
+            razon: (rMatch ? rMatch[1] : 'veredicto rescatado de JSON parcial') + ' [parseo parcial]',
+            red_flags: []
+          }
+        }
+      }
+      if (!parsed) {
+        return { veredicto: 'PARCIAL', score: 50, razon: `Juez devolvió JSON inválido: ${e1.message}`, red_flags: ['juez_json_invalido'], _judge_error: true }
+      }
+    }
     return parsed
 
   } catch (err) {
