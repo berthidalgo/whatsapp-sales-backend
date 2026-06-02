@@ -157,7 +157,6 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       console.log(`[Pipeline] 🧠 Usando CEREBRO NUEVO para lead ${leadId}`)
       const brainStart = Date.now()
       stateResult = await procesarConCerebro({
-        prisma,
         leadId,
         telefono,
         mensajeActual: combinedText,
