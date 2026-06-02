@@ -78,7 +78,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       prisma.leadState.findUnique({ where: { leadId } }),
       prisma.lead.findUnique({
         where: { id: leadId },
-        select: { campaignId: true, nombre: true }
+        select: { campaignId: true, nombreDetectado: true }
       })
     ])
 
