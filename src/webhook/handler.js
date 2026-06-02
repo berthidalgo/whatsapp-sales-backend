@@ -30,6 +30,12 @@ import { sendToWhatsApp } from './sender.js'
 import { buildPerceptionContext } from '../perception/perception-context-builder.js'
 import { analizarMensaje } from '../perception/perception.js'
 import { actualizarEstado } from '../state/state.js'
+import { procesarConCerebro } from '../brain/brain-pipeline.js'
+
+// ── Interruptor de seguridad: cerebro nuevo (Sprint 3) vs pipeline viejo ──
+// Controlado por variable de entorno. true = cerebro nuevo, false = pipeline viejo.
+// Permite volver al viejo en 1 segundo desde Render si algo falla en producción.
+const USAR_CEREBRO_NUEVO = process.env.USAR_CEREBRO_NUEVO === 'true'
 
 // ════════════════════════════════════════════════════════
 // ESTADO INTERNO — Lock por leadId
@@ -144,45 +150,68 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
   try {
     console.log(`[Pipeline] ▶️ Starting for lead ${leadId} (${telefono}): ${bufferMetadata?.messageCount || 1} msg combined`)
 
-    // ─── 1. Construir contexto de Perception ───
-    const builtContext = await buildPerceptionContext({
-      telefono,
-      mensaje: combinedText,
-      tenantId: leadInfo.tenantId || 'peru_exporta'
-    })
+    let stateResult
 
-    const contextFlags = builtContext.contexto.flags
+    if (USAR_CEREBRO_NUEVO) {
+      // ═══ RAMA NUEVA: Cerebro unificado (Sprint 3) ═══
+      console.log(`[Pipeline] 🧠 Usando CEREBRO NUEVO para lead ${leadId}`)
+      const brainStart = Date.now()
+      stateResult = await procesarConCerebro({
+        prisma,
+        leadId,
+        telefono,
+        mensajeActual: combinedText,
+        tenantId: leadInfo.tenantId || 'peru_exporta',
+        vendorNombre: leadInfo.vendorNombre || 'Daniel'
+      })
+      console.log(`[Pipeline] Cerebro ${Date.now() - brainStart}ms`)
 
-    // ─── 2. Perception ───
-    const perceptionStart = Date.now()
-    const perception = await analizarMensaje({
-      mensaje: combinedText,
-      telefono,
-      tenantId: leadInfo.tenantId || 'peru_exporta',
-      saveTrace: true
-    })
-    
-    // Inyectar mensaje original en perception.meta para Response Layer
-    perception.meta = perception.meta || {}
-    perception.meta.mensaje_original = combinedText
-    perception.meta.buffer_metadata = bufferMetadata
-    
-    const perceptionMs = Date.now() - perceptionStart
-    console.log(`[Pipeline] Perception ${perceptionMs}ms: intents=${perception.intents?.join(',')}`)
+      if (!stateResult.ok) {
+        console.error(`[Pipeline] Cerebro falló para lead ${leadId}: ${stateResult.error}`)
+        return
+      }
+    } else {
+      // ═══ RAMA VIEJA: Perception → ModeRouter → Policy → Response ═══
+      // ─── 1. Construir contexto de Perception ───
+      const builtContext = await buildPerceptionContext({
+        telefono,
+        mensaje: combinedText,
+        tenantId: leadInfo.tenantId || 'peru_exporta'
+      })
 
-    // ─── 3. State + Mode Router + Policy + Response ───
-    const stateStart = Date.now()
-    const stateResult = await actualizarEstado({
-      perception,
-      leadId,
-      telefono,
-      contextFlags
-    })
-    const stateMs = Date.now() - stateStart
+      const contextFlags = builtContext.contexto.flags
 
-    if (!stateResult.ok) {
-      console.error(`[Pipeline] State failed for lead ${leadId}:`, stateResult.errors)
-      return
+      // ─── 2. Perception ───
+      const perceptionStart = Date.now()
+      const perception = await analizarMensaje({
+        mensaje: combinedText,
+        telefono,
+        tenantId: leadInfo.tenantId || 'peru_exporta',
+        saveTrace: true
+      })
+
+      // Inyectar mensaje original en perception.meta para Response Layer
+      perception.meta = perception.meta || {}
+      perception.meta.mensaje_original = combinedText
+      perception.meta.buffer_metadata = bufferMetadata
+
+      const perceptionMs = Date.now() - perceptionStart
+      console.log(`[Pipeline] Perception ${perceptionMs}ms: intents=${perception.intents?.join(',')}`)
+
+      // ─── 3. State + Mode Router + Policy + Response ───
+      const stateStart = Date.now()
+      stateResult = await actualizarEstado({
+        perception,
+        leadId,
+        telefono,
+        contextFlags
+      })
+      const stateMs = Date.now() - stateStart
+
+      if (!stateResult.ok) {
+        console.error(`[Pipeline] State failed for lead ${leadId}:`, stateResult.errors)
+        return
+      }
     }
 
     const botResponse = stateResult.botResponse
@@ -222,8 +251,8 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
     const totalMs = Date.now() - pipelineStart
     console.log(
       `[Pipeline] ✓ Lead ${leadId} | ` +
-      `Perception:${perceptionMs}ms State:${stateMs}ms Send:${sendMs}ms | ` +
       `Total:${totalMs}ms | ` +
+      `motor:${USAR_CEREBRO_NUEVO ? 'cerebro_nuevo' : 'pipeline_viejo'} | ` +
       `bot:${botResponse.generation?.method || 'unknown'}`
     )
 
