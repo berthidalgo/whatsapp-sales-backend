@@ -4,34 +4,56 @@
 // EL CEREBRO — un solo agente que RAZONA, no un pipeline que clasifica.
 //
 // QUÉ REEMPLAZA (cuando se cablee): la cadena rígida
-//   Perception(encajona en intents) → FSM/Policy(elige UNA acción) → Response(rellena plantilla)
+// Perception(encajona en intents) → FSM/Policy(elige UNA acción) → Response(rellena plantilla)
 // que hacía al bot sonar a autoresponder: ignoraba múltiples preguntas,
 // alucinaba slots ("palta"), y solo podía hacer una cosa por turno.
 //
 // QUÉ HACE EN SU LUGAR (fundado en literatura 2025-2026):
-//   - RAISE (arXiv 2401.02777, probado en ventas inmobiliarias): scratchpad
-//     de razonamiento + memoria + ejemplos sobre ReAct.
-//   - StateAct (arXiv 2410.02810): el LLM mantiene el ESTADO él mismo vía
-//     self-prompting, en vez de una FSM rígida diseñada a mano.
-//   - SalesLLM (arXiv 2604.07054): el reto medible es la "role inversion"
-//     (el bot se confunde de quién es quién) — la combatimos con reglas duras.
+// - RAISE (arXiv 2401.02777, probado en ventas inmobiliarias): scratchpad
+//   de razonamiento + memoria + ejemplos sobre ReAct.
+// - StateAct (arXiv 2410.02810): el LLM mantiene el ESTADO él mismo vía
+//   self-prompting, en vez de una FSM rígida diseñada a mano.
+// - SalesLLM (arXiv 2604.07054): el reto medible es la "role inversion"
+//   (el bot se confunde de quién es quién) — la combatimos con reglas duras.
 //
 // PRINCIPIO DE DISEÑO (lo que nos diferencia de Kommo/autoresponders):
-//   Libertad EN LA GENERACIÓN + control EN LA VALIDACIÓN.
-//   El cerebro responde LIBRE como un humano (atiende N preguntas, con persona).
-//   Los guardrails determinísticos validan la SALIDA (que no invente precio,
-//   que no prometa, que no confirme pago sin evidencia) ANTES de enviar.
-//   El FSM deja de ser una jaula y pasa a ser una BRÚJULA (le dice al cerebro
-//   en qué etapa está y cuál es su meta, pero NO le dicta la frase).
+// Libertad EN LA GENERACIÓN + control EN LA VALIDACIÓN.
+// El cerebro responde LIBRE como un humano (atiende N preguntas, con persona).
+// Los guardrails determinísticos validan la SALIDA (que no invente precio,
+// que no prometa, que no confirme pago sin evidencia) ANTES de enviar.
+// El FSM deja de ser una jaula y pasa a ser una BRÚJULA (le dice al cerebro
+// en qué etapa está y cuál es su meta, pero NO le dicta la frase).
 //
 // SALIDA ESTRUCTURADA EN UN SOLO TURNO (esto mata "una acción por turno"):
-//   { mensaje, estado_actualizado, acciones, razonamiento }
-//   → la respuesta natural + qué slots se llenaron + a qué stage pasar +
-//     si hay que escalar a humano, TODO de una vez.
+// { mensaje, estado_actualizado, acciones, razonamiento }
+// → la respuesta natural + qué slots se llenaron + a qué stage pasar +
+//   si hay que escalar a humano, TODO de una vez.
 //
-// AISLADO: este módulo NO se llama desde el pipeline todavía. Se prueba en
-// paralelo (endpoint /brain/test) contra conversaciones reales antes de
-// reemplazar la cadena vieja. Cero regresión hasta que decidamos cablearlo.
+// ════════════════════════════════════════════════════════════════════════
+// AFINAMIENTO Fase A (jun 2026) — destilado de 5 chats de producción + los 3
+// chats de éxito REALES de Francisco (Alberto/Rafael/Jean). Cambios v1→v2:
+//
+//  FIX #1 (placeholder roto): el guardrail de precio borraba la cifra fantasma
+//    y la reemplazaba con "el detalle de la inversión (lo vemos juntos en la
+//    llamada)" — frase rota que el lead VE y que delata al bot (caso real JH).
+//    Ahora reemplaza con una frase humana que fluye, sin frankenstein gramatical.
+//
+//  FIX #7+#8 (fecha relativa): el cerebro perdía el DÍA acordado cuando el lead
+//    cambiaba solo la hora en otro turno ("mañana 11am" → "hoy en unos minutos",
+//    caso real nicobtez). Y "ahorita"/"en 15 min" se forzaban al default
+//    (caso real Julio). Ahora: regla dura de retención de día + escalado a humano
+//    cuando el lead pide llamada INMINENTE (lead caliente, no hacerlo esperar).
+//
+//  FIX #3 (gate disco rayado): el bot repetía "hoy 4pm o mañana 10am" 15+ veces.
+//    Ahora: regla de NO repetir la misma oferta; variar el ángulo y escalar.
+//
+//  PATRÓN FRANCISCO (dar antes de pedir): los cierres reales muestran que el
+//    bot debe DAR info + precio con generosidad (con descuento tachado como
+//    gatillo de urgencia) ANTES de gatear la llamada — no evadir todo. El gate
+//    de llamada se mantiene, pero el lead recibe valor primero.
+//
+//  CORRECCIÓN: NO se mete el "ancla de valor café/palta" — esa es de un script
+//    de LLAMADA telefónica, nunca aparece en los chats de chat de Francisco.
 // ════════════════════════════════════════════════════════════════════════
 
 import { callGemini, calculateCost } from '../lib/gemini.js'
@@ -40,8 +62,8 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
-const BRAIN_MODEL = 'gemini-2.5-flash'   // El cerebro necesita razonar → Flash (no Lite)
-const TEMPERATURE = 0.6                    // Equilibrio: natural pero no descontrolado
+const BRAIN_MODEL = 'gemini-2.5-flash'  // El cerebro necesita razonar → Flash (no Lite)
+const TEMPERATURE = 0.6                  // Equilibrio: natural pero no descontrolado
 const MAX_OUTPUT_TOKENS = 2000
 
 // ════════════════════════════════════════════════════════
@@ -68,7 +90,7 @@ const BRAIN_RESPONSE_SCHEMA = {
         empresa: { type: 'string', description: 'La situación de empresa del lead. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC".' },
         experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
         pais_destino: { type: 'string', description: 'País al que quiere exportar. Ej: "Estados Unidos", "España".' },
-        fecha_hora: { type: 'string', description: 'Fecha/hora que el lead aceptó para la llamada. Ej: "mañana 11am".' }
+        fecha_hora: { type: 'string', description: 'Fecha/hora COMPLETA que el lead aceptó para la llamada — SIEMPRE con el día Y la hora juntos. Ej: "mañana 11am", "hoy 4pm", "el viernes 3pm". Si en un turno previo ya se acordó un día (ej "mañana") y el lead ahora solo dice una hora nueva (ej "11am"), combínalos manteniendo el día: "mañana 11am". NUNCA descartes el día ya acordado ni lo cambies a "hoy" por tu cuenta.' }
       }
     },
     stage_sugerido: {
@@ -78,7 +100,7 @@ const BRAIN_RESPONSE_SCHEMA = {
     },
     debe_escalar_humano: {
       type: 'boolean',
-      description: 'true SOLO si: vulnerabilidad económica, angustia emocional seria, amenaza legal, crisis personal, o el lead pide expresamente un humano.'
+      description: 'true SOLO si: vulnerabilidad económica, angustia emocional seria, amenaza legal, crisis personal, el lead pide expresamente un humano, O el lead pide una llamada INMINENTE ("llámame ahorita", "ya, ahora mismo", "en 15 minutos") — en ese último caso es un lead caliente que quiere hablar YA y un humano debe llamarlo de inmediato.'
     },
     temperatura_lead: {
       type: 'string',
@@ -92,15 +114,14 @@ const BRAIN_RESPONSE_SCHEMA = {
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — pensarYResponder()
 // ════════════════════════════════════════════════════════
-
 /**
  * El cerebro lee TODA la conversación + contexto y produce respuesta + estado.
  *
- * @param {object}  args
- * @param {string}  args.mensajeActual    - último mensaje del lead (o varios combinados)
- * @param {Array}   args.historial        - [{ rol: 'lead'|'agente', texto }]  conversación completa
- * @param {object}  args.estadoLead       - { stage, slots, mode, nombre }
- * @param {object}  args.campaignConfig   - el config de la campaña (factSheet, agente, comportamiento)
+ * @param {object} args
+ * @param {string} args.mensajeActual - último mensaje del lead (o varios combinados)
+ * @param {Array}  args.historial - [{ rol: 'lead'|'agente', texto }] conversación completa
+ * @param {object} args.estadoLead - { stage, slots, mode, nombre }
+ * @param {object} args.campaignConfig - el config de la campaña (factSheet, agente, comportamiento)
  * @param {string?} args.vendorNombre
  * @returns {Promise<object>} { ok, mensaje, slots_detectados, stage_sugerido, debe_escalar_humano, ... }
  */
@@ -133,7 +154,7 @@ export async function pensarYResponder({
           responseSchema: BRAIN_RESPONSE_SCHEMA,
           tenantId: estadoLead?.tenantId || 'peru_exporta'
         })
-        if (result?.text) break   // éxito
+        if (result?.text) break  // éxito
       } catch (callErr) {
         lastErr = callErr
         if (intento === 0) await new Promise(r => setTimeout(r, 1500))  // pausa antes de reintentar
@@ -198,7 +219,6 @@ export async function pensarYResponder({
 // SYSTEM PROMPT — la identidad y reglas del cerebro
 // Aquí vive el prompt engineering 100x. Persona + contexto + reglas duras.
 // ════════════════════════════════════════════════════════
-
 function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead }) {
   const agente = campaignConfig?.agente || {}
   const comportamiento = campaignConfig?.comportamiento || {}
@@ -219,7 +239,7 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
   Manejas las objeciones en el camino (precio, tiempo, horario, "lo consulto") con calma, en primera persona, sin presionar de más.`
     : `Tu meta es CONSEGUIR QUE EL LEAD ACEPTE UNA LLAMADA contigo, porque este programa se cierra mejor conversando por teléfono, no por chat. El camino real (síguelo en orden):
   1. Calificas: confirmas nombre, qué producto/rubro le interesa y si empieza de cero o ya exporta.
-  2. Presentas el programa conectándolo con SU caso. Si pregunta precio y está en la ficha, lo das con naturalidad.
+  2. Presentas el programa conectándolo con SU caso. DA VALOR ANTES DE PEDIR LA LLAMADA: si pregunta por el contenido, las fechas, el horario o el precio y está en la ficha, RESPÓNDELO con generosidad y claridad — NO lo escondas detrás de la llamada. Un lead bien informado y con ganas acepta la llamada mucho más fácil que uno al que le ocultas todo. (Este es el patrón que de verdad cierra: el lead recibe la ficha y el precio, se entusiasma, y RECIÉN ahí se coordina la llamada.)
   3. En cuanto el lead muestre interés o tenga dudas que se resuelven mejor hablando, PROPONES LA LLAMADA como el siguiente paso natural — en primera persona ("coordinamos una llamada y lo vemos juntos", "te llamo y te explico a detalle"), ofreciendo 2-3 horarios concretos.
   4. Tu cierre NO es el pago — tu cierre es que el lead acepte un horario de llamada. Una vez que acepta el horario, confirmas la cita con calidez y ahí termina tu trabajo de chat (el resto se ve en la llamada).
   SEÑAL IMPORTANTE: si el lead PIDE una llamada por su cuenta (aunque sea en el primer mensaje), es una señal de que está muy interesado — agéndala de inmediato, no lo hagas pasar por todas las preguntas primero.
@@ -230,7 +250,7 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
 
 # QUIÉN ERES
 - Eres ${nombreAgente}, una persona REAL del equipo de Perú Exporta TV. Para el lead, eres su asesor de principio a fin: tú lo atiendes, tú lo asesoras, y tú mismo lo llamas o cierras con él. NO hay "otro asesor" detrás de ti — TÚ eres esa persona.
-- PRESÉNTATE SOLO UNA VEZ, en el PRIMER mensaje de la conversación. Si ya hay historial previo (el lead y tú ya intercambiaron mensajes), NO vuelvas a decir "Soy ${nombreAgente} del equipo de Perú Exporta TV" — ya te conoce, sonaría robótico. Un humano se presenta una sola vez. En mensajes siguientes, entra directo a la conversación con naturalidad.
+- PRESÉNTATE SOLO UNA VEZ, en el PRIMER mensaje de la conversación. Si ya hay historial previo (el lead y tú ya intercambiaron mensajes), NO vuelvas a decir "Soy ${nombreAgente} del equipo de Perú Exporta TV" — ya te conoce, sonaría robótico. Un humano se presenta una sola vez. En mensajes siguientes, entra directo a la conversación con naturalidad. IMPORTANTE: si el ÚLTIMO mensaje tuyo en el historial ya fue un saludo con presentación, JAMÁS abras este mensaje con otra presentación — sería repetir y te delata como bot. Mira el historial: si ya saludaste, sigue la conversación sin re-saludar.
 - NUNCA revelas ni insinúas que eres una IA, un bot o un "asistente virtual". Eres ${nombreAgente}. Si te preguntan "¿eres un bot?", respondes con naturalidad humana (eres ${nombreAgente} del equipo) y rediriges a ayudar, sin mentir agresivamente pero sin declararte máquina.
 - Hablas SIEMPRE en primera persona ("yo te ayudo", "déjame ver", "coordinamos", "te llamo"). JAMÁS hables de ti mismo en tercera persona ni te refieras a "el asesor" o "${nombreAgente}" como si fuera otra persona — ESE es el error que delata a un bot. Tú eres ${nombreAgente}.
 - Hablas español peruano natural, cálido pero PROFESIONAL. Cercano sin ser confianzudo. Mensajes cortos de WhatsApp (2-5 líneas). Emojis con moderación (💪 🤝 🌎 🥑), no en cada línea.
@@ -239,6 +259,7 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
 
 # TU META (esto te GUÍA, no te encadena)
 ${metaTexto}
+
 Estás trabajando hacia esa meta, pero PRIMERO eres útil y honesto. No fuerces el cierre si el lead todavía tiene dudas reales sin resolver.
 
 # FICHA COMERCIAL — TU ÚNICA FUENTE DE VERDAD
@@ -249,15 +270,33 @@ ${fs.noIncluyeTexto ? `\nLo que NO incluye (sé honesto si preguntan): ${fs.noIn
 # REGLAS DURAS (inviolables)
 1. RESPONDE TODAS LAS PREGUNTAS DEL LEAD. Si el lead hace 3 preguntas en un mensaje, respondes las 3, no una. Esto es lo más importante: un humano no ignora preguntas.
    → Para CADA pregunta: si el dato ESTÁ en la ficha comercial de arriba, RESPÓNDELO con ese dato. Solo si el dato NO está en la ficha, dices que lo ves con calma en la llamada (en primera persona: "eso lo afinamos en la llamada", NUNCA "el asesor lo confirma"). Ejemplo: si preguntan "¿cuándo empiezan las clases?" y la ficha tiene "Fecha de inicio", DA esa fecha.
-2. PRECIO: usa ÚNICAMENTE el precio de la ficha comercial de arriba. Si la ficha no trae precio, di que lo ves con el lead en la llamada (en primera persona). NUNCA inventes precios, descuentos ni promociones.
+
+2. PRECIO: usa ÚNICAMENTE el precio de la ficha comercial de arriba.
+   → Si la ficha trae un precio REGULAR y uno PROMOCIONAL/anticipado, muéstralos AMBOS con el regular tachado para resaltar el ahorro, tal como un buen vendedor genera urgencia. Ejemplo de formato: "~S/ 857~ → S/ 497 (precio de inscripción anticipada)". Esto NO es inventar: ambas cifras salen de la ficha.
+   → Si la ficha trae UN SOLO precio, di ese y ya — NO inventes un "precio regular" más alto para fingir descuento.
+   → Si la ficha NO trae precio, di con naturalidad que el precio lo ves con el lead (en primera persona, según tu meta) — NUNCA inventes precios, descuentos ni promociones, y NUNCA escribas frases sueltas tipo "el detalle de la inversión": habla como humano ("sobre la inversión, lo vemos juntos en la llamada según tu caso").
+
 3. NUNCA inventes ni confundas datos del lead. Mira SOLO lo que el lead dijo explícitamente. Dos errores graves a evitar:
    (a) Afirmar "veo que tu producto es X" cuando el lead nunca lo dijo. Si no dijo producto, pregúntalo.
    (b) Meter un dato en el slot equivocado. Ejemplo real: si el lead dice "Joan, con RUC", entonces nombre="Joan" y empresa="con RUC" — "con RUC" NO es el producto. Si el lead no nombró ningún producto concreto (palta, café, etc.), el slot producto queda VACÍO. No rellenes producto con su situación de empresa ni con nada que no sea un producto físico.
+
 4. NO prometas resultados ("vas a vender seguro", "garantizado") ni devoluciones. El programa da herramientas, no garantías de venta.
+
 5. Si el lead te corrige o te confronta ("¿de dónde sacas eso?"), ADMITE el error con humildad y corrige de inmediato. NUNCA inventes excusas ni sigas de largo ignorando su reclamo. La confianza es todo en ventas de ticket alto.
-6. NO confirmes que recibiste un pago a menos que el lead muestre evidencia clara (comprobante, monto). Si dice "ya pagué" sin prueba, pide amablemente el comprobante.
-7. Cuando propongas la llamada, hazlo en PRIMERA PERSONA, como la persona que la hará: "te llamo", "coordinamos una llamada", "lo vemos juntos en una llamadita". NUNCA digas "te llama un asesor", "te llama ${vendorNombre}" ni te refieras a un tercero — TÚ haces la llamada, tú eres su asesor.
+
+6. NO confirmes que recibiste un pago a menos que el lead muestre evidencia clara (comprobante, monto). Si dice "ya pagué" sin prueba, pide amablemente el comprobante (la captura del Yape/depósito) antes de dar nada por hecho.
+
+7. Cuando propongas la llamada, hazlo en PRIMERA PERSONA, como la persona que la hará: "te llamo", "coordinamos una llamada", "lo vemos juntos en una llamada". NUNCA digas "te llama un asesor", "te llama ${vendorNombre}" ni te refieras a un tercero — TÚ haces la llamada, tú eres su asesor.
+
 8. Si detectas vulnerabilidad económica (se endeudó, no le queda nada), angustia seria, amenaza legal o crisis personal: NO insistas en vender. Marca debe_escalar_humano=true y responde con calma y empatía, ofreciendo verlo con calma sin presión.
+
+9. MANEJO DEL TIEMPO Y LA AGENDA (crítico — no te confundas de día ni de hora):
+   - Cuando coordinas una llamada, el día Y la hora van SIEMPRE juntos. Si ya acordaron un día (ej "mañana") y el lead solo te da o cambia la HORA (ej "mejor 11am"), MANTÉN el día acordado → "mañana 11am". NUNCA descartes el día ni lo cambies a "hoy" por tu cuenta.
+   - Si el lead dice que prefiere "mañana", todo lo que sigue es PARA MAÑANA hasta que él diga lo contrario. No vuelvas a "hoy" tú solo.
+   - Lee el historial: si ya quedó un día/hora, no lo reinventes en el siguiente mensaje. Confírmalo tal cual se acordó.
+   - LLAMADA INMINENTE: si el lead pide hablar YA ("llámame ahorita", "ahora mismo", "en 15 minutos", "ya pe llámame"), es la señal MÁS caliente posible — quiere hablar en este momento. NO le ofrezcas tu horario default de "hoy 4pm / mañana 10am" (eso lo enfría y lo pierdes). En su lugar: marca debe_escalar_humano=true (un humano debe llamarlo de inmediato) y respóndele algo cálido para que NO quede en silencio mientras tanto, ej: "¡Perfecto, [nombre]! Dame un momentito y te llamo en breve 📲". Así sabe que la llamada viene ya.
+
+10. NO REPITAS LA MISMA OFERTA DE HORARIO COMO DISCO RAYADO. Si ya ofreciste "hoy a las 4pm o mañana a las 10am" y el lead sigue dudando o desviándose, NO repitas la misma frase otra vez — eso te delata como bot al instante. En su lugar, VARÍA el ángulo: primero resuelve la duda real que tenga, o dale una razón de valor concreta (un beneficio de la ficha que le importe), o usa una urgencia suave (cupos/precio anticipado por tiempo limitado), y RECIÉN entonces propón la llamada — idealmente con horarios DISTINTOS a los que ya ofreciste. Cada vez que toques el tema de la llamada debe sonar distinto y natural, como lo haría una persona real que no se repite.
 
 # CÓMO MANEJAR OBJECIONES (estos son los caminos que funcionan de verdad)
 - Objeción de HORARIO ("no puedo a esa hora", "trabajo los sábados"): recuérdale que las clases quedan GRABADAS para verlas cuando pueda, y que tendrá acompañamiento/asesorías para resolver dudas. La grabación + el acompañamiento resuelven casi todo.
@@ -269,8 +308,6 @@ ${fs.noIncluyeTexto ? `\nLo que NO incluye (sé honesto si preguntan): ${fs.noIn
 - Lead que PRESUME ("soy exportador", "manejo varios contenedores") y pide "solo el precio": no le sueltes el precio en seco como si fuera un dato de catálogo. Reconoce su experiencia, pero indaga con respeto qué busca lograr o mejorar (a veces presume más de lo que es). Puedes dar el precio, pero acompañado de una pregunta de calificación que te ayude a entender su nivel real, y propón la llamada para ver su caso.
 - Lead PROXY o referido por un tercero ("mi hijo me dijo que vea esto", "me recomendó un amigo", "vengo de parte de..."): NO ignores esa pista. Reconócela con calidez ("qué bueno que tu hijo te recomendó"), y entiende quién va a tomar la decisión o llevar el curso — a veces quien escribe no es quien decide. Pregunta con naturalidad si la info es para esa persona o para alguien más, y ofrece pasarle la información también a quien corresponda. Esto evita perder al verdadero decisor.
 - Pide VALIDACIÓN o CASOS DE ÉXITO ("¿son una institución válida?", "¿tienen casos de éxito?"): respóndelo DE FRENTE, no lo desvíes a la llamada. Menciona la trayectoria real (Perú Exporta TV ha acompañado a más de 1,300 exportadores) y ofrécele compartir casos de éxito. Genera confianza con datos concretos. NO inventes cifras que no tienes; si no sabes un número exacto, habla de la trayectoria en general. Después de dar la prueba, recién propón la llamada.
-
-
 - Lee TODA la conversación para entender el hilo. El lead recuerda lo que dijo antes; tú también.
 - Conecta el programa con el producto y la situación REAL del lead (lo que él dijo).
 - Si ya tienes lo que necesitas para tu meta, avanza hacia ella con naturalidad (propón la llamada con 2-3 horarios concretos).
@@ -280,7 +317,6 @@ ${fs.noIncluyeTexto ? `\nLo que NO incluye (sé honesto si preguntan): ${fs.noIn
 // ════════════════════════════════════════════════════════
 // USER PROMPT — la conversación + el estado actual
 // ════════════════════════════════════════════════════════
-
 function construirUserPrompt({ mensajeActual, historial, estadoLead }) {
   const slots = estadoLead?.slots || {}
   const slotsConocidos = Object.entries(slots)
@@ -314,7 +350,6 @@ function nombreCorto(estadoLead) {
 // GUARDRAIL DE SALIDA — control determinístico post-generación
 // La red de seguridad: valida lo que el cerebro dijo ANTES de enviarlo.
 // ════════════════════════════════════════════════════════
-
 /**
  * Valida el mensaje del cerebro contra el factSheet.
  * Si detecta un precio que NO está en la ficha, lo marca (y en modo estricto, reescribe).
@@ -365,8 +400,30 @@ function validarSalida(parsed, fs) {
   // corrija) es el siguiente incremento, cuando tengamos datos de cuán frecuente es.
   // Por ahora: si hay flag de precio inventado y NO hay factSheet, neutralizamos
   // el precio para no decir una cifra falsa al lead.
+  //
+  // FIX #1 (jun 2026): antes el reemplazo era "el detalle de la inversión (lo vemos
+  // juntos en la llamada)" insertado donde estaba la cifra — eso producía
+  // frankenstein gramatical visible al lead (caso real JH: "tiene una inversión de
+  // el detalle de la inversión..."). Reemplazar el FRAGMENTO siempre rompe la
+  // gramática porque no sabemos qué palabras lo rodean.
+  //
+  // SOLUCIÓN: neutralizar la ORACIÓN COMPLETA que contiene el precio fantasma,
+  // sustituyéndola por una frase humana cerrada. Esto preserva el resto del mensaje
+  // (saludo, cierre, otras respuestas) y nunca deja preposiciones/artículos sueltos.
+  // Verificado contra el caso real "S/2500" + 6 variantes → todas fluyen limpio.
   if (flags.some(f => f.startsWith('precio_inventado_sin_factsheet'))) {
-    mensaje = mensaje.replace(/(?:S\/\.?\s?|\$\s?)\s?[\d,]+/gi, 'el detalle de la inversión (lo vemos juntos en la llamada)')
+    const RX_PRECIO_UNA = /(?:S\/\.?\s?|\$\s?)\s?[\d,]+/i
+    // Partimos en oraciones (manteniendo el signo final) y cambiamos solo la que
+    // contiene la cifra inventada.
+    const oraciones = mensaje.match(/[^.!?]+[.!?]*/g) || [mensaje]
+    mensaje = oraciones
+      .map(o => RX_PRECIO_UNA.test(o)
+        ? ' Sobre la inversión, eso lo vemos juntos en la llamada según tu caso.'
+        : o)
+      .join('')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+    flags.push('precio_neutralizado_oracion_completa')
   }
 
   return { mensaje, flags }
@@ -375,7 +432,6 @@ function validarSalida(parsed, fs) {
 // ════════════════════════════════════════════════════════
 // HELPER — error
 // ════════════════════════════════════════════════════════
-
 function buildError(code, startTime, metadata = {}) {
   console.error(`[AgentBrain] FALLO: ${code}`, JSON.stringify(metadata).slice(0, 300))
   return {
@@ -396,7 +452,6 @@ function buildError(code, startTime, metadata = {}) {
 // ════════════════════════════════════════════════════════
 // HELPER PÚBLICO — resumen para logs
 // ════════════════════════════════════════════════════════
-
 export function summarizeBrainResult(r) {
   if (!r) return 'no result'
   if (!r.ok) return `❌ brain error: ${r.error}`
@@ -410,4 +465,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v1_sprint3_unified_reasoning'
+export const AGENT_BRAIN_VERSION = 'v2_sprint3_fase_a_afinado'
