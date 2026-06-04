@@ -259,7 +259,7 @@ export async function pensarYResponder({
 function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead }) {
   const agente = campaignConfig?.agente || {}
   const comportamiento = campaignConfig?.comportamiento || {}
-  const nombreAgente = agente.nombre || 'Jhon Asesor'
+  const nombreAgente = agente.nombre || 'Jhon'
   const rolAgente = agente.rol || 'Asesor de Perú Exporta TV'
   const agentGoal = comportamiento.agentGoal || 'AGENDAR_LLAMADA'
 
