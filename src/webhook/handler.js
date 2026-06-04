@@ -26,6 +26,7 @@
 
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
+import { enqueueMessage } from './debounce.js'
 import { sendToWhatsApp } from './sender.js'
 import { buildPerceptionContext } from '../perception/perception-context-builder.js'
 import { analizarMensaje } from '../perception/perception.js'
@@ -134,14 +135,20 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
   const { leadId, telefono, vendorNombre } = leadInfo
   const pipelineStart = Date.now()
 
-  // ─── Lock check ───
+  // ─── Lock check (FIX BUG A, jun 2026) ───
+  // Si este lead YA está siendo procesado, NO reintentamos el mismo texto a ciegas
+  // (eso causaba respuestas duplicadas/incoherentes: el pipeline viejo terminaba y
+  // soltaba su respuesta, y este reintento soltaba OTRA). En su lugar, REENCOLAMOS
+  // el texto al debounce: si llegan más mensajes del lead se agrupan, y el pipeline
+  // corre UNA sola vez cuando el lock se libere. Determinístico, sin paralelismo.
   if (processingLeads.has(leadId)) {
-    console.warn(`[Pipeline] Lead ${leadId} already processing, will retry in 5s`)
-    setTimeout(() => {
-      processPipelineFn(leadInfo, combinedText, bufferMetadata).catch(err => {
-        console.error('[Pipeline] Retry error:', err.message)
-      })
-    }, 5000)
+    console.warn(`[Pipeline] Lead ${leadId} ya en proceso → reencolando al debounce (evita duplicado)`)
+    enqueueMessage({
+      leadId,
+      text: combinedText,
+      processFn: (reCombinedText, reMeta) => processPipelineFn(leadInfo, reCombinedText, reMeta),
+      metadata: { reenqueuedFromLock: true, originalMeta: bufferMetadata }
+    })
     return
   }
 
@@ -282,4 +289,4 @@ export function getActivePipelines() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const HANDLER_VERSION = 'v21_day8_payload_compat'
+export const HANDLER_VERSION = 'v22_day9_reenqueue_lock_bugA'
