@@ -64,7 +64,7 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // ════════════════════════════════════════════════════════
 const BRAIN_MODEL = 'gemini-2.5-flash'  // El cerebro necesita razonar → Flash (no Lite)
 const TEMPERATURE = 0.6                  // Equilibrio: natural pero no descontrolado
-const MAX_OUTPUT_TOKENS = 2000
+const MAX_OUTPUT_TOKENS = 4000   // FIX #11 (jun 2026): 2000 era insuficiente. El razonamiento + un M4 grande (hasta 1169 chars vistos en prod) cortaban el JSON a la mitad ("Unterminated string"). 4000 da margen de sobra para que el JSON siempre cierre.
 
 // ════════════════════════════════════════════════════════
 // SCHEMA de salida estructurada (Gemini lo respeta con responseSchema)
@@ -73,25 +73,12 @@ const MAX_OUTPUT_TOKENS = 2000
 const BRAIN_RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
-    razonamiento: {
-      type: 'string',
-      description: 'MÁXIMO 1 o 2 frases cortas. Solo: en qué momento estoy y qué hago. NO te extiendas — un razonamiento largo rompe el formato. Ej: "Lead dio nombre y producto, estoy en M2, pregunto experiencia." Para auditoría, NO se envía al lead.'
-    },
+    // ── mensaje VA PRIMERO (FIX #11): es lo único que el lead ve. Si el JSON se
+    //    cortara, queremos que lo último en cortarse sea lo de abajo (razonamiento),
+    //    NO el mensaje. Por eso el mensaje se genera primero y el razonamiento al final. ──
     mensaje: {
       type: 'string',
-      description: 'El mensaje natural para el lead. Atiende TODAS sus preguntas. Tono humano peruano. SOLO datos del factSheet.'
-    },
-    slots_detectados: {
-      type: 'object',
-      description: 'Datos que el lead reveló EXPLÍCITAMENTE en la conversación. Regla de oro: si tienes dudas de a qué slot pertenece algo, NO lo pongas. Solo incluye un slot si el lead lo dijo CLARAMENTE y encaja en su definición exacta. Deja fuera (no incluyas la clave) cualquier slot que el lead no haya dado.',
-      properties: {
-        nombre: { type: 'string', description: 'El nombre propio del lead. Ej: "Joan", "María". NO un saludo ni una empresa.' },
-        producto: { type: 'string', description: 'El PRODUCTO físico que el lead exporta o quiere exportar. Ej: "palta", "café", "textiles", "teléfonos". NUNCA pongas aquí su situación de empresa ("con RUC"), su experiencia, ni nada que no sea un producto concreto. Si el lead NO nombró un producto, OMITE esta clave por completo (no la incluyas en el objeto). JAMÁS escribas explicaciones como valor (mal: "vacío, no nombró producto"); si no hay producto, la clave simplemente no aparece.' },
-        empresa: { type: 'string', description: 'La situación de empresa del lead. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC".' },
-        experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
-        pais_destino: { type: 'string', description: 'País al que quiere exportar. Ej: "Estados Unidos", "España".' },
-        fecha_hora: { type: 'string', description: 'Fecha/hora COMPLETA que el lead aceptó para la llamada — SIEMPRE con el día Y la hora juntos. Ej: "mañana 11am", "hoy 4pm", "el viernes 3pm". Si en un turno previo ya se acordó un día (ej "mañana") y el lead ahora solo dice una hora nueva (ej "11am"), combínalos manteniendo el día: "mañana 11am". NUNCA descartes el día ya acordado ni lo cambies a "hoy" por tu cuenta.' }
-      }
+      description: 'El mensaje natural para el lead. Una pregunta a la vez. Tono humano peruano, CORTO (2-4 líneas de WhatsApp). SOLO datos del factSheet. NUNCA inventes precio, nombre del programa, módulos ni fechas.'
     },
     momento_actual: {
       type: 'string',
@@ -111,9 +98,28 @@ const BRAIN_RESPONSE_SCHEMA = {
       type: 'string',
       description: 'Qué tan caliente está el lead ahora.',
       enum: ['cold', 'warm', 'hot']
+    },
+    slots_detectados: {
+      type: 'object',
+      description: 'Datos que el lead reveló EXPLÍCITAMENTE en la conversación. Regla de oro: si tienes dudas de a qué slot pertenece algo, NO lo pongas. Solo incluye un slot si el lead lo dijo CLARAMENTE y encaja en su definición exacta. Deja fuera (no incluyas la clave) cualquier slot que el lead no haya dado.',
+      properties: {
+        nombre: { type: 'string', description: 'El nombre propio del lead. Ej: "Joan", "María". NO un saludo ni una empresa.' },
+        producto: { type: 'string', description: 'El PRODUCTO físico que el lead exporta o quiere exportar. Ej: "palta", "café", "textiles", "teléfonos". NUNCA pongas aquí su situación de empresa ("con RUC"), su experiencia, ni nada que no sea un producto concreto. Si el lead NO nombró un producto, OMITE esta clave por completo (no la incluyas en el objeto). JAMÁS escribas explicaciones como valor (mal: "vacío, no nombró producto"); si no hay producto, la clave simplemente no aparece.' },
+        empresa: { type: 'string', description: 'La situación de empresa del lead. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC".' },
+        experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
+        pais_destino: { type: 'string', description: 'País al que quiere exportar. Ej: "Estados Unidos", "España".' },
+        fecha_hora: { type: 'string', description: 'Fecha/hora COMPLETA que el lead aceptó para la llamada — SIEMPRE con el día Y la hora juntos. Ej: "mañana 11am", "hoy 4pm", "el viernes 3pm". Si en un turno previo ya se acordó un día (ej "mañana") y el lead ahora solo dice una hora nueva (ej "11am"), combínalos manteniendo el día: "mañana 11am". NUNCA descartes el día ya acordado ni lo cambies a "hoy" por tu cuenta.' }
+      }
+    },
+    // ── razonamiento VA AL FINAL (FIX #11): es interno, NO se envía al lead. Si el
+    //    JSON se corta por longitud, se corta AQUÍ — y como el mensaje ya está completo
+    //    arriba, el lead igual recibe su respuesta. ──
+    razonamiento: {
+      type: 'string',
+      description: 'MÁXIMO 1 frase corta (menos de 15 palabras). Solo: en qué momento estás y qué haces. NO te extiendas. Ej: "M2, pregunto experiencia." Para auditoría interna, NO se envía al lead.'
     }
   },
-  required: ['razonamiento', 'mensaje', 'stage_sugerido', 'debe_escalar_humano', 'temperatura_lead']
+  required: ['mensaje', 'stage_sugerido', 'debe_escalar_humano', 'temperatura_lead']
 }
 
 // ════════════════════════════════════════════════════════
@@ -144,11 +150,16 @@ export async function pensarYResponder({
   const userPrompt = construirUserPrompt({ mensajeActual, historial, estadoLead })
 
   try {
-    // Reintento automático: si Gemini falla por error transitorio (timeout, rate
-    // limit), reintentamos 1 vez tras una pausa. Esto evita crashes como C035.
-    let result = null
+    // ── FIX #11: reintento robusto. Antes solo reintentaba si Gemini fallaba la
+    //    LLAMADA (timeout/rate-limit), pero NO si devolvía JSON roto. Ahora un solo
+    //    loop maneja ambos: si la llamada falla O si el JSON no parsea, reintenta. ──
+    let parsed = null
     let lastErr = null
-    for (let intento = 0; intento < 2; intento++) {
+    let lastRawText = null
+    let lastResult = null
+
+    for (let intento = 0; intento < 3; intento++) {
+      let result = null
       try {
         result = await callGemini({
           model: BRAIN_MODEL,
@@ -159,38 +170,58 @@ export async function pensarYResponder({
           responseSchema: BRAIN_RESPONSE_SCHEMA,
           tenantId: estadoLead?.tenantId || 'peru_exporta'
         })
-        if (result?.text) break  // éxito
       } catch (callErr) {
         lastErr = callErr
-        if (intento === 0) await new Promise(r => setTimeout(r, 1500))  // pausa antes de reintentar
+        if (intento < 2) await new Promise(r => setTimeout(r, 1200))
+        continue  // reintenta la llamada
       }
-    }
 
-    if (!result?.text) {
-      return buildError('empty_brain_response', startTime, { last_error: lastErr?.message || 'sin texto tras reintento' })
-    }
+      if (!result?.text) {
+        lastErr = new Error('sin texto en respuesta')
+        if (intento < 2) await new Promise(r => setTimeout(r, 1200))
+        continue
+      }
 
-    let parsed
-    try {
-      // Gemini a veces envuelve el JSON en ```json ... ``` — lo limpiamos
+      lastRawText = result.text
+      lastResult = result  // para el audit del éxito
+
+      // Intento de parseo normal
       const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-      parsed = JSON.parse(limpio)
-    } catch (e) {
-      // Rescate: intentar extraer el bloque {...} si vino con basura alrededor
-      const match = result.text.match(/\{[\s\S]*\}/)
-      if (match) {
-        try { parsed = JSON.parse(match[0]) } catch (_) { /* cae al error */ }
+      try {
+        parsed = JSON.parse(limpio)
+        break  // ✅ parseó bien, salimos del loop
+      } catch (e) {
+        // Rescate 1: extraer el bloque {...} completo si vino con basura alrededor
+        const match = result.text.match(/\{[\s\S]*\}/)
+        if (match) {
+          try { parsed = JSON.parse(match[0]); break } catch (_) { /* sigue */ }
+        }
+        // El JSON vino roto (cortado). Reintentamos (intento siguiente).
+        lastErr = e
+        console.warn(`[AgentBrain] JSON roto en intento ${intento + 1}, reintentando... (${e.message})`)
+        if (intento < 2) await new Promise(r => setTimeout(r, 1200))
       }
-      if (!parsed) {
+    }
+
+    // Si tras 3 intentos no hay JSON válido, rescate final: extraer SOLO el mensaje
+    // del texto crudo (el mensaje va PRIMERO en el JSON, así que aunque esté cortado,
+    // el campo "mensaje" suele estar completo). Mejor un mensaje sin metadatos que un hueco mudo.
+    if (!parsed) {
+      const rescatado = rescatarMensaje(lastRawText)
+      if (rescatado) {
+        console.warn('[AgentBrain] Usando mensaje rescatado de JSON incompleto')
+        parsed = { mensaje: rescatado, stage_sugerido: estadoLead?.stage || 'discovery', debe_escalar_humano: false, temperatura_lead: 'warm' }
+      } else {
         return buildError('brain_json_parse_failed', startTime, {
-          parse_error: e.message,
-          raw_length: result.text?.length || 0,
-          raw_preview: result.text?.slice(0, 300),
-          raw_tail: result.text?.slice(-150),
-          finish_reason: result.response?.candidates?.[0]?.finishReason || 'unknown'
+          parse_error: lastErr?.message || 'desconocido',
+          raw_length: lastRawText?.length || 0,
+          raw_preview: lastRawText?.slice(0, 300),
+          raw_tail: lastRawText?.slice(-150)
         })
       }
     }
+
+    const result = lastResult
 
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
     // Aquí está la red de seguridad: validamos lo que el cerebro produjo
@@ -209,8 +240,8 @@ export async function pensarYResponder({
       guardrail_flags: validado.flags,
       audit: {
         model: BRAIN_MODEL,
-        tokens: result.usage?.totalTokenCount || 0,
-        cost_usd: result.usage ? calculateCost(BRAIN_MODEL, result.usage) : null,
+        tokens: result?.usage?.totalTokenCount || 0,
+        cost_usd: result?.usage ? calculateCost(BRAIN_MODEL, result.usage) : null,
         latency_ms: Date.now() - startTime
       }
     }
@@ -436,6 +467,45 @@ function validarSalida(parsed, fs) {
 }
 
 // ════════════════════════════════════════════════════════
+// HELPER — rescatarMensaje (FIX #11)
+// Último recurso cuando el JSON vino roto/cortado tras 3 intentos.
+// Como en el schema el campo "mensaje" va PRIMERO, aunque el JSON se corte,
+// el "mensaje" suele estar completo. Lo extraemos con regex tolerante para
+// entregarle ALGO al lead en vez de un hueco mudo. Devuelve null si no hay nada usable.
+// ════════════════════════════════════════════════════════
+function rescatarMensaje(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null
+  // Limpia fences de markdown por si acaso
+  const limpio = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '')
+  // Busca el valor del campo "mensaje": "....."
+  // Captura hasta la comilla de cierre que NO esté escapada, o hasta el final si está cortado.
+  const m = limpio.match(/"mensaje"\s*:\s*"((?:[^"\\]|\\.)*)"/)
+  if (m && m[1]) {
+    // Des-escapa secuencias JSON básicas
+    const texto = m[1]
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim()
+    if (texto.length >= 3) return texto
+  }
+  // Si el mensaje quedó cortado SIN comilla de cierre (JSON truncado a la mitad del mensaje),
+  // intentamos capturar desde "mensaje":" hasta donde llegue, limpiando cola rota.
+  const abierto = limpio.match(/"mensaje"\s*:\s*"((?:[^"\\]|\\.)*)$/)
+  if (abierto && abierto[1]) {
+    let texto = abierto[1]
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .trim()
+    // Corta cualquier fragmento de clave JSON que se haya colado al final
+    texto = texto.replace(/[",}\s]*"?(razonamiento|momento_actual|stage_sugerido|slots_detectados|debe_escalar_humano|temperatura_lead).*$/s, '').trim()
+    if (texto.length >= 10) return texto  // umbral más alto para texto cortado (evita basura)
+  }
+  return null
+}
+
+// ════════════════════════════════════════════════════════
 // HELPER — error
 // ════════════════════════════════════════════════════════
 function buildError(code, startTime, metadata = {}) {
@@ -472,4 +542,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v3_sprint3_seis_momentos_consultivo'
+export const AGENT_BRAIN_VERSION = 'v4_sprint3_parse_robusto_fix11'
