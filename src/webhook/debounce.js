@@ -27,7 +27,7 @@
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
-const DEBOUNCE_WINDOW_MS = 9000               // 9 segundos (igual que v19)
+const DEBOUNCE_WINDOW_MS = 11000              // FIX BUG A (jun 2026): 9s→11s. Margen extra para agrupar mensajes de leads que escriben lento (varios mensajes cortos seguidos). Reduce los disparos paralelos del pipeline.
 const MAX_BUFFER_PER_LEAD = 20                // Máximo mensajes acumulados
 const MAX_ACTIVE_LEADS = 500                  // Cap defensivo
 
@@ -259,4 +259,4 @@ export function clearAllDebounces() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const DEBOUNCE_VERSION = 'v1_day7_9s_window'
+export const DEBOUNCE_VERSION = 'v2_day9_11s_window_bugA'
