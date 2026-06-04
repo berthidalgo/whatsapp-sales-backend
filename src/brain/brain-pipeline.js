@@ -109,7 +109,7 @@ async function construirHistorial(prisma, leadId, limite = 12) {
  * @param {string} args.vendorNombre - nombre del agente/vendedor (la identidad del bot)
  * @returns {Promise<object>} { ok, botResponse, brainResult, stateAfter }
  */
-export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = 'peru_exporta', vendorNombre = 'Daniel' }) {
+export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = 'peru_exporta', vendorNombre = 'Jhon' }) {
   const startTime = Date.now()
 
   try {
