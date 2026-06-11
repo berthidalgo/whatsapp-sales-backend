@@ -163,6 +163,15 @@ const PRICING_PER_1M_TOKENS = {
   'gemini-2.5-pro': {
     input:  1.25,
     output: 10.00
+  },
+
+  // Generación 3.5 — el cerebro migra aquí (Sprint A.2, decisión Joan 2026-06-11).
+  // GA desde Google I/O (19-may-2026), sin riesgo de jubilación de preview.
+  // Fuente: ai.google.dev/gemini-api/docs/pricing, verificado 2026-06-11.
+  // Costo ~5x vs 2.5-flash → mitigación futura: context caching ($0.15/M cacheado).
+  'gemini-3.5-flash': {
+    input:  1.50,
+    output: 9.00
   }
 }
 

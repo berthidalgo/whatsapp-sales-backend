@@ -62,7 +62,11 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
-const BRAIN_MODEL = 'gemini-2.5-flash'  // El cerebro necesita razonar → Flash (no Lite)
+// El cerebro necesita razonar → tier Flash (no Lite). Configurable por env var
+// BRAIN_MODEL en Render (Sprint A.2, primer ladrillo del multi-modelo D.1):
+// cambiar de modelo o hacer rollback = editar la env var, sin tocar código.
+// Default seguro: gemini-2.5-flash (la línea base validada).
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'gemini-2.5-flash'
 const TEMPERATURE = 0.6                  // Equilibrio: natural pero no descontrolado
 const MAX_OUTPUT_TOKENS = 4000   // FIX #11 (jun 2026): 2000 era insuficiente. El razonamiento + un M4 grande (hasta 1169 chars vistos en prod) cortaban el JSON a la mitad ("Unterminated string"). 4000 da margen de sobra para que el JSON siempre cierre.
 
