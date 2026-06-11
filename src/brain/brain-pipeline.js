@@ -42,7 +42,7 @@
 //   espera el visto bueno humano.
 // ════════════════════════════════════════════════════════════════════════
 
-import { pensarYResponder, summarizeBrainResult } from './agent-brain.js'
+import { pensarYResponder, summarizeBrainResult, AGENT_BRAIN_VERSION } from './agent-brain.js'
 import prisma from '../db/prisma.js'
 import { STAGES, MODES } from '../state/stage-definitions.js'
 
@@ -83,6 +83,22 @@ function stageRank(stage) {
  * Arma el historial de la conversación para el cerebro.
  * Jala los últimos N mensajes del lead desde la BD, ordenados cronológicamente.
  */
+/**
+ * Persiste un mensaje del LEAD en la BD (FIX jun 2026 — LA MEMORIA del cerebro).
+ * Hasta este fix, NADIE escribía en `messages` en el flujo del webhook: el único
+ * create vivía en el endpoint manual del CRM. Resultado: construirHistorial()
+ * devolvía SIEMPRE vacío y el cerebro veía "(esta es la primera interacción)"
+ * en cada turno — operaba solo con stage+slots, amnésico a la conversación.
+ * Un fallo aquí NO debe tumbar el turno: se loguea y se sigue.
+ */
+async function persistirMensajeLead(leadId, texto) {
+  try {
+    await prisma.message.create({ data: { leadId, origen: 'LEAD', texto } })
+  } catch (err) {
+    console.error(`[BrainPipeline] No se pudo persistir mensaje LEAD ${leadId}:`, err.message)
+  }
+}
+
 async function construirHistorial(prisma, leadId, limite = 12) {
   const mensajes = await prisma.message.findMany({
     where: { leadId },
@@ -122,6 +138,33 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       })
     ])
 
+    // ─── 1b. COMPUERTA DE MODO (FIX jun 2026) ───
+    // Si un humano tiene la conversación (HUMAN_ACTIVE, por handoff fromMe o por
+    // escalamiento del propio cerebro) o el lead está PAUSED, el cerebro NO
+    // interviene. Sin esta compuerta, el bot respondía igual al siguiente mensaje
+    // del lead e interrumpía al vendedor humano (el handoff solo cancelaba el
+    // buffer del instante, no los turnos siguientes). El mensaje del lead SÍ se
+    // persiste: la conversación no pierde memoria mientras el humano atiende.
+    const modoActual = leadState?.currentMode || MODES.AUTO_CONSULTIVO
+    if (modoActual === MODES.HUMAN_ACTIVE || modoActual === MODES.PAUSED) {
+      await persistirMensajeLead(leadId, mensajeActual)
+      console.log(`[BrainPipeline] 🔇 Lead ${leadId} en modo ${modoActual} → cerebro en silencio (handoff)`)
+      return {
+        ok: true,
+        botResponse: {
+          text: null,
+          bot_responded: false,
+          generation: {
+            method: `agent_brain_${AGENT_BRAIN_VERSION}`,
+            reason: `modo_${modoActual.toLowerCase()}`
+          }
+        },
+        brainResult: null,
+        stateAfter: null,
+        _pipeline_ms: Date.now() - startTime
+      }
+    }
+
     // Cargar el config de la campaña (el factSheet + comportamiento/agentGoal)
     let campaignConfig = null
     if (lead?.campaignId) {
@@ -135,12 +178,22 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // ─── 2. Armar el historial desde la BD ───
     const historial = await construirHistorial(prisma, leadId)
 
+    // ─── 2b. Persistir el mensaje del LEAD ───
+    // DESPUÉS de armar el historial (el mensaje actual va aparte en el prompt
+    // como "ÚLTIMO MENSAJE"; si entrara también al historial, se duplicaría).
+    // Se persiste ANTES de llamar al cerebro: si el cerebro falla, el mensaje
+    // del lead igual quedó registrado (sí lo recibimos).
+    await persistirMensajeLead(leadId, mensajeActual)
+
     // ─── 3. Armar el estadoLead que el cerebro espera ───
     const estadoLead = {
       stage: leadState?.currentStage || STAGES.FIRST_CONTACT,
       slots: leadState?.slotsFilled || {},
       tenantId,
-      vendorNombre
+      vendorNombre,
+      // Etiqueta del agente en el historial del prompt (nombreCorto). El nombre
+      // real lo manda config.agente.nombre (Jhon); sin esto salía "AGENTE".
+      agenteNombre: campaignConfig?.agente?.nombre || vendorNombre
     }
 
     // ─── 4. Llamar al CEREBRO ───
@@ -222,9 +275,17 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       ok: true,
       botResponse: {
         text: brainResult.mensaje,
-        bot_responded: !brainResult.debe_escalar_humano, // si escala a humano, el bot NO responde (espera al humano)
+        // FIX jun 2026: al escalar, el mensaje cálido del cerebro TAMBIÉN se envía
+        // (regla 8 del prompt: "respóndele algo cálido para que no quede mudo").
+        // Antes bot_responded=false silenciaba al lead vulnerable/HOT justo cuando
+        // más importaba. El silencio de los turnos SIGUIENTES lo garantiza la
+        // compuerta de modo (el upsert de abajo deja el lead en HUMAN_ACTIVE).
+        bot_responded: true,
         generation: {
-          method: 'agent_brain_v1',
+          // FIX jun 2026: la marca era 'agent_brain_v1' hardcodeada — los logs
+          // decían v1 con el v4 vivo (falsa alarma del protocolo de pruebas).
+          // Ahora se deriva de AGENT_BRAIN_VERSION: una sola fuente de verdad.
+          method: `agent_brain_${AGENT_BRAIN_VERSION}`,
           reason: brainResult.debe_escalar_humano ? 'escalado_a_humano' : 'brain_response'
         },
         audit: brainResult.audit
@@ -245,4 +306,4 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
   }
 }
 
-export const BRAIN_PIPELINE_VERSION = 'v2_sprint3_modes_stageorder_fix'
+export const BRAIN_PIPELINE_VERSION = 'v3_sprintA_memoria_modegate_escalamiento'

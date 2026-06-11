@@ -24,6 +24,7 @@
 // API:
 //   handleWebhook(req, reply, prisma) → Fastify handler
 
+import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
 import { enqueueMessage } from './debounce.js'
@@ -168,7 +169,7 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
         telefono,
         mensajeActual: combinedText,
         tenantId: leadInfo.tenantId || 'peru_exporta',
-        vendorNombre: leadInfo.vendorNombre || 'Daniel'
+        vendorNombre: leadInfo.vendorNombre || 'Jhon'  // fallback alineado al config (el nombre real lo manda config.agente.nombre)
       })
       console.log(`[Pipeline] Cerebro ${Date.now() - brainStart}ms`)
 
@@ -249,6 +250,15 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
 
     if (sendResult.ok) {
       console.log(`[Pipeline] ✅ Sent to ${telefono} (${botResponse.text.length} chars, ${sendMs}ms)`)
+      // FIX jun 2026 — persistir la respuesta del BOT (la otra mitad de la memoria:
+      // construirHistorial lee de `messages` y aquí nadie escribía). Solo si el
+      // envío fue OK: un mensaje NO entregado no debe entrar al historial.
+      // Un fallo del insert no tumba el pipeline: se loguea y se sigue.
+      try {
+        await prisma.message.create({ data: { leadId, origen: 'BOT', texto: botResponse.text } })
+      } catch (err) {
+        console.error(`[Pipeline] No se pudo persistir mensaje BOT lead ${leadId}:`, err.message)
+      }
     } else {
       console.error(`[Pipeline] ❌ Send failed:`, sendResult.error)
     }
@@ -289,4 +299,4 @@ export function getActivePipelines() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const HANDLER_VERSION = 'v22_day9_reenqueue_lock_bugA'
+export const HANDLER_VERSION = 'v23_sprintA_persist_bot_msg'
