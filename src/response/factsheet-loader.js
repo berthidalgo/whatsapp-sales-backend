@@ -126,7 +126,13 @@ export function flattenFactSheet(config) {
   const inicioTexto = fs.fechasReales?.inicio || ''
 
   // ─── Bloque consolidado (lo que el prompt pega como "ficha comercial") ───
+  // FIX Sesión 5 (jun 2026): el NOMBRE del programa nunca entraba al bloque →
+  // el modelo lo inventaba en cada M4 ("Ruta Exportadora", "Exporta con Éxito").
+  // Va PRIMERO, y solo si es un nombre real (no el genérico de fallback).
   const lineas = []
+  if (nombreProducto && nombreProducto !== SAFE_FACTSHEET_VARS.nombreProducto) {
+    lineas.push(`Nombre del programa: ${nombreProducto}`)
+  }
   if (precioTexto) lineas.push(`Precio: ${precioTexto}`)
   if (incluyeTexto) lineas.push(`Incluye: ${incluyeTexto}`)
   if (inicioTexto) lineas.push(`Fecha de inicio: ${inicioTexto}`)
@@ -155,4 +161,4 @@ export function flattenFactSheet(config) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const FACTSHEET_LOADER_VERSION = 'v1_sprint2_oleada2'
+export const FACTSHEET_LOADER_VERSION = 'v2_sprintA_nombre_en_bloque'
