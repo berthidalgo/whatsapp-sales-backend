@@ -105,16 +105,26 @@ export async function callGemini({
   contents,
   responseSchema = null,
   temperature = 0.3,
-  maxOutputTokens = 2048
+  maxOutputTokens = 2048,
+  thinkingBudget = null
 }) {
   const startTime = Date.now()
   const client = await getGeminiClient(tenantId)
-  
+
   const config = {
     temperature,
     maxOutputTokens
   }
-  
+
+  // FIX jun 2026 (bug Sesión 4): los Gemini "piensan" antes de responder y el
+  // pensamiento consume del MISMO presupuesto de maxOutputTokens. Gemini 3.5
+  // piensa mucho más que 2.5: en turnos pesados (M4) quemaba los 4000 tokens
+  // pensando y devolvía texto VACÍO ("sin texto en respuesta" x3 → hueco mudo).
+  // thinkingBudget acota el pensamiento y garantiza espacio para la respuesta.
+  if (thinkingBudget !== null) {
+    config.thinkingConfig = { thinkingBudget }
+  }
+
   if (systemInstruction) {
     config.systemInstruction = systemInstruction
   }

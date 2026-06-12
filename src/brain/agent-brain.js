@@ -68,7 +68,8 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // Default seguro: gemini-2.5-flash (la línea base validada).
 const BRAIN_MODEL = process.env.BRAIN_MODEL || 'gemini-2.5-flash'
 const TEMPERATURE = 0.6                  // Equilibrio: natural pero no descontrolado
-const MAX_OUTPUT_TOKENS = 4000   // FIX #11 (jun 2026): 2000 era insuficiente. El razonamiento + un M4 grande (hasta 1169 chars vistos en prod) cortaban el JSON a la mitad ("Unterminated string"). 4000 da margen de sobra para que el JSON siempre cierre.
+const MAX_OUTPUT_TOKENS = 8000   // FIX #11 (jun 2026): 2000 era insuficiente (JSON cortado). FIX Sesión 4: 4000→8000 porque el thinking de Gemini consume del MISMO presupuesto — en 3.5 los turnos pesados (M4) quemaban todo pensando y devolvían texto vacío.
+const THINKING_BUDGET = 1024     // FIX Sesión 4 (jun 2026): acota el pensamiento del modelo. El cerebro ya razona explícito en el campo "razonamiento" del JSON; no necesita pensar 4000 tokens internos. Garantiza espacio para la respuesta + baja latencia (59s → normal) y costo.
 
 // ════════════════════════════════════════════════════════
 // SCHEMA de salida estructurada (Gemini lo respeta con responseSchema)
@@ -171,6 +172,7 @@ export async function pensarYResponder({
           contents: userPrompt,
           temperature: TEMPERATURE,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
+          thinkingBudget: THINKING_BUDGET,
           responseSchema: BRAIN_RESPONSE_SCHEMA,
           tenantId: estadoLead?.tenantId || 'peru_exporta'
         })
@@ -181,7 +183,13 @@ export async function pensarYResponder({
       }
 
       if (!result?.text) {
-        lastErr = new Error('sin texto en respuesta')
+        // Telemetría del "por qué" (FIX Sesión 4): sin esto, un texto vacío era
+        // indescifrable. finishReason=MAX_TOKENS = el thinking se comió el presupuesto.
+        const candidato = result?.response?.candidates?.[0]
+        const fr = candidato?.finishReason || 'desconocido'
+        const uso = result?.usage || {}
+        console.warn(`[AgentBrain] respuesta SIN texto | finishReason=${fr} | thoughts=${uso.thoughtsTokenCount || 0} | out=${uso.candidatesTokenCount || 0} | intento=${intento + 1}`)
+        lastErr = new Error(`sin texto en respuesta (finishReason=${fr})`)
         if (intento < 2) await new Promise(r => setTimeout(r, 1200))
         continue
       }
@@ -546,4 +554,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v4_sprint3_parse_robusto_fix11'
+export const AGENT_BRAIN_VERSION = 'v4_1_sprintA_thinking_budget'
