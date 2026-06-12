@@ -1,0 +1,14 @@
+# Dependencias
+node_modules/
+
+# Entorno y secretos (NUNCA al repo)
+.env
+.env.*
+
+# Documentación interna de trabajo
+contexto/
+CLAUDE.md
+
+# Temporales y logs
+*.log
+temp-*

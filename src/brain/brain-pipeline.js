@@ -71,7 +71,11 @@ const STAGE_ORDER = [
 // Para MPX: call_confirmed = "el lead confirmó la llamada DE VERDAD" → lo marca Joan.
 // ─────────────────────────────────────────────────────────────────────────
 const STAGES_SOLO_HUMANO = new Set([
-  STAGES.CALL_CONFIRMED
+  STAGES.CALL_CONFIRMED,
+  // Sprint A.2 (inflación de stage, S8): el cerebro marcaba post_close solo porque
+  // el lead DIJO "ya pagué" — sin comprobante validado. El cierre real lo valida
+  // el humano (mismo principio Camino 2 que call_confirmed).
+  STAGES.POST_CLOSE
 ])
 
 function stageRank(stage) {
@@ -270,6 +274,20 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       }
     })
 
+    // ─── 7b. Sincronizar lead.nombreDetectado con el slot nombre (Sprint A.2) ───
+    // Antes leads.nombreDetectado se quedaba con el pushName de WhatsApp ("JH")
+    // mientras el cerebro ya sabía el nombre real ("Jorge") — el CRM mostraba el
+    // dato viejo. El slot del cerebro (dicho por el lead) manda sobre el pushName.
+    // Un fallo aquí no tumba el turno: es dato de vitrina, no de flujo.
+    const nombreSlot = slotsFusionados.nombre
+    if (nombreSlot && nombreSlot !== lead?.nombreDetectado) {
+      try {
+        await prisma.lead.update({ where: { id: leadId }, data: { nombreDetectado: nombreSlot } })
+      } catch (err) {
+        console.error(`[BrainPipeline] No se pudo sincronizar nombreDetectado del lead ${leadId}:`, err.message)
+      }
+    }
+
     // ─── 8. Devolver con la forma que espera el handler ───
     return {
       ok: true,
@@ -306,4 +324,4 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
   }
 }
 
-export const BRAIN_PIPELINE_VERSION = 'v3_sprintA_memoria_modegate_escalamiento'
+export const BRAIN_PIPELINE_VERSION = 'v4_sprintA2_postclose_gate_nombre_sync'

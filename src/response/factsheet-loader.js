@@ -40,6 +40,10 @@ const SAFE_FACTSHEET_VARS = {
   metodosPagoTexto: '',
   modalidadTexto:   '',
   duracionTexto:    '',
+  temarioTexto:     '',
+  casoExitoTexto:   '',
+  faqsTexto:        '',
+  pildorasTexto:    '',
   // Bloque consolidado listo para pegar en un prompt
   factSheetBloque:  'No tengo la ficha comercial exacta de este programa a la mano.',
   tieneFactSheet:   false
@@ -125,6 +129,19 @@ export function flattenFactSheet(config) {
   const duracionTexto = fs.fechasReales?.duracion || ''
   const inicioTexto = fs.fechasReales?.inicio || ''
 
+  // ─── MOCHILA DEL VENDEDOR (Sprint A.2) ───
+  // Munición opcional contra el disco rayado: si la campaña la trae, el cerebro
+  // tiene QUÉ regalar cuando el lead pide material o esquiva una pregunta
+  // (reciprocidad). Si no existe, no aparece en el bloque y nada cambia.
+  const temarioTexto = typeof fs.temarioResumen === 'string' ? fs.temarioResumen.trim() : ''
+  const casoExitoTexto = typeof fs.casoExito === 'string' ? fs.casoExito.trim() : ''
+  const faqsTexto = Array.isArray(fs.faqs) && fs.faqs.length
+    ? fs.faqs.map(f => typeof f === 'string' ? f : `${f.p || ''} → ${f.r || ''}`).join(' | ')
+    : ''
+  const pildorasTexto = Array.isArray(fs.pildorasValor) && fs.pildorasValor.length
+    ? fs.pildorasValor.join(' | ')
+    : ''
+
   // ─── Bloque consolidado (lo que el prompt pega como "ficha comercial") ───
   // FIX Sesión 5 (jun 2026): el NOMBRE del programa nunca entraba al bloque →
   // el modelo lo inventaba en cada M4 ("Ruta Exportadora", "Exporta con Éxito").
@@ -139,6 +156,10 @@ export function flattenFactSheet(config) {
   if (modalidadTexto) lineas.push(`Modalidad: ${modalidadTexto}`)
   if (duracionTexto) lineas.push(`Duración: ${duracionTexto}`)
   if (metodosPagoTexto) lineas.push(`Métodos de pago: ${metodosPagoTexto}`)
+  if (temarioTexto) lineas.push(`Temario resumido (compártelo si el lead pide el temario/material): ${temarioTexto}`)
+  if (casoExitoTexto) lineas.push(`Caso de éxito real (úsalo si el lead duda o pide pruebas): ${casoExitoTexto}`)
+  if (faqsTexto) lineas.push(`Preguntas frecuentes con su respuesta: ${faqsTexto}`)
+  if (pildorasTexto) lineas.push(`Píldoras de valor (datos útiles para REGALAR uno a la vez cuando aporte): ${pildorasTexto}`)
   const factSheetBloque = lineas.length
     ? lineas.join('\n')
     : SAFE_FACTSHEET_VARS.factSheetBloque
@@ -153,6 +174,10 @@ export function flattenFactSheet(config) {
     modalidadTexto,
     duracionTexto,
     inicioTexto,
+    temarioTexto,
+    casoExitoTexto,
+    faqsTexto,
+    pildorasTexto,
     factSheetBloque,
     tieneFactSheet: true
   }
@@ -161,4 +186,4 @@ export function flattenFactSheet(config) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const FACTSHEET_LOADER_VERSION = 'v2_sprintA_nombre_en_bloque'
+export const FACTSHEET_LOADER_VERSION = 'v3_sprintA2_mochila'

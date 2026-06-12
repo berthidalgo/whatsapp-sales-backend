@@ -40,7 +40,8 @@ import {
   summarizeResolution
 } from './lead-resolver.js'
 import { enqueueMessage, cancelDebounce } from './debounce.js'
-import { MODES } from '../state/stage-definitions.js'
+import { MODES, STAGES } from '../state/stage-definitions.js'
+import { sendToWhatsApp } from './sender.js'
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — routeEvent()
@@ -193,6 +194,7 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
       text,
       messageId: key.id,
       messageType,
+      instanceName,
       processPipelineFn,
       startTime
     })
@@ -208,18 +210,20 @@ async function handleLeadMessage({
   text,
   messageId,
   messageType,
+  instanceName,
   processPipelineFn,
   startTime
 }) {
 
   // ─── Mensaje sin texto procesable (audio/imagen/etc) ───
+  // PARCHE Sprint A.2 (hueco del comprobante, Sesión 8): antes TODO no-texto se
+  // descartaba en silencio — el bot PEDÍA la captura del pago y luego ignoraba al
+  // lead que la mandaba (plata en la mano, abandono total). Ahora imagen y audio
+  // reciben una respuesta determinística (sin pasar por el cerebro), y la imagen
+  // en etapa de pago ESCALA a humano para que valide el comprobante.
+  // OCR/transcripción de verdad = Fase D.
   if (!text || messageType !== 'text') {
-    console.log(`[EventRouter] Non-text message from lead ${leadInfo.leadId}: ${messageType}`)
-    // TODO: transcripción de audio, OCR de imagen
-    return buildResponse('non_text_message_skipped', startTime, {
-      leadId: leadInfo.leadId,
-      messageType
-    })
+    return await manejarNoTextoDelLead({ leadInfo, messageType, instanceName, startTime })
   }
 
   // ─── Verificar si lead está archivado ───
@@ -259,6 +263,110 @@ async function handleLeadMessage({
     bufferSize: debounceResult.bufferSize,
     willProcessIn: debounceResult.willProcessIn
   })
+}
+
+// ════════════════════════════════════════════════════════
+// HANDLER — No-texto del lead (imagen / audio) — Sprint A.2
+// ════════════════════════════════════════════════════════
+// Etapas donde una imagen del lead probablemente es el COMPROBANTE de pago
+// (el bot lo pide en estas etapas; ver "PAGO DECLARADO" en el prompt).
+const STAGES_ESPERANDO_COMPROBANTE = new Set([
+  STAGES.CALL_SCHEDULING,
+  STAGES.CALL_CONFIRMED,
+  STAGES.POST_CLOSE
+])
+
+async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, startTime }) {
+  const leadId = leadInfo.leadId
+  console.log(`[EventRouter] Non-text message from lead ${leadId}: ${messageType}`)
+
+  // Solo imagen y audio merecen respuesta. Stickers, videos, ubicaciones, etc.
+  // se siguen descartando en silencio (responderle a un sticker sería raro).
+  // Lead archivado: mismo trato que en el flujo de texto (skip total).
+  if ((messageType !== 'image' && messageType !== 'audio') || leadInfo.isArchived) {
+    return buildResponse('non_text_message_skipped', startTime, { leadId, messageType })
+  }
+
+  try {
+    // Compuerta de modo: si un humano ya tiene la conversación, el bot NO mete
+    // la cuchara (misma regla que el flujo de texto). El marcador SÍ se persiste.
+    const leadState = await prisma.leadState.findUnique({ where: { leadId } })
+    const modo = leadState?.currentMode || MODES.AUTO_CONSULTIVO
+    const marcador = messageType === 'image' ? '[📷 el lead envió una imagen]' : '[🎙️ el lead envió una nota de voz]'
+
+    // Persistir el marcador como mensaje LEAD: el cerebro y el CRM deben SABER
+    // que el lead mandó algo (antes este evento se perdía para siempre).
+    try {
+      await prisma.message.create({ data: { leadId, origen: 'LEAD', texto: marcador } })
+    } catch (err) {
+      console.error(`[EventRouter] No se pudo persistir marcador no-texto lead ${leadId}:`, err.message)
+    }
+
+    if (modo === MODES.HUMAN_ACTIVE || modo === MODES.PAUSED) {
+      console.log(`[EventRouter] 🔇 No-texto de lead ${leadId} en modo ${modo} → sin auto-respuesta (handoff)`)
+      return buildResponse('non_text_human_active_skipped', startTime, { leadId, messageType })
+    }
+
+    // Decidir la respuesta determinística (NO pasa por el cerebro).
+    // Una imagen es "posible comprobante" SOLO si se cumplen AMBAS:
+    //   a) la etapa es de pago (call_scheduling en adelante), Y
+    //   b) el BOT pidió el comprobante hace poco (sus últimos mensajes lo mencionan).
+    // Sin la condición (b), CUALQUIER imagen en esas etapas (un pantallazo, un meme)
+    // escalaría a HUMAN_ACTIVE — y como no hay auto-resume ni notificación (B.1),
+    // ese falso positivo dejaría al lead MUERTO para el bot. Forense > entusiasmo.
+    const stage = leadState?.currentStage || STAGES.FIRST_CONTACT
+    let esPosibleComprobante = false
+    if (messageType === 'image' && STAGES_ESPERANDO_COMPROBANTE.has(stage)) {
+      const ultimosBot = await prisma.message.findMany({
+        where: { leadId, origen: 'BOT' },
+        orderBy: { createdAt: 'desc' },
+        take: 3,
+        select: { texto: true }
+      })
+      esPosibleComprobante = ultimosBot.some(m => /comprobante|captura|voucher|yape|constancia de pago/i.test(m.texto || ''))
+    }
+
+    let respuesta
+    if (esPosibleComprobante) {
+      respuesta = '¡Recibido! 🙌 Dame un momento para revisarlo y te confirmo, ¿ya? Gracias por la espera 🙏'
+    } else if (messageType === 'image') {
+      respuesta = 'Vi tu imagen 🙌 Para ayudarte mejor por aquí, ¿me cuentas por escrito qué necesitas? 😊'
+    } else {
+      respuesta = 'Disculpa, por aquí solo puedo leer mensajes 😊 ¿Me escribes lo que necesitas?'
+    }
+
+    const sendResult = await sendToWhatsApp({
+      telefono: leadInfo.telefono,
+      text: respuesta,
+      instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
+    })
+
+    if (sendResult.ok) {
+      try {
+        await prisma.message.create({ data: { leadId, origen: 'BOT', texto: respuesta } })
+      } catch (err) {
+        console.error(`[EventRouter] No se pudo persistir respuesta no-texto lead ${leadId}:`, err.message)
+      }
+    }
+
+    // Si era el (posible) comprobante: ESCALAR — un humano debe validar el pago.
+    // El bot ya respondió cálido; los turnos siguientes los silencia la compuerta.
+    if (esPosibleComprobante) {
+      await prisma.leadState.updateMany({
+        where: { leadId },
+        data: { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() }
+      })
+      console.log(`[EventRouter] 🚨 Posible COMPROBANTE de lead ${leadId} (stage=${stage}) → escalado a HUMAN_ACTIVE`)
+      return buildResponse('non_text_comprobante_escalated', startTime, { leadId, stage, sent: sendResult.ok })
+    }
+
+    return buildResponse('non_text_responded', startTime, { leadId, messageType, sent: sendResult.ok })
+
+  } catch (err) {
+    // Un fallo aquí JAMÁS tumba el webhook: degradamos al comportamiento viejo (skip).
+    console.error(`[EventRouter] Error manejando no-texto de lead ${leadId}:`, err.message)
+    return buildResponse('non_text_message_skipped', startTime, { leadId, messageType, error: err.message })
+  }
 }
 
 // ════════════════════════════════════════════════════════
