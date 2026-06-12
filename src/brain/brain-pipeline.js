@@ -227,9 +227,14 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     let stageFinal = stageActual
 
     if (brainResult.debe_escalar_humano) {
-      // Si escala a humano, respetamos lo que diga el cerebro (puede ser cualquier stage)
-      // — salvo que sea un stage de solo-humano (no tendría sentido auto-asignarlo).
-      stageFinal = STAGES_SOLO_HUMANO.has(stageSugerido) ? stageActual : stageSugerido
+      // Si escala a humano, aceptamos el stage del cerebro — salvo que sea un stage
+      // de solo-humano (no tendría sentido auto-asignarlo) O un RETROCESO.
+      // FIX v5.1 (Sesión 2 de confirmación): al escalar tras hostilidad sostenida,
+      // el cerebro sugirió "first_contact" y este camino se lo aceptó — degradó
+      // call_scheduling → first_contact (dato corrupto en el embudo). La escalada
+      // cambia el MODO, no borra el avance del lead.
+      const candidato = STAGES_SOLO_HUMANO.has(stageSugerido) ? stageActual : stageSugerido
+      stageFinal = stageRank(candidato) >= stageRank(stageActual) ? candidato : stageActual
     } else if (STAGES_SOLO_HUMANO.has(stageSugerido) && stageSugerido !== stageActual) {
       // CAMINO 2: el cerebro quiere marcar call_confirmed por su cuenta → NO se lo
       // permitimos. Respondemos normal (con calidez), pero el stage espera validación
@@ -324,4 +329,4 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
   }
 }
 
-export const BRAIN_PIPELINE_VERSION = 'v4_sprintA2_postclose_gate_nombre_sync'
+export const BRAIN_PIPELINE_VERSION = 'v4_1_sprintA2_escalada_sin_retroceso'
