@@ -28,19 +28,38 @@ import { sendToWhatsApp } from './sender.js'
  * @returns {Promise<{ sent: boolean, persisted: boolean }>}
  */
 export async function notificarEscalamiento({
-  leadId, telefono, nombre = null, vendorId = 1,
-  motivo, ultimoMensajeLead = null, respuestaBot = null, stage = null, dataExtra = null
+  leadId, telefono, nombre = null, slots = {}, vendorId = 1,
+  motivo, ultimoMensajeLead = null, respuestaBot = null, stage = null, dataExtra = null,
+  nombrePrograma = 'Mi Primera Exportación'
 }) {
-  const nombreTxt = nombre ? ` (${nombre})` : ''
+  // Formato RICO (recuperado del sistema viejo): perfil del lead + sus palabras +
+  // motivo + data del comprobante si aplica. Solo se muestran las líneas con dato.
+  const DIV = '━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  const nom = nombre || slots.nombre || null
   const lineas = [
-    `🚨 *Lead para atender*${nombreTxt}`,
-    `📱 ${telefono}`,
-    `📌 ${motivo}`
+    DIV,
+    `🟡 *LEAD PARA ATENDER* · ${nombrePrograma}`,
+    DIV,
+    `https://wa.me/${String(telefono).replace(/\D/g, '')}`,
+    DIV,
+    `👤  ${nom || '(nombre por confirmar)'}`,
+    `📦  ${slots.producto || '(producto por confirmar)'}`,
+    `🏢  ${slots.empresa || '(situación por confirmar)'}`,
+    `🌱  ${slots.experiencia || '(experiencia por confirmar)'}`
   ]
-  if (stage) lineas.push(`📊 Etapa: ${stage}`)
-  if (dataExtra?.briefingLinea) lineas.push(dataExtra.briefingLinea)
-  if (ultimoMensajeLead) lineas.push(`💬 Lead: "${String(ultimoMensajeLead).slice(0, 220)}"`)
-  lineas.push('— Hidata 🤖')
+  if (slots.pais_destino) lineas.push(`🌍  ${slots.pais_destino}`)
+  lineas.push(DIV)
+  lineas.push(`📌  ${motivo}`)
+  if (dataExtra?.briefingLinea) lineas.push(`    ${dataExtra.briefingLinea}`)
+  if (slots.fecha_hora) lineas.push(`📅  Cita: ${slots.fecha_hora}`)
+  if (ultimoMensajeLead) {
+    lineas.push(DIV)
+    lineas.push(`💬  Con sus palabras:`)
+    lineas.push(`    "${String(ultimoMensajeLead).slice(0, 220)}"`)
+  }
+  lineas.push(DIV)
+  lineas.push(`⚡  Atiéndelo pronto, no lo dejes enfriar`)
+  lineas.push(DIV)
   const briefing = lineas.join('\n')
 
   // ─── 1. WhatsApp al vendedor ───

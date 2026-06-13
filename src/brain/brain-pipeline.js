@@ -301,11 +301,13 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     if (brainResult.debe_escalar_humano) {
       notificarEscalamiento({
         leadId, telefono, nombre: nombreSlot || lead?.nombreDetectado || null,
+        slots: slotsFusionados,
         vendorId: lead?.vendorId || 1,
         motivo: brainResult.razon_escalamiento || 'El asistente derivó este lead a un humano',
         ultimoMensajeLead: mensajeActual,
         respuestaBot: brainResult.mensaje,
-        stage: stageFinal
+        stage: stageFinal,
+        nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || 'el programa'
       }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
     }
 

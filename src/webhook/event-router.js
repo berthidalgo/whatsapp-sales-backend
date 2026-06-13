@@ -415,6 +415,7 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
         }
         await notificarEscalamiento({
           leadId, telefono: leadInfo.telefono, nombre: nombreLead,
+          slots: leadState?.slotsFilled || {},
           vendorId: leadInfo.vendorId || 1,
           motivo, stage, dataExtra: { briefingLinea }
         })
