@@ -485,6 +485,18 @@ function validarSalida(parsed, fs) {
   const flags = []
   let mensaje = parsed.mensaje || ''
 
+  // ── Guardrail 0: formato WhatsApp (determinístico) ──
+  // El prompt PIDE no usar negrita markdown (**texto**), pero el modelo a veces
+  // insiste (sobre todo al listar el temario). En vez de confiar en que obedezca,
+  // lo limpiamos sí o sí: ** → * (negrita real de WhatsApp) y se quitan los
+  // títulos markdown (#). WhatsApp muestra ** y # literales y eso delata al bot.
+  if (/\*\*|^#{1,6}\s|\n#{1,6}\s/m.test(mensaje)) {
+    mensaje = mensaje
+      .replace(/\*\*+/g, '*')            // **negrita** → *negrita* (WhatsApp bold)
+      .replace(/^#{1,6}\s*/gm, '')       // títulos markdown al inicio de línea → fuera
+    flags.push('formato_markdown_limpiado')
+  }
+
   // ── Guardrail 1: precio fantasma ──
   // Busca cifras tipo S/XXXX o $XXX en el mensaje y verifica contra el factSheet.
   const preciosEnMensaje = mensaje.match(/(?:S\/\.?\s?|\$\s?)\s?[\d,]+/gi) || []
