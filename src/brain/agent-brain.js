@@ -81,6 +81,15 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // cambiar de modelo o hacer rollback = editar la env var, sin tocar código.
 // Default seguro: gemini-2.5-flash (la línea base validada).
 const BRAIN_MODEL = process.env.BRAIN_MODEL || 'gemini-2.5-flash'
+// Perillas por env var (Sprint A.2, multi-modelo D.1) — prender el 3.5 en
+// producción = setear estas 3 en Render, sin tocar código; rollback = borrarlas.
+//   BRAIN_MODEL=gemini-3.5-flash · BRAIN_LOCATION=global · BRAIN_THINKING_LEVEL=low
+// El 3.5 vive SOLO en la location 'global' (las regionales dan 404) y usa
+// thinkingLevel ('low'|'medium'|'high'), NO presupuesto numérico (con budget
+// numérico el 3.5 desvaría y devuelve JSON gigante cortado). Sin estas vars,
+// comportamiento vivo idéntico (2.5-flash, us-central1, thinkingBudget).
+const BRAIN_LOCATION = process.env.BRAIN_LOCATION || null
+const BRAIN_THINKING_LEVEL = process.env.BRAIN_THINKING_LEVEL || null
 const TEMPERATURE = 0.6                  // Equilibrio: natural pero no descontrolado
 const MAX_OUTPUT_TOKENS = 8000   // FIX #11 (jun 2026): 2000 era insuficiente (JSON cortado). FIX Sesión 4: 4000→8000 porque el thinking de Gemini consume del MISMO presupuesto — en 3.5 los turnos pesados (M4) quemaban todo pensando y devolvían texto vacío.
 const THINKING_BUDGET = 1024     // FIX Sesión 4 (jun 2026): acota el pensamiento del modelo. El cerebro ya razona explícito en el campo "razonamiento" del JSON; no necesita pensar 4000 tokens internos. Garantiza espacio para la respuesta + baja latencia (59s → normal) y costo.
@@ -177,7 +186,8 @@ export async function pensarYResponder({
   //   - thinkingBudget (número): control de los 2.x; el banco puede pedir uno más
   //     bajo (ej. 256) como alternativa si thinkingLevel no aplica al SDK.
   // Si llega thinkingLevel, MANDA y el budget se anula. Sin overrides → config viva.
-  const thinkingLevelUsado = overrides?.thinkingLevel || null
+  // Precedencia: override de banco > perilla por env var > default vivo.
+  const thinkingLevelUsado = overrides?.thinkingLevel || BRAIN_THINKING_LEVEL || null
   const thinkingBudgetUsado = thinkingLevelUsado
     ? null
     : (overrides?.thinkingBudget ?? THINKING_BUDGET)
@@ -186,7 +196,7 @@ export async function pensarYResponder({
   // JAMÁS viaja en el request HTTP — el banco solo manda el flag booleano; el
   // servidor la lee del entorno. Con Developer API la location no aplica.
   const apiKeyUsada = overrides?.useDevApi ? (process.env.GEMINI_DEV_API_KEY || null) : null
-  const locationUsada = apiKeyUsada ? null : (overrides?.location || null)
+  const locationUsada = apiKeyUsada ? null : (overrides?.location || BRAIN_LOCATION || null)
 
   // Guard: si el banco pidió Developer API pero no hay key en ENV, fallar CLARO
   // (no caer en silencio a Vertex y dar números engañosos).
