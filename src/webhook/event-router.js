@@ -44,7 +44,7 @@ import { MODES, STAGES } from '../state/stage-definitions.js'
 import { sendToWhatsApp } from './sender.js'
 import { notificarEscalamiento } from './notifications.js'
 import { descargarMediaBase64 } from './media.js'
-import { leerComprobante } from '../lib/vision.js'
+import { leerComprobante, responderAImagen } from '../lib/vision.js'
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — routeEvent()
@@ -220,13 +220,14 @@ async function handleLeadMessage({
   startTime
 }) {
 
-  // ─── Mensaje sin texto procesable (audio/imagen/etc) ───
-  // PARCHE Sprint A.2 (hueco del comprobante, Sesión 8): antes TODO no-texto se
-  // descartaba en silencio — el bot PEDÍA la captura del pago y luego ignoraba al
-  // lead que la mandaba (plata en la mano, abandono total). Ahora imagen y audio
-  // reciben una respuesta determinística, y la imagen en etapa de pago se LEE con
-  // Gemini multimodal (Etapa 2) + ESCALA a humano con la data del comprobante.
-  if (!text || messageType !== 'text') {
+  // ─── Mensaje SIN texto (imagen/audio sin pie de foto) ───
+  // Si hay TEXTO (conversación O pie de foto/caption de una imagen), cae al flujo
+  // normal del cerebro — el caption es el mensaje del lead (lo lee el código, gratis).
+  // Solo lo SIN texto (imagen sin caption, audio) va al handler especial, que:
+  //   - imagen en etapa de pago → la LEE con Gemini (comprobante) + escala
+  //   - otra imagen → la LEE con Gemini y responde natural (producto/troll)
+  //   - audio → redirect cortés (Whisper = Fase D)
+  if (!text) {
     return await manejarNoTextoDelLead({ leadInfo, messageType, instanceName, messageKey, startTime })
   }
 
@@ -334,7 +335,27 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, star
     if (esPosibleComprobante) {
       respuesta = '¡Recibido! 🙌 Dame un momento para revisarlo y te confirmo, ¿ya? Gracias por la espera 🙏'
     } else if (messageType === 'image') {
+      // Imagen NO-comprobante (producto, captura, troll...) en cualquier etapa.
+      // El código puro no puede entender una foto → Gemini la lee y genera la
+      // respuesta natural de Jhon. Fallback al redirect cortés si falla la descarga.
       respuesta = 'Vi tu imagen 🙌 Para ayudarte mejor por aquí, ¿me cuentas por escrito qué necesitas? 😊'
+      try {
+        const media = await descargarMediaBase64({ instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME, messageKey })
+        if (media.ok) {
+          const r = await responderAImagen({
+            base64: media.base64, mimeType: media.mimeType,
+            nombreLead: leadState?.slotsFilled?.nombre || leadInfo.nombreDetectado || null, stage
+          })
+          if (r.ok && r.respuesta) {
+            respuesta = r.respuesta
+            console.log(`[EventRouter] 📷 Imagen leída lead ${leadId} (${r.categoria}): ${r.descripcion}`)
+          }
+        } else {
+          console.warn(`[EventRouter] No se pudo descargar imagen no-comprobante lead ${leadId}: ${media.error}`)
+        }
+      } catch (err) {
+        console.error(`[EventRouter] Error leyendo imagen no-comprobante lead ${leadId}:`, err.message)
+      }
     } else {
       respuesta = 'Disculpa, por aquí solo puedo leer mensajes 😊 ¿Me escribes lo que necesitas?'
     }
@@ -630,6 +651,19 @@ function extractText(message) {
 
   if (message.extendedTextMessage?.text) {
     return message.extendedTextMessage.text.trim()
+  }
+
+  // PIE DE FOTO (caption): si la imagen/video trae texto debajo, ESO es texto y
+  // hay que leerlo (antes se perdía → "exporto esto 👇 [foto]" se trataba como
+  // imagen muda). Lo lee el código directo, sin IA.
+  if (message.imageMessage?.caption) {
+    return message.imageMessage.caption.trim()
+  }
+  if (message.videoMessage?.caption) {
+    return message.videoMessage.caption.trim()
+  }
+  if (message.documentMessage?.caption) {
+    return message.documentMessage.caption.trim()
   }
 
   return ''

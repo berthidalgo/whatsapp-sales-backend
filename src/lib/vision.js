@@ -99,3 +99,69 @@ export async function leerComprobante({ base64, mimeType = 'image/jpeg' }) {
     return { ok: false, esComprobante: false, resumen: '(error al procesar la imagen)', error: err.message }
   }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// IMAGEN GENERAL (no-comprobante) — el lead manda una foto cualquiera en
+// cualquier etapa: su producto, una captura, un meme, lo que sea. El código puro
+// no puede entender píxeles → Gemini la mira, la clasifica y genera la respuesta
+// natural de Jhon (reconduce a calificar). Una sola llamada hace todo.
+// ════════════════════════════════════════════════════════════════════════
+const IMAGEN_SCHEMA = {
+  type: 'object',
+  properties: {
+    categoria: {
+      type: 'string',
+      enum: ['producto_exportable', 'documento', 'captura_pantalla', 'persona', 'meme_troll', 'otro'],
+      description: 'Qué es la imagen. "producto_exportable" si muestra un producto que el lead podría exportar (palta, café, textil, artesanía, etc.).'
+    },
+    descripcion: { type: 'string', description: 'Descripción factual breve de la imagen, para registro interno. Ej: "foto de paltas en una caja". NO inventes.' },
+    respuesta: { type: 'string', description: 'La respuesta de Jhon al lead, en WhatsApp peruano cálido, CORTA (1-3 líneas). Si es su producto, reacciona con entusiasmo genuino y reconduce a conocerlo (¿ya exporta? ¿qué producto?). Si es algo no relacionado o troll, reconduce con cordialidad al tema de exportar. NO uses ** (negrita markdown). NO inventes datos del programa.' }
+  },
+  required: ['categoria', 'descripcion', 'respuesta']
+}
+
+/**
+ * Lee una imagen NO-comprobante y genera la respuesta natural de Jhon.
+ * @returns {Promise<{ ok, categoria, descripcion, respuesta, error? }>}
+ */
+export async function responderAImagen({ base64, mimeType = 'image/jpeg', nombreLead = null, stage = null }) {
+  if (!base64) return { ok: false, error: 'base64_vacio' }
+
+  const nombreTxt = nombreLead ? ` El lead se llama ${nombreLead}.` : ''
+  const systemInstruction = `Eres Jhon, asesor humano de Perú Exporta TV (cursos de exportación para peruanos). Un lead te mandó una IMAGEN por WhatsApp (ya verificamos que NO es un comprobante de pago).${nombreTxt} Tu trabajo: mírala, clasifícala y responde como Jhon — cálido, humano, peruano, mensajes cortos. Si es su producto (palta, café, textil, artesanía...), reacciona con entusiasmo GENUINO y reconduce a conocerlo para exportar. Si es una captura, un meme o algo no relacionado, reconduce con cordialidad al tema de exportar, sin sonar robótico. NUNCA inventes datos del programa (precio, fechas) — eso va en su momento. NUNCA uses negrita markdown (**).`
+
+  const contents = [{
+    role: 'user',
+    parts: [
+      { text: 'Mira esta imagen que mandó el lead. Clasifícala y responde como Jhon. Devuelve el JSON.' },
+      { inlineData: { mimeType, data: base64 } }
+    ]
+  }]
+
+  try {
+    const result = await callGemini({
+      model: process.env.BRAIN_MODEL || 'gemini-2.5-flash',
+      location: process.env.BRAIN_LOCATION || null,
+      thinkingLevel: process.env.BRAIN_THINKING_LEVEL || null,
+      systemInstruction,
+      contents,
+      temperature: 0.6,
+      maxOutputTokens: 1200,
+      responseSchema: IMAGEN_SCHEMA,
+      tenantId: 'peru_exporta'
+    })
+    if (!result?.text) return { ok: false, error: 'sin_texto' }
+    let parsed
+    const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+    try { parsed = JSON.parse(limpio) } catch (e) {
+      const m = limpio.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]) } catch (_) {} }
+    }
+    if (!parsed?.respuesta) return { ok: false, error: 'json_invalido' }
+    // Guardrail de formato (mismo criterio que el cerebro): ** → * y sin #
+    const respuesta = String(parsed.respuesta).replace(/\*\*+/g, '*').replace(/^#{1,6}\s*/gm, '')
+    return { ok: true, categoria: parsed.categoria || 'otro', descripcion: parsed.descripcion || '', respuesta }
+  } catch (err) {
+    console.error('[Vision] Error respondiendo a imagen:', err.message)
+    return { ok: false, error: err.message }
+  }
+}
