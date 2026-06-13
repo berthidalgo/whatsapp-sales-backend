@@ -31,42 +31,48 @@ const DEFAULT_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
 // UNA vez por tenant por proceso y se reusa. El log de auth sale 1 vez, no miles.
 const clientCache = new Map()
 
-async function getGeminiClient(tenantId = 'peru_exporta', locationOverride = null) {
-  // El banco puede pedir otra location (ej: gemini-3.5-flash solo existe en
-  // 'global', no en us-central1). Se cachea por tenant+location para no mezclar
-  // clientes. Sin override, comportamiento vivo idéntico.
-  const cacheKey = locationOverride ? `${tenantId}:${locationOverride}` : tenantId
+async function getGeminiClient(tenantId = 'peru_exporta', opts = {}) {
+  const { location: locationOverride = null, apiKey: apiKeyOverride = null } = opts
+
+  // Llave de cache que distingue las 3 puertas, para no mezclar clientes:
+  //   - Developer API (apiKey): el backend de aistudio/gemini.google.com.
+  //   - Vertex + location override (ej: 'global' para gemini-3.5-flash).
+  //   - Vertex vivo (us-central1).
+  // FIX (peritaje Sprint A.2): antes el cache CHEQUEABA por cacheKey pero GUARDABA
+  // por tenantId → un cliente de banco (global) se cacheaba bajo la llave viva y
+  // contaminaba al bot real. Ahora set y get usan la MISMA cacheKey.
+  const cacheKey = apiKeyOverride ? `${tenantId}:devapi`
+    : locationOverride ? `${tenantId}:${locationOverride}`
+    : tenantId
   const cached = clientCache.get(cacheKey)
   if (cached) return cached
 
-  // Intenta leer configuración dedicada del tenant (solo en el primer build por tenant)
-  let projectId = DEFAULT_PROJECT
-  let location = locationOverride || DEFAULT_LOCATION
+  let client
+  if (apiKeyOverride) {
+    // ── Puerta Developer API (banco): solo apiKey, sin vertexai/project/location.
+    // Mismo backend que la web de Gemini → cuota generosa, ideal para el 3.5. ──
+    client = new GoogleGenAI({ apiKey: apiKeyOverride })
+  } else {
+    // ── Puerta Vertex AI (viva): Service Account (ADC) + project + location. ──
+    let projectId = DEFAULT_PROJECT
+    let location = locationOverride || DEFAULT_LOCATION
 
-  try {
-    const tenant = await prisma.tenantSettings.findUnique({
-      where: { tenantId }
-    })
-
-    // En el futuro: si el tenant tiene byok_enabled, usar su propio project
-    // Hoy: todos los tenants usan el project maestro de Hidata
-    if (tenant?.byokEnabled && tenant?.geminiApiKeyEncrypted) {
-      // TODO Fase 4: parsear project/location desde tenant settings
-      // Por ahora ignoramos byok y usamos el master
+    try {
+      const tenant = await prisma.tenantSettings.findUnique({ where: { tenantId } })
+      // En el futuro: si el tenant tiene byok_enabled, usar su propio project.
+      // Hoy: todos los tenants usan el project maestro de Hidata.
+      if (tenant?.byokEnabled && tenant?.geminiApiKeyEncrypted) {
+        // TODO Fase 4: parsear project/location desde tenant settings
+      }
+    } catch (err) {
+      console.warn('[Gemini] No se pudo leer tenant_settings:', err.message)
     }
-  } catch (err) {
-    console.warn('[Gemini] No se pudo leer tenant_settings:', err.message)
+
+    // GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/google-credentials.json
+    client = new GoogleGenAI({ vertexai: true, project: projectId, location })
   }
 
-  // Vertex AI usa Application Default Credentials (Service Account)
-  // No requiere apiKey: las credenciales vienen del JSON via env var
-  // GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/google-credentials.json
-  const client = new GoogleGenAI({
-    vertexai: true,
-    project: projectId,
-    location: location
-  })
-  clientCache.set(tenantId, client)
+  clientCache.set(cacheKey, client)
   return client
 }
 
@@ -125,10 +131,11 @@ export async function callGemini({
   maxOutputTokens = 2048,
   thinkingBudget = null,
   thinkingLevel = null,
-  location = null
+  location = null,
+  apiKey = null
 }) {
   const startTime = Date.now()
-  const client = await getGeminiClient(tenantId, location)
+  const client = await getGeminiClient(tenantId, { location, apiKey })
 
   const config = {
     temperature,

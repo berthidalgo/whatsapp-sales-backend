@@ -181,8 +181,20 @@ export async function pensarYResponder({
   const thinkingBudgetUsado = thinkingLevelUsado
     ? null
     : (overrides?.thinkingBudget ?? THINKING_BUDGET)
-  // location override: gemini-3.5-flash solo existe en 'global', no en us-central1.
-  const locationUsada = overrides?.location || null
+  // Puerta Developer API (banco): si overrides.useDevApi, se usa el backend de
+  // aistudio/gemini.google.com con la key de ENV (GEMINI_DEV_API_KEY). La key
+  // JAMÁS viaja en el request HTTP — el banco solo manda el flag booleano; el
+  // servidor la lee del entorno. Con Developer API la location no aplica.
+  const apiKeyUsada = overrides?.useDevApi ? (process.env.GEMINI_DEV_API_KEY || null) : null
+  const locationUsada = apiKeyUsada ? null : (overrides?.location || null)
+
+  // Guard: si el banco pidió Developer API pero no hay key en ENV, fallar CLARO
+  // (no caer en silencio a Vertex y dar números engañosos).
+  if (overrides?.useDevApi && !apiKeyUsada) {
+    return buildError('falta_gemini_dev_api_key', startTime, {
+      hint: 'overrides.useDevApi=true pero process.env.GEMINI_DEV_API_KEY no está seteada en el entorno (Render).'
+    })
+  }
 
   const fs = flattenFactSheet(campaignConfig)
   const systemInstruction = construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
@@ -210,6 +222,7 @@ export async function pensarYResponder({
           thinkingLevel: thinkingLevelUsado,
           responseSchema: usarSchema,
           location: locationUsada,
+          apiKey: apiKeyUsada,
           tenantId: estadoLead?.tenantId || 'peru_exporta'
         })
       } catch (callErr) {

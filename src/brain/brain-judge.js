@@ -174,4 +174,75 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
   }
 }
 
-export const BRAIN_JUDGE_VERSION = 'v2_sprintA2_ficha_grounding_jhon'
+// ════════════════════════════════════════════════════════════════════════
+// JUEZ POR RÚBRICA (banco multi-turno, Sprint A.2)
+// Evalúa una respuesta del cerebro EN CONTEXTO REAL de conversación, contra las
+// reglas duras del producto — SIN un "expected" escrito a mano. Esto permite
+// re-jugar las conversaciones archivadas reales turno por turno y medir calidad.
+// ════════════════════════════════════════════════════════════════════════
+export async function juzgarPorRubrica({ historial, mensajeLead, brainResult, fichaBloque = null }) {
+  if (!brainResult?.ok || !brainResult?.mensaje) {
+    return { veredicto: 'FAIL', score: 0, razon: `El cerebro no generó respuesta (${brainResult?.error || 'desconocido'}).`, red_flags: ['cerebro_no_respondio'], _judge_skipped: true }
+  }
+
+  const histTexto = (historial || []).map(h => `${h.rol === 'lead' ? 'LEAD' : 'JHON'}: ${h.texto}`).join('\n') || '(inicio de la conversación)'
+
+  const systemInstruction = `Eres un evaluador EXPERTO Y ESTRICTO de Jhon, un asesor de ventas por WhatsApp de Perú Exporta TV (cursos de exportación, ticket alto, mercado peruano). Juzgas si la ÚLTIMA respuesta de Jhon es buena DADO el contexto real de la conversación. Eres riguroso: no apruebas respuestas mediocres por cortesía.
+
+REGLAS DURAS (violar una = FAIL):
+- IDENTIDAD: Jhon es una persona real. Decir 'soy Jhon' = BIEN. Es FAIL si: (a) admite ser IA/bot/asistente, o (b) habla de sí mismo en TERCERA persona ('te llamará un asesor', 'te contactará Jhon') en vez de primera ('yo te llamo').
+- NO INVENTAR DATOS DUROS: precio, fechas, módulos, temario, números de cuenta/Yape, cuotas o descuentos que NO estén en la FICHA (abajo) = FAIL con red_flag 'invento_dato'. Parafrasear lo que SÍ está en la ficha = BIEN.
+- NO prometer resultados garantizados ni devoluciones = FAIL.
+- VULNERABILIDAD (deudas, angustia, 'lo perdí todo'): si en vez de bajar la presión y escalar, sigue vendiendo = FAIL.
+- PAGO: confirmar inscripción sin pedir comprobante = FAIL.
+
+CALIDAD CONVERSACIONAL (afecta score, puede bajar a PARCIAL):
+- UNA pregunta a la vez (encadenar 2-3 preguntas = formulario de bot).
+- La 'llamada' solo desde el Momento 5 (tras presentar el programa). Mencionarla antes = mal.
+- ANTI-DISCO-RAYADO: si repite casi textual una frase/pregunta que YA dijo en el historial → red_flag 'frase_repetida', máximo PARCIAL.
+- RE-SALUDO: si la conversación ya está en curso y arranca con 'Hola'/'Hola de nuevo' → red_flag 're_saludo'.
+- FORMATO WHATSAPP: negrita markdown de DOBLE asterisco (**texto**) → red_flag 'markdown_doble_asterisco' (WhatsApp lo muestra literal).
+- Tono humano, cálido, peruano; avanza hacia agendar la llamada sin sonar robótico.
+
+${fichaBloque ? `FICHA COMERCIAL REAL (única fuente legítima de datos duros):\n"""\n${fichaBloque}\n"""` : '(Sin ficha: sé prudente con invento_dato.)'}
+
+Razón BREVE (máx 25 palabras), sin comillas dobles dentro.`
+
+  const userPrompt = `CONVERSACIÓN HASTA AHORA:
+${histTexto}
+
+ÚLTIMO MENSAJE DEL LEAD:
+"${mensajeLead}"
+
+RESPUESTA DE JHON (lo que hay que juzgar):
+"${brainResult.mensaje}"
+
+DATOS QUE JHON DETECTÓ (slots): ${JSON.stringify(brainResult.slots_detectados || {})}
+¿MARCÓ ESCALAR A HUMANO?: ${brainResult.debe_escalar_humano}
+
+Juzga la respuesta de Jhon en este contexto. Devuelve el JSON con veredicto, score, razon, red_flags.`
+
+  try {
+    const result = await callGemini({
+      model: JUDGE_MODEL,
+      systemInstruction,
+      contents: userPrompt,
+      temperature: JUDGE_TEMPERATURE,
+      maxOutputTokens: 1600,
+      thinkingBudget: 512,
+      responseSchema: JUDGE_SCHEMA,
+      tenantId: 'peru_exporta'
+    })
+    if (!result?.text) return { veredicto: 'PARCIAL', score: 50, razon: 'Juez sin respuesta.', red_flags: ['juez_sin_respuesta'], _judge_error: true }
+    const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+    try { return JSON.parse(limpio) } catch (e) {
+      const m = limpio.match(/\{[\s\S]*\}/)
+      if (m) { try { return JSON.parse(m[0]) } catch (_) {} }
+      return { veredicto: 'PARCIAL', score: 50, razon: `Juez JSON inválido: ${e.message}`, red_flags: ['juez_json_invalido'], _judge_error: true }
+    }
+  } catch (err) {
+    return { veredicto: 'PARCIAL', score: 50, razon: `Error del juez: ${err.message}`, red_flags: ['juez_exception'], _judge_error: true }
+  }
+}
+
+export const BRAIN_JUDGE_VERSION = 'v3_sprintA2_rubrica_multiturno'

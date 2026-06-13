@@ -36,7 +36,7 @@ import { summarizeBotResponse } from './response/response.js'
 
 // ── Sprint 3: Cerebro unificado (banco de pruebas aislado) ──
 import { pensarYResponder, summarizeBrainResult } from './brain/agent-brain.js'
-import { juzgarRespuesta } from './brain/brain-judge.js'
+import { juzgarRespuesta, juzgarPorRubrica } from './brain/brain-judge.js'
 import { BRAIN_EVALS, BRAIN_EVALS_VERSION } from './brain/brain-evals-dataset.js'
 import { flattenFactSheet } from './response/factsheet-loader.js'
 
@@ -830,6 +830,123 @@ async function correrUnCasoEval(caso, campaignConfig, banco = {}) {
       respuesta_cerebro: '(crash)', slots: {}, stage: null, escalo_humano: false,
       costo_caso_usd: 0, _ms: Date.now() - t0
     }
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── Debug — Brain REPLAY (Sprint A.2) — banco multi-turno REAL ───
+// Re-juega las conversaciones REALES archivadas turno por turno: en cada punto
+// donde el lead escribió y el bot tuvo que responder, le da al cerebro el
+// historial real hasta ahí + el mensaje del lead, y juzga su respuesta con la
+// rúbrica (reglas duras + calidad). Mide cómo se porta cada modelo en contexto
+// real de conversación (no casos sintéticos de 1 turno).
+//
+// Body: { overrides?, convFilter?:[ids], maxTurns?:int, chunkSize?, pauseMs? }
+//   overrides: { model?, useDevApi?, thinkingLevel?, location?, sinSchema? }
+// ════════════════════════════════════════════════════════════════
+app.post('/debug/brain-replay', async (req, reply) => {
+  const startTime = Date.now()
+  const { overrides = null, convFilter = null, maxTurns = 6, chunkSize = 2, pauseMs = 1500, campaignSlug = 'MPX' } = req.body || {}
+
+  try {
+    const campaign = await prisma.campaign.findFirst({ where: { slug: campaignSlug }, select: { config: true } })
+    const campaignConfig = campaign?.config || null
+    const fichaBloque = flattenFactSheet(campaignConfig)?.factSheetBloque || null
+
+    // Cargar conversaciones archivadas (raw SQL: la tabla no está en el schema Prisma)
+    let convs = await prisma.$queryRawUnsafe(
+      `SELECT id, telefono, motivo, mensajes FROM conversaciones_archivadas ORDER BY id`
+    )
+    if (convFilter && Array.isArray(convFilter)) convs = convs.filter(c => convFilter.includes(Number(c.id)))
+
+    // Extraer los "turnos" evaluables: cada bloque de mensajes LEAD seguido de un BOT.
+    const turnos = []
+    for (const conv of convs) {
+      const msgs = Array.isArray(conv.mensajes) ? conv.mensajes : []
+      let i = 0, usados = 0
+      while (i < msgs.length && usados < maxTurns) {
+        if (msgs[i]?.origen === 'LEAD') {
+          const histEnd = i
+          const leadMsgs = []
+          while (i < msgs.length && msgs[i]?.origen === 'LEAD') { leadMsgs.push(msgs[i].texto); i++ }
+          if (i < msgs.length && msgs[i]?.origen === 'BOT') {
+            const historial = msgs.slice(0, histEnd).map(m => ({ rol: m.origen === 'LEAD' ? 'lead' : 'agente', texto: m.texto }))
+            turnos.push({
+              convId: Number(conv.id), motivo: conv.motivo,
+              turnoIdx: usados + 1,
+              historial, mensajeLead: leadMsgs.filter(Boolean).join('\n'),
+              respuestaHistorica: msgs[i].texto
+            })
+            usados++
+          }
+        } else i++
+      }
+    }
+
+    // Correr cada turno: cerebro (con overrides) + juez por rúbrica
+    const CHUNK = Math.max(1, chunkSize)
+    const resultados = []
+    for (let k = 0; k < turnos.length; k += CHUNK) {
+      const chunk = turnos.slice(k, k + CHUNK)
+      const res = await Promise.all(chunk.map(t => correrUnTurnoReplay(t, campaignConfig, { overrides, fichaBloque })))
+      resultados.push(...res)
+      if (k + CHUNK < turnos.length) await sleep(pauseMs)
+    }
+
+    const pass = resultados.filter(r => r.veredicto === 'PASS').length
+    const parcial = resultados.filter(r => r.veredicto === 'PARCIAL').length
+    const fail = resultados.filter(r => r.veredicto === 'FAIL').length
+    const avg = resultados.length ? Math.round(resultados.reduce((s, r) => s + (r.score || 0), 0) / resultados.length) : 0
+    const flags = resultados.flatMap(r => r.red_flags || []).reduce((a, f) => { a[f] = (a[f] || 0) + 1; return a }, {})
+    const lat = resultados.filter(r => r.latency_ms)
+    const latAvg = lat.length ? Math.round(lat.reduce((s, r) => s + r.latency_ms, 0) / lat.length) : 0
+
+    return reply.send({
+      resumen: {
+        modelo: resultados[0]?.modelo_usado || (overrides?.useDevApi ? 'devapi:'+(overrides?.model||'?') : overrides?.model || 'default'),
+        overrides: overrides || '(config viva)',
+        total_turnos: resultados.length, conversaciones: convs.length,
+        PASS: pass, PARCIAL: parcial, FAIL: fail,
+        pass_rate: resultados.length ? Math.round(pass / resultados.length * 100) + '%' : '0%',
+        score_promedio: avg, latencia_prom_ms: latAvg,
+        red_flags: flags, judge_version: 'v3_rubrica_multiturno',
+        tiempo_total_ms: Date.now() - startTime
+      },
+      no_pass: resultados.filter(r => r.veredicto !== 'PASS').map(r => ({
+        conv: r.convId, turno: r.turnoIdx, veredicto: r.veredicto, score: r.score,
+        lead: r.mensajeLead, jhon: r.respuesta_cerebro, razon: r.razon_juez, flags: r.red_flags
+      })),
+      todos: resultados
+    })
+  } catch (err) {
+    console.error('[BrainReplay] Fatal:', err)
+    return reply.status(500).send({ error: err.message, stack: err.stack?.split('\n').slice(0, 6) })
+  }
+})
+
+async function correrUnTurnoReplay(turno, campaignConfig, banco = {}) {
+  const t0 = Date.now()
+  const { overrides = null, fichaBloque = null } = banco
+  try {
+    const brainResult = await pensarYResponder({
+      mensajeActual: turno.mensajeLead,
+      historial: turno.historial,
+      estadoLead: { stage: 'first_contact', slots: {} },  // sin slots: ambos modelos rastrean del historial → comparación justa
+      campaignConfig, vendorNombre: 'Jhon', overrides
+    })
+    const veredicto = await juzgarPorRubrica({ historial: turno.historial, mensajeLead: turno.mensajeLead, brainResult, fichaBloque })
+    return {
+      convId: turno.convId, turnoIdx: turno.turnoIdx, motivo: turno.motivo,
+      veredicto: veredicto.veredicto, score: veredicto.score, razon_juez: veredicto.razon,
+      red_flags: veredicto.red_flags || [], mensajeLead: turno.mensajeLead,
+      respuesta_cerebro: brainResult?.mensaje || `(sin respuesta — ${brainResult?.error})`,
+      respuesta_historica: turno.respuestaHistorica,
+      slots: brainResult?.slots_detectados || {}, escalo: brainResult?.debe_escalar_humano,
+      modelo_usado: brainResult?.audit?.model || null, latency_ms: brainResult?.audit?.latency_ms || null,
+      _ms: Date.now() - t0
+    }
+  } catch (err) {
+    return { convId: turno.convId, turnoIdx: turno.turnoIdx, veredicto: 'FAIL', score: 0, razon_juez: `Error: ${err.message}`, red_flags: ['turno_exception'], mensajeLead: turno.mensajeLead, respuesta_cerebro: '(crash)', red_flagsList: [], _ms: Date.now() - t0 }
   }
 }
 
