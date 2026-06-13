@@ -281,7 +281,7 @@ const STAGES_ESPERANDO_COMPROBANTE = new Set([
   STAGES.POST_CLOSE
 ])
 
-async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, startTime }) {
+async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, messageKey, startTime }) {
   const leadId = leadInfo.leadId
   console.log(`[EventRouter] Non-text message from lead ${leadId}: ${messageType}`)
 

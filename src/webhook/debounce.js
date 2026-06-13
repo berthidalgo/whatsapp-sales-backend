@@ -2,7 +2,7 @@
 //
 // DEBOUNCE MANAGER
 //
-// Acumula mensajes consecutivos del mismo lead en una ventana de 9s.
+// Acumula mensajes consecutivos del mismo lead en una ventana de 6s.
 // Cuando expira el timer (sin nuevos mensajes), procesa TODO junto.
 //
 // Caso típico que resuelve:
@@ -27,7 +27,7 @@
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
-const DEBOUNCE_WINDOW_MS = 11000              // FIX BUG A (jun 2026): 9s→11s. Margen extra para agrupar mensajes de leads que escriben lento (varios mensajes cortos seguidos). Reduce los disparos paralelos del pipeline.
+const DEBOUNCE_WINDOW_MS = 6000               // OPTIMIZACIÓN LATENCIA (jun 2026): 11s→6s. El peritaje forense mostró que los 11s fijos eran el chunk MÁS grande de la latencia (de ~27s/turno con 2.5-pro). Los mensajes "varios enter" del lead llegan en 1-2s entre sí, así que 6s los agrupa de sobra y ahorra ~5s por respuesta. La protección anti-duplicado real es el LOCK que reencola (handler), no esta ventana. (Antes: 9s→11s por BUG A, pero el margen extra costaba latencia sin beneficio real.)
 const MAX_BUFFER_PER_LEAD = 20                // Máximo mensajes acumulados
 const MAX_ACTIVE_LEADS = 500                  // Cap defensivo
 
@@ -259,4 +259,4 @@ export function clearAllDebounces() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const DEBOUNCE_VERSION = 'v2_day9_11s_window_bugA'
+export const DEBOUNCE_VERSION = 'v3_6s_window_latencia'

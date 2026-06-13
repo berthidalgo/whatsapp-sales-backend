@@ -68,7 +68,7 @@ export async function notificarEscalamiento({
     const payload = JSON.stringify({ motivo, stage, telefono, nombre, ultimoMensajeLead, respuestaBot, ...(dataExtra || {}) })
     await prisma.$executeRaw`
       INSERT INTO crm_notifications (id, vendor_id, lead_id, priority, title, message, payload, acknowledged, created_at)
-      VALUES (${randomUUID()}::uuid, ${vendorId || 1}, ${leadId}, ${'high'},
+      VALUES (${randomUUID()}::uuid, ${vendorId || 1}, ${leadId}, ${'action_required'},
               ${`Lead escalado: ${motivo}`.slice(0, 120)}, ${briefing}, ${payload}::jsonb, ${false}, now())`
     persisted = true
   } catch (err) {
