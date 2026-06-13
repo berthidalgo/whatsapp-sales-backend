@@ -43,6 +43,8 @@ import { enqueueMessage, cancelDebounce } from './debounce.js'
 import { MODES, STAGES } from '../state/stage-definitions.js'
 import { sendToWhatsApp } from './sender.js'
 import { notificarEscalamiento } from './notifications.js'
+import { descargarMediaBase64 } from './media.js'
+import { leerComprobante } from '../lib/vision.js'
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — routeEvent()
@@ -194,6 +196,7 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
       leadInfo: leadResolution,
       text,
       messageId: key.id,
+      messageKey: key,              // key completo (id, remoteJid, fromMe) para bajar media
       messageType,
       instanceName,
       processPipelineFn,
@@ -210,6 +213,7 @@ async function handleLeadMessage({
   leadInfo,
   text,
   messageId,
+  messageKey,
   messageType,
   instanceName,
   processPipelineFn,
@@ -220,11 +224,10 @@ async function handleLeadMessage({
   // PARCHE Sprint A.2 (hueco del comprobante, Sesión 8): antes TODO no-texto se
   // descartaba en silencio — el bot PEDÍA la captura del pago y luego ignoraba al
   // lead que la mandaba (plata en la mano, abandono total). Ahora imagen y audio
-  // reciben una respuesta determinística (sin pasar por el cerebro), y la imagen
-  // en etapa de pago ESCALA a humano para que valide el comprobante.
-  // OCR/transcripción de verdad = Fase D.
+  // reciben una respuesta determinística, y la imagen en etapa de pago se LEE con
+  // Gemini multimodal (Etapa 2) + ESCALA a humano con la data del comprobante.
   if (!text || messageType !== 'text') {
-    return await manejarNoTextoDelLead({ leadInfo, messageType, instanceName, startTime })
+    return await manejarNoTextoDelLead({ leadInfo, messageType, instanceName, messageKey, startTime })
   }
 
   // ─── Verificar si lead está archivado ───
@@ -357,14 +360,45 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, star
         where: { leadId },
         data: { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() }
       })
-      // Notificar al vendedor (Fase B.1+): un lead que mandó comprobante es lo más
-      // valioso — no puede quedar en el agujero negro. Fire-and-forget.
-      notificarEscalamiento({
-        leadId, telefono: leadInfo.telefono, nombre: leadState?.slotsFilled?.nombre || leadInfo.nombreDetectado || null,
-        vendorId: leadInfo.vendorId || 1,
-        motivo: '💰 Posible COMPROBANTE de pago recibido — validar y confirmar inscripción',
-        stage
-      }).catch(err => console.error(`[EventRouter] Notificación de comprobante falló (lead ${leadId}):`, err.message))
+
+      // ─── ETAPA 2: leer la imagen con Gemini multimodal (híbrido código+IA) ───
+      // FIRE-AND-FORGET: la descarga (Evolution) + lectura (Gemini) pueden tardar
+      // ~10-25s; NO bloqueamos la respuesta del webhook (Evolution podría reintentar
+      // y duplicar). El escalamiento (lo crítico) ya quedó síncrono arriba; esto solo
+      // ENRIQUECE la notificación. SAFE: pase lo que pase con la lectura/descarga, el
+      // lead YA escaló y el humano SIEMPRE será notificado (con la data si se pudo
+      // leer, o con un aviso de "revisar manual" si no) — no se pierde ningún pago.
+      const nombreLead = leadState?.slotsFilled?.nombre || leadInfo.nombreDetectado || null
+      ;(async () => {
+        let briefingLinea = '⚠️ No pude leer la imagen automáticamente — revísala manualmente.'
+        let motivo = '💰 Posible COMPROBANTE de pago recibido — validar y confirmar inscripción'
+        try {
+          const media = await descargarMediaBase64({ instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME, messageKey })
+          if (media.ok) {
+            const lectura = await leerComprobante({ base64: media.base64, mimeType: media.mimeType })
+            if (lectura.ok && lectura.esComprobante) {
+              const d = lectura.datos
+              const partes = [d.metodo, d.monto, d.nombreDestino ? `a ${d.nombreDestino}` : '', d.numeroOperacion ? `op ${d.numeroOperacion}` : '', d.fecha].filter(Boolean)
+              briefingLinea = `🧾 ${partes.join(' · ') || lectura.resumen}`
+              motivo = '💰 COMPROBANTE de pago recibido y LEÍDO — validar y confirmar inscripción'
+              console.log(`[EventRouter] 🧾 Comprobante leído lead ${leadId}: ${briefingLinea}`)
+            } else if (lectura.ok && !lectura.esComprobante) {
+              briefingLinea = `🤔 La imagen NO parece un comprobante (${lectura.resumen}). El lead está en etapa de pago — revisar.`
+              console.log(`[EventRouter] 🤔 Imagen no-comprobante lead ${leadId}: ${lectura.resumen}`)
+            }
+          } else {
+            console.warn(`[EventRouter] No se pudo descargar la imagen lead ${leadId}: ${media.error}`)
+          }
+        } catch (err) {
+          console.error(`[EventRouter] Error leyendo comprobante lead ${leadId}:`, err.message)
+        }
+        await notificarEscalamiento({
+          leadId, telefono: leadInfo.telefono, nombre: nombreLead,
+          vendorId: leadInfo.vendorId || 1,
+          motivo, stage, dataExtra: { briefingLinea }
+        })
+      })().catch(err => console.error(`[EventRouter] Flujo de comprobante falló (lead ${leadId}):`, err.message))
+
       console.log(`[EventRouter] 🚨 Posible COMPROBANTE de lead ${leadId} (stage=${stage}) → escalado a HUMAN_ACTIVE`)
       return buildResponse('non_text_comprobante_escalated', startTime, { leadId, stage, sent: sendResult.ok })
     }
