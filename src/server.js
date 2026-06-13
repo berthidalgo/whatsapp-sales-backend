@@ -37,7 +37,8 @@ import { summarizeBotResponse } from './response/response.js'
 // ── Sprint 3: Cerebro unificado (banco de pruebas aislado) ──
 import { pensarYResponder, summarizeBrainResult } from './brain/agent-brain.js'
 import { juzgarRespuesta } from './brain/brain-judge.js'
-import { BRAIN_EVALS } from './brain/brain-evals-dataset.js'
+import { BRAIN_EVALS, BRAIN_EVALS_VERSION } from './brain/brain-evals-dataset.js'
+import { flattenFactSheet } from './response/factsheet-loader.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -703,7 +704,19 @@ app.post('/debug/brain-test', async (req, reply) => {
 // ════════════════════════════════════════════════════════════════
 app.post('/debug/brain-evals', async (req, reply) => {
   const startTime = Date.now()
-  const { campaignSlug = 'MPX', idFilter = null } = req.body || {}
+  const {
+    campaignSlug = 'MPX',
+    idFilter = null,
+    categoryFilter = null,
+    // ── Palancas de banco (Sprint A.2) — domar gemini-3.5 SIN tocar el bot vivo ──
+    // overrides: { model?, thinkingLevel?, sinSchema? } → se pasan a pensarYResponder.
+    // Sin overrides, el banco corre con la config viva (lo que está en producción).
+    overrides = null,
+    // Concurrencia: el juez 2.5-flash en location 'global' tira 429 en ráfaga.
+    // chunkSize=1 + pausa larga = corrida lenta pero sin 429 (para medir limpio).
+    chunkSize = 3,
+    pauseMs = 1200
+  } = req.body || {}
 
   try {
     let campaignConfig = null
@@ -712,19 +725,25 @@ app.post('/debug/brain-evals', async (req, reply) => {
       select: { config: true, slug: true }
     })
     campaignConfig = campaign?.config || null
+    // La ficha REAL aplanada → se la pasamos al juez para que cace datos inventados
+    // (banco v2). Sin esto, el juez no sabía qué precio/temario/fechas son legítimos.
+    const fichaBloque = flattenFactSheet(campaignConfig)?.factSheetBloque || null
 
     let casos = BRAIN_EVALS
     if (idFilter && Array.isArray(idFilter)) {
-      casos = BRAIN_EVALS.filter(c => idFilter.includes(c.id))
+      casos = casos.filter(c => idFilter.includes(c.id))
+    }
+    if (categoryFilter && Array.isArray(categoryFilter)) {
+      casos = casos.filter(c => categoryFilter.includes(c.category))
     }
 
-    const CHUNK_SIZE = 3
-    const PAUSE_MS = 1200
+    const CHUNK_SIZE = Math.max(1, chunkSize)
+    const PAUSE_MS = pauseMs
     const resultados = []
 
     for (let i = 0; i < casos.length; i += CHUNK_SIZE) {
       const chunk = casos.slice(i, i + CHUNK_SIZE)
-      const chunkResults = await Promise.all(chunk.map(caso => correrUnCasoEval(caso, campaignConfig)))
+      const chunkResults = await Promise.all(chunk.map(caso => correrUnCasoEval(caso, campaignConfig, { overrides, fichaBloque })))
       resultados.push(...chunkResults)
       if (i + CHUNK_SIZE < casos.length) await sleep(PAUSE_MS)
     }
@@ -747,7 +766,12 @@ app.post('/debug/brain-evals', async (req, reply) => {
         casos_con_red_flags: conRedFlags.length,
         costo_total_usd: costoTotal.toFixed(5),
         tiempo_total_ms: Date.now() - startTime,
-        campaign_usada: campaignConfig ? campaignSlug : 'NINGUNA (genérico)'
+        campaign_usada: campaignConfig ? campaignSlug : 'NINGUNA (genérico)',
+        // Config del banco — para comparar corridas (qué modelo/versiones se midió)
+        dataset_version: BRAIN_EVALS_VERSION,
+        modelo_cerebro: resultados[0]?.modelo_usado || (overrides?.model || 'default'),
+        overrides_aplicados: overrides || '(ninguno — config viva)',
+        concurrencia: `chunk=${CHUNK_SIZE} pause=${PAUSE_MS}ms`
       },
       requieren_revision: resultados
         .filter(r => r.veredicto !== 'PASS')
@@ -760,7 +784,7 @@ app.post('/debug/brain-evals', async (req, reply) => {
         id: r.id, categoria: r.categoria, veredicto: r.veredicto, score: r.score,
         input_lead: r.input_lead, esperado: r.esperado, respuesta_cerebro: r.respuesta_cerebro,
         slots: r.slots, stage: r.stage, escalo_humano: r.escalo_humano,
-        razon_juez: r.razon_juez, red_flags: r.red_flags
+        latency_ms: r.latency_ms, razon_juez: r.razon_juez, red_flags: r.red_flags
       }))
     })
 
@@ -770,18 +794,20 @@ app.post('/debug/brain-evals', async (req, reply) => {
   }
 })
 
-async function correrUnCasoEval(caso, campaignConfig) {
+async function correrUnCasoEval(caso, campaignConfig, banco = {}) {
   const t0 = Date.now()
+  const { overrides = null, fichaBloque = null } = banco
   try {
     const brainResult = await pensarYResponder({
       mensajeActual: caso.input.mensajeActual,
       historial: caso.input.historial || [],
       estadoLead: caso.input.estadoLead || {},
       campaignConfig,
-      vendorNombre: 'Cristina'
+      vendorNombre: 'Jhon',
+      overrides
     })
 
-    const veredicto = await juzgarRespuesta({ caso, brainResult })
+    const veredicto = await juzgarRespuesta({ caso, brainResult, fichaBloque })
     const costoCerebro = brainResult?.audit?.cost_usd?.total_cost_usd || 0
 
     return {
@@ -792,6 +818,8 @@ async function correrUnCasoEval(caso, campaignConfig) {
       respuesta_cerebro: brainResult?.mensaje || `(sin respuesta — error: ${brainResult?.error})`,
       slots: brainResult?.slots_detectados || {}, stage: brainResult?.stage_sugerido,
       escalo_humano: brainResult?.debe_escalar_humano,
+      modelo_usado: brainResult?.audit?.model || null,
+      latency_ms: brainResult?.audit?.latency_ms || null,
       costo_caso_usd: costoCerebro, _ms: Date.now() - t0
     }
   } catch (err) {

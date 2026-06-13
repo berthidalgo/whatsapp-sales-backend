@@ -106,7 +106,8 @@ export async function callGemini({
   responseSchema = null,
   temperature = 0.3,
   maxOutputTokens = 2048,
-  thinkingBudget = null
+  thinkingBudget = null,
+  thinkingLevel = null
 }) {
   const startTime = Date.now()
   const client = await getGeminiClient(tenantId)
@@ -121,7 +122,13 @@ export async function callGemini({
   // piensa mucho más que 2.5: en turnos pesados (M4) quemaba los 4000 tokens
   // pensando y devolvía texto VACÍO ("sin texto en respuesta" x3 → hueco mudo).
   // thinkingBudget acota el pensamiento y garantiza espacio para la respuesta.
-  if (thinkingBudget !== null) {
+  //
+  // Banco v2 (Sprint A.2): los Gemini 3.x NO usan presupuesto numérico sino
+  // thinkingLevel ('low'|'medium'|'high'). Si llega thinkingLevel, MANDA sobre
+  // thinkingBudget (son excluyentes en la API). Solo lo usa el banco de pruebas.
+  if (thinkingLevel !== null) {
+    config.thinkingConfig = { thinkingLevel }
+  } else if (thinkingBudget !== null) {
     config.thinkingConfig = { thinkingBudget }
   }
 

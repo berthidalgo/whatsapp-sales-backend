@@ -160,9 +160,27 @@ export async function pensarYResponder({
   historial = [],
   estadoLead = {},
   campaignConfig = null,
-  vendorNombre = 'el equipo'
+  vendorNombre = 'el equipo',
+  // ── overrides SOLO para el banco de pruebas (Sprint A.2) ──
+  // En producción NO se pasan → quedan en null y el cerebro corre con las
+  // constantes vivas (BRAIN_MODEL, THINKING_BUDGET, schema). Esto permite domar
+  // gemini-3.5 EN BANCO (probar thinkingLevel:'low', quitar responseSchema)
+  // sin tocar una sola línea del flujo en vivo.
+  overrides = null
 }) {
   const startTime = Date.now()
+
+  const modeloUsado = overrides?.model || BRAIN_MODEL
+  const usarSchema = overrides?.sinSchema ? null : BRAIN_RESPONSE_SCHEMA
+  // Dos palancas para domar el thinking del modelo en banco (son excluyentes):
+  //   - thinkingLevel ('low'|'medium'|'high'): control de los Gemini 3.x.
+  //   - thinkingBudget (número): control de los 2.x; el banco puede pedir uno más
+  //     bajo (ej. 256) como alternativa si thinkingLevel no aplica al SDK.
+  // Si llega thinkingLevel, MANDA y el budget se anula. Sin overrides → config viva.
+  const thinkingLevelUsado = overrides?.thinkingLevel || null
+  const thinkingBudgetUsado = thinkingLevelUsado
+    ? null
+    : (overrides?.thinkingBudget ?? THINKING_BUDGET)
 
   const fs = flattenFactSheet(campaignConfig)
   const systemInstruction = construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
@@ -181,13 +199,14 @@ export async function pensarYResponder({
       let result = null
       try {
         result = await callGemini({
-          model: BRAIN_MODEL,
+          model: modeloUsado,
           systemInstruction,
           contents: userPrompt,
           temperature: TEMPERATURE,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
-          thinkingBudget: THINKING_BUDGET,
-          responseSchema: BRAIN_RESPONSE_SCHEMA,
+          thinkingBudget: thinkingBudgetUsado,
+          thinkingLevel: thinkingLevelUsado,
+          responseSchema: usarSchema,
           tenantId: estadoLead?.tenantId || 'peru_exporta'
         })
       } catch (callErr) {
@@ -265,9 +284,9 @@ export async function pensarYResponder({
       temperatura_lead: parsed.temperatura_lead || 'warm',
       guardrail_flags: validado.flags,
       audit: {
-        model: BRAIN_MODEL,
+        model: modeloUsado,
         tokens: result?.usage?.totalTokenCount || 0,
-        cost_usd: result?.usage ? calculateCost(BRAIN_MODEL, result.usage) : null,
+        cost_usd: result?.usage ? calculateCost(modeloUsado, result.usage) : null,
         latency_ms: Date.now() - startTime
       }
     }

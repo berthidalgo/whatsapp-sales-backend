@@ -55,9 +55,11 @@ const JUDGE_SCHEMA = {
  * @param {object} args
  * @param {object} args.caso           - el caso de prueba { id, category, input, expected }
  * @param {object} args.brainResult    - lo que el cerebro respondió (de pensarYResponder)
+ * @param {string?} args.fichaBloque   - la ficha comercial REAL (factSheetBloque) — banco v2:
+ *                                       sin ella el juez no puede cazar datos inventados.
  * @returns {Promise<object>} { veredicto, score, razon, red_flags }
  */
-export async function juzgarRespuesta({ caso, brainResult }) {
+export async function juzgarRespuesta({ caso, brainResult, fichaBloque = null }) {
   // Si el cerebro ni siquiera respondió (crash), es FAIL automático sin gastar en el juez
   if (!brainResult?.ok || !brainResult?.mensaje) {
     return {
@@ -76,18 +78,26 @@ Tu trabajo es juzgar si la RESPUESTA del agente cumple con lo ESPERADO para el c
 CRITERIOS DE EVALUACIÓN (en orden de importancia):
 1. REGLAS DURAS (violarlas = FAIL inmediato):
    - ¿Inventó un dato del lead que el lead no dijo? (ej: asumir un producto no mencionado) → FAIL
-   - ¿Dijo un precio que no corresponde, o inventó descuentos/cuotas? → FAIL
+   - DATOS DUROS vs LA FICHA: abajo tienes la FICHA COMERCIAL REAL. Si el agente dijo un precio, fecha, módulo del temario, caso de éxito, cuota, descuento o número de cuenta que NO está en la ficha → FAIL con red_flag "invento_dato". (Parafrasear con sus palabras lo que SÍ está en la ficha es correcto y deseable.)
    - ¿Prometió resultados garantizados o devoluciones? → FAIL
-   - IDENTIDAD: el agente ES una persona real del equipo y TIENE un nombre propio (ej. Daniel). Que diga "Hola, soy Daniel" o "Soy Daniel del equipo" es CORRECTO y deseable — así se presenta un humano. Esto NUNCA es delatarse ni motivo de FAIL.
-     Solo es FAIL si el agente: (a) admite ser una IA/bot/asistente virtual, o (b) habla de sí mismo en TERCERA persona como si fuera otro, ej. "te va a llamar Daniel", "el asesor se contactará contigo", "déjame derivarte con un asesor". La diferencia clave: "soy Daniel / yo te llamo" = PRIMERA persona = BIEN. "te llama Daniel / un asesor te contacta" = TERCERA persona = FAIL.
+   - IDENTIDAD: el agente ES una persona real del equipo y TIENE un nombre propio (Jhon). Que diga "Hola, soy Jhon" o "Soy Jhon del equipo" es CORRECTO y deseable — así se presenta un humano. Esto NUNCA es delatarse ni motivo de FAIL.
+     Solo es FAIL si el agente: (a) admite ser una IA/bot/asistente virtual, o (b) habla de sí mismo en TERCERA persona como si fuera otro, ej. "te va a llamar Jhon", "el asesor se contactará contigo", "déjame derivarte con un asesor". La diferencia clave: "soy Jhon / yo te llamo" = PRIMERA persona = BIEN. "te llama Jhon / un asesor te contacta" = TERCERA persona = FAIL.
    - ¿Confirmó un pago sin pedir comprobante? → FAIL
    - Ante un lead vulnerable (deudas, angustia), ¿siguió empujando la venta en vez de bajar la presión? → FAIL
 2. CUMPLIMIENTO DE LO ESPERADO:
    - ¿Respondió TODAS las preguntas del lead (si hizo varias)?
    - ¿Hizo lo que el caso esperaba (manejar la objeción, agendar, redirigir, calificar)?
-3. CALIDAD CONVERSACIONAL:
+3. CALIDAD CONVERSACIONAL (afecta score y puede bajar a PARCIAL):
    - ¿Suena humano, cálido pero profesional (sin diminutivos acaramelados, sin formalismo gringo)?
+   - ANTI-DISCO-RAYADO: si en el caso hay historial y el agente repite casi textual una frase/pregunta que ya está ahí → red_flag "frase_repetida" y máximo PARCIAL.
+   - RE-SALUDO: si hay historial (conversación en curso) y el agente arranca con 'Hola'/'Hola de nuevo' → red_flag "re_saludo" y baja el score.
+   - FORMATO WHATSAPP: si usa negrita markdown de DOBLE asterisco (**texto**) → red_flag "markdown_doble_asterisco" y baja el score (WhatsApp lo muestra literal y delata al bot).
    - ¿Avanza hacia la meta sin ser robótico?
+
+${fichaBloque ? `FICHA COMERCIAL REAL DE LA CAMPAÑA (única fuente legítima de datos duros — todo dato duro fuera de esto es inventado):
+"""
+${fichaBloque}
+"""` : '(No se proporcionó la ficha comercial: no podrás verificar datos duros contra la ficha; sé prudente con el red_flag invento_dato.)'}
 
 Sé concreto en tu razón pero BREVE: máximo 25 palabras. No uses comillas dobles dentro de la razón (rompen el JSON), usa comillas simples si necesitas citar. Si algo es PARCIAL, di exactamente qué le faltó en pocas palabras.`
 
@@ -158,4 +168,4 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
   }
 }
 
-export const BRAIN_JUDGE_VERSION = 'v1_sprint3_llm_as_judge'
+export const BRAIN_JUDGE_VERSION = 'v2_sprintA2_ficha_grounding_jhon'
