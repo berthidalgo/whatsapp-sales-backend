@@ -122,7 +122,13 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
       systemInstruction,
       contents: userPrompt,
       temperature: JUDGE_TEMPERATURE,
-      maxOutputTokens: 1200,
+      // FIX banco v2: el juez devolvía "[parseo parcial]" (JSON cortado). Causa:
+      // el thinking del 2.5-flash NO estaba acotado y se comía los 1200 tokens
+      // antes de escribir el veredicto completo (mismo bug que el cerebro en la
+      // Sesión 4). thinkingBudget acota el pensamiento + subimos el margen de
+      // salida → el red_flags (que va al final del schema) ya no se trunca.
+      maxOutputTokens: 1600,
+      thinkingBudget: 512,
       responseSchema: JUDGE_SCHEMA,
       tenantId: 'peru_exporta'
     })

@@ -23,16 +23,27 @@ const DEFAULT_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
 // ════════════════════════════════════════════════════════
 // CLIENT FACTORY — multi-tenant ready (Vertex AI)
 // ════════════════════════════════════════════════════════
+// CACHE del cliente por tenant (Sprint A.2): antes se creaba un GoogleGenAI NUEVO
+// y se consultaba tenant_settings en BD en CADA llamada a Gemini (cada turno del
+// bot + cada caso de eval). Eso: (a) pegaba a la BD sin necesidad, (b) re-instanciaba
+// el SDK, (c) hacía que el SDK escupiera su log de auth ("project/location will take
+// precedence...") en cada llamada → inundaba los logs de Render. Ahora se construye
+// UNA vez por tenant por proceso y se reusa. El log de auth sale 1 vez, no miles.
+const clientCache = new Map()
+
 async function getGeminiClient(tenantId = 'peru_exporta') {
-  // Intenta leer configuración dedicada del tenant
+  const cached = clientCache.get(tenantId)
+  if (cached) return cached
+
+  // Intenta leer configuración dedicada del tenant (solo en el primer build por tenant)
   let projectId = DEFAULT_PROJECT
   let location = DEFAULT_LOCATION
-  
+
   try {
     const tenant = await prisma.tenantSettings.findUnique({
       where: { tenantId }
     })
-    
+
     // En el futuro: si el tenant tiene byok_enabled, usar su propio project
     // Hoy: todos los tenants usan el project maestro de Hidata
     if (tenant?.byokEnabled && tenant?.geminiApiKeyEncrypted) {
@@ -42,15 +53,17 @@ async function getGeminiClient(tenantId = 'peru_exporta') {
   } catch (err) {
     console.warn('[Gemini] No se pudo leer tenant_settings:', err.message)
   }
-  
+
   // Vertex AI usa Application Default Credentials (Service Account)
   // No requiere apiKey: las credenciales vienen del JSON via env var
   // GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/google-credentials.json
-  return new GoogleGenAI({
+  const client = new GoogleGenAI({
     vertexai: true,
     project: projectId,
     location: location
   })
+  clientCache.set(tenantId, client)
+  return client
 }
 
 // ════════════════════════════════════════════════════════
