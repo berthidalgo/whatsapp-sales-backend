@@ -42,6 +42,7 @@ import {
 import { enqueueMessage, cancelDebounce } from './debounce.js'
 import { MODES, STAGES } from '../state/stage-definitions.js'
 import { sendToWhatsApp } from './sender.js'
+import { notificarEscalamiento } from './notifications.js'
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — routeEvent()
@@ -356,6 +357,14 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, star
         where: { leadId },
         data: { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() }
       })
+      // Notificar al vendedor (Fase B.1+): un lead que mandó comprobante es lo más
+      // valioso — no puede quedar en el agujero negro. Fire-and-forget.
+      notificarEscalamiento({
+        leadId, telefono: leadInfo.telefono, nombre: leadState?.slotsFilled?.nombre || leadInfo.nombreDetectado || null,
+        vendorId: leadInfo.vendorId || 1,
+        motivo: '💰 Posible COMPROBANTE de pago recibido — validar y confirmar inscripción',
+        stage
+      }).catch(err => console.error(`[EventRouter] Notificación de comprobante falló (lead ${leadId}):`, err.message))
       console.log(`[EventRouter] 🚨 Posible COMPROBANTE de lead ${leadId} (stage=${stage}) → escalado a HUMAN_ACTIVE`)
       return buildResponse('non_text_comprobante_escalated', startTime, { leadId, stage, sent: sendResult.ok })
     }

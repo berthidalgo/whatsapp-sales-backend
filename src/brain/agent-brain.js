@@ -122,6 +122,10 @@ const BRAIN_RESPONSE_SCHEMA = {
       type: 'boolean',
       description: 'true SOLO si: vulnerabilidad económica, angustia emocional seria, amenaza legal, crisis personal, el lead pide expresamente un humano, hostilidad/insultos SOSTENIDOS (3+ mensajes hostiles pese a tus reparaciones — te retiras con dignidad y un humano evalúa), O el lead pide una llamada INMINENTE ("llámame ahorita", "ya, ahora mismo", "en 15 minutos") — en ese último caso es un lead caliente que quiere hablar YA y un humano debe llamarlo de inmediato.'
     },
+    razon_escalamiento: {
+      type: 'string',
+      description: 'Si debe_escalar_humano=true, en POCAS palabras POR QUÉ escalas, para avisar al vendedor. Ej: "lead quiere pagar, pide cuenta", "pidió llamada ahorita (caliente)", "vulnerabilidad económica", "hostilidad sostenida", "pidió hablar con humano". Vacío si no escalas.'
+    },
     temperatura_lead: {
       type: 'string',
       description: 'Qué tan caliente está el lead ahora — y tu comportamiento DEBE reflejarlo: hot = avanza rápido, no lo encuestes, confírmale la llamada; warm = flujo consultivo normal; cold = cero presión, cierra cálido con la puerta abierta (no lo persigas con preguntas).',
@@ -307,6 +311,7 @@ export async function pensarYResponder({
       momento_actual: parsed.momento_actual || null,
       stage_sugerido: parsed.stage_sugerido || estadoLead?.stage || 'discovery',
       debe_escalar_humano: parsed.debe_escalar_humano === true,
+      razon_escalamiento: parsed.razon_escalamiento || null,
       temperatura_lead: parsed.temperatura_lead || 'warm',
       guardrail_flags: validado.flags,
       audit: {

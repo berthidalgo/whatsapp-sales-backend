@@ -45,6 +45,7 @@
 import { pensarYResponder, summarizeBrainResult, AGENT_BRAIN_VERSION } from './agent-brain.js'
 import prisma from '../db/prisma.js'
 import { STAGES, MODES } from '../state/stage-definitions.js'
+import { notificarEscalamiento } from '../webhook/notifications.js'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Orden del embudo (para proteger contra retrocesos de stage).
@@ -138,7 +139,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       prisma.leadState.findUnique({ where: { leadId } }),
       prisma.lead.findUnique({
         where: { id: leadId },
-        select: { campaignId: true, nombreDetectado: true }
+        select: { campaignId: true, nombreDetectado: true, vendorId: true }
       })
     ])
 
@@ -291,6 +292,21 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       } catch (err) {
         console.error(`[BrainPipeline] No se pudo sincronizar nombreDetectado del lead ${leadId}:`, err.message)
       }
+    }
+
+    // ─── 7c. NOTIFICAR AL VENDEDOR si el cerebro escaló (Fase B.1+) ───
+    // Fire-and-forget: NO bloquea la respuesta al lead (el lead recibe su mensaje
+    // cálido ya; el ping al vendedor viaja en paralelo). Sin esto, el lead escalado
+    // quedaba en un agujero negro (HUMAN_ACTIVE sin que nadie se entere).
+    if (brainResult.debe_escalar_humano) {
+      notificarEscalamiento({
+        leadId, telefono, nombre: nombreSlot || lead?.nombreDetectado || null,
+        vendorId: lead?.vendorId || 1,
+        motivo: brainResult.razon_escalamiento || 'El asistente derivó este lead a un humano',
+        ultimoMensajeLead: mensajeActual,
+        respuestaBot: brainResult.mensaje,
+        stage: stageFinal
+      }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
     }
 
     // ─── 8. Devolver con la forma que espera el handler ───
