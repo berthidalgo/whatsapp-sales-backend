@@ -181,6 +181,8 @@ export async function pensarYResponder({
   const thinkingBudgetUsado = thinkingLevelUsado
     ? null
     : (overrides?.thinkingBudget ?? THINKING_BUDGET)
+  // location override: gemini-3.5-flash solo existe en 'global', no en us-central1.
+  const locationUsada = overrides?.location || null
 
   const fs = flattenFactSheet(campaignConfig)
   const systemInstruction = construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
@@ -207,6 +209,7 @@ export async function pensarYResponder({
           thinkingBudget: thinkingBudgetUsado,
           thinkingLevel: thinkingLevelUsado,
           responseSchema: usarSchema,
+          location: locationUsada,
           tenantId: estadoLead?.tenantId || 'peru_exporta'
         })
       } catch (callErr) {

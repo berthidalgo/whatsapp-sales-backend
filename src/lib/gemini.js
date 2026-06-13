@@ -31,13 +31,17 @@ const DEFAULT_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
 // UNA vez por tenant por proceso y se reusa. El log de auth sale 1 vez, no miles.
 const clientCache = new Map()
 
-async function getGeminiClient(tenantId = 'peru_exporta') {
-  const cached = clientCache.get(tenantId)
+async function getGeminiClient(tenantId = 'peru_exporta', locationOverride = null) {
+  // El banco puede pedir otra location (ej: gemini-3.5-flash solo existe en
+  // 'global', no en us-central1). Se cachea por tenant+location para no mezclar
+  // clientes. Sin override, comportamiento vivo idéntico.
+  const cacheKey = locationOverride ? `${tenantId}:${locationOverride}` : tenantId
+  const cached = clientCache.get(cacheKey)
   if (cached) return cached
 
   // Intenta leer configuración dedicada del tenant (solo en el primer build por tenant)
   let projectId = DEFAULT_PROJECT
-  let location = DEFAULT_LOCATION
+  let location = locationOverride || DEFAULT_LOCATION
 
   try {
     const tenant = await prisma.tenantSettings.findUnique({
@@ -120,10 +124,11 @@ export async function callGemini({
   temperature = 0.3,
   maxOutputTokens = 2048,
   thinkingBudget = null,
-  thinkingLevel = null
+  thinkingLevel = null,
+  location = null
 }) {
   const startTime = Date.now()
-  const client = await getGeminiClient(tenantId)
+  const client = await getGeminiClient(tenantId, location)
 
   const config = {
     temperature,
