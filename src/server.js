@@ -40,6 +40,9 @@ import { juzgarRespuesta, juzgarPorRubrica } from './brain/brain-judge.js'
 import { BRAIN_EVALS, BRAIN_EVALS_VERSION } from './brain/brain-evals-dataset.js'
 import { flattenFactSheet } from './response/factsheet-loader.js'
 
+// ── Fase D: motor de followups (disparado por cron externo) ──
+import { ejecutarFollowups, FOLLOWUP_ENGINE_VERSION } from './motor/followupEngine.js'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -1093,6 +1096,24 @@ app.post('/auth/login',   async (req, reply) => loginVendor(req, reply, prisma))
 // ── Webhook ──────────────────────────────────────────────────
 app.post('/webhook', async (req, reply) => handleWebhook(req, reply, prisma))
 app.get('/webhook',  async () => ({ status: 'webhook activo', version: '7.0.0' }))
+
+// ── Cron: motor de followups (Fase D) ────────────────────────
+// Lo dispara un cron externo (cron-job.org / Render Cron) cada ~15 min.
+// Protegido por secret (?secret= o header x-cron-secret). El motor ya tiene su
+// propia ventana horaria, así que es seguro pegarle aunque sea de madrugada.
+async function handleCronFollowup(req, reply) {
+  if (!process.env.CRON_SECRET) {
+    return reply.code(503).send({ error: 'CRON_SECRET no configurado en el entorno' })
+  }
+  const secret = req.query?.secret || req.headers['x-cron-secret']
+  if (secret !== process.env.CRON_SECRET) {
+    return reply.code(401).send({ error: 'unauthorized' })
+  }
+  const r = await ejecutarFollowups()
+  return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, ...r })
+}
+app.get('/cron/followup',  handleCronFollowup)
+app.post('/cron/followup', handleCronFollowup)
 
 // ── Leads ────────────────────────────────────────────────────
 app.get('/leads',                async (req, reply) => getLeads(req, reply, prisma))
