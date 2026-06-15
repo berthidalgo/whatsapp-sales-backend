@@ -126,6 +126,10 @@ const BRAIN_RESPONSE_SCHEMA = {
       type: 'string',
       description: 'Si debe_escalar_humano=true, en POCAS palabras POR QUÉ escalas, para avisar al vendedor. Ej: "lead quiere pagar, pide cuenta", "pidió llamada ahorita (caliente)", "vulnerabilidad económica", "hostilidad sostenida", "pidió hablar con humano". Vacío si no escalas.'
     },
+    como_cerrarlo: {
+      type: 'string',
+      description: 'SOLO si debe_escalar_humano=true: inteligencia comercial para el VENDEDOR humano que tomará el lead (esto NO se le envía al lead, es un briefing interno). En 2-4 frases dale la JUGADA de cierre usando la data REAL de ESTA conversación: (1) la palanca/motivación principal del lead, (2) el ángulo que más le pega, (3) qué objeción o cuidado vigilar, (4) el siguiente paso concreto. Aterrizado a este lead específico, NUNCA genérico. Ej: "Caliente y decidido, quiere empezar este mes. Entra por su urgencia y cierra la inscripción ya. Tiene RUC = listo para operar, úsalo como prueba de que puede arrancar rápido. Ojo: sin experiencia, cálmalo con el caso del alumno de 78 años." Vacío si no escalas.'
+    },
     temperatura_lead: {
       type: 'string',
       description: 'Qué tan caliente está el lead ahora — y tu comportamiento DEBE reflejarlo: hot = avanza rápido, no lo encuestes, confírmale la llamada; warm = flujo consultivo normal; cold = cero presión, cierra cálido con la puerta abierta (no lo persigas con preguntas).',
@@ -312,6 +316,7 @@ export async function pensarYResponder({
       stage_sugerido: parsed.stage_sugerido || estadoLead?.stage || 'discovery',
       debe_escalar_humano: parsed.debe_escalar_humano === true,
       razon_escalamiento: parsed.razon_escalamiento || null,
+      como_cerrarlo: parsed.como_cerrarlo || null,
       temperatura_lead: parsed.temperatura_lead || 'warm',
       guardrail_flags: validado.flags,
       audit: {
@@ -604,7 +609,7 @@ function rescatarMensaje(rawText) {
       .replace(/\\\\/g, '\\')
       .trim()
     // Corta cualquier fragmento de clave JSON que se haya colado al final
-    texto = texto.replace(/[",}\s]*"?(razonamiento|momento_actual|stage_sugerido|slots_detectados|debe_escalar_humano|temperatura_lead).*$/s, '').trim()
+    texto = texto.replace(/[",}\s]*"?(razonamiento|momento_actual|stage_sugerido|slots_detectados|debe_escalar_humano|razon_escalamiento|como_cerrarlo|temperatura_lead).*$/s, '').trim()
     if (texto.length >= 10) return texto  // umbral más alto para texto cortado (evita basura)
   }
   return null

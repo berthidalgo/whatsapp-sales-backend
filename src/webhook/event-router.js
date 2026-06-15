@@ -182,6 +182,22 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
 
   // ─── 7. Determinar acción según fromMe ───
   if (key.fromMe === true) {
+    // 🛡️ GUARD ANTI AUTO-MENSAJE (red-team 2026-06-14):
+    // El anti-eco/anti-loop NO vive en el código — depende de que Evolution no
+    // reinyecte como webhook los mensajes que el bot manda por API. handleVendorMessage
+    // ahora persiste una fila (origen=VENDEDOR), así que un fromMe espurio ya no es
+    // inofensivo: corrompería el historial en silencio. Dos defensas:
+    //   1) Si el destinatario es el PROPIO número del bot, es la auto-notificación
+    //      (NUMERO_JOAN = auto-envío), NO un handoff humano → ignorar.
+    //   2) Tripwire ruidoso: si esto se dispara con leads reales, es señal de que
+    //      Evolution empezó a reinyectar salientes → revisar config del webhook.
+    const soloNumero = (jid) => String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '')
+    const remoteNum = soloNumero(key.remoteJid)
+    const numeroBot = soloNumero(process.env.NUMERO_BOT || process.env.NUMERO_JOAN)
+    if (numeroBot && remoteNum && remoteNum === numeroBot) {
+      console.warn(`[EventRouter] 🛡️ fromMe dirigido al PROPIO número del bot (${remoteNum}) → auto-mensaje (notificación), NO handoff. Ignorado. Si se repite con leads reales: revisar reinyección de salientes en Evolution.`)
+      return buildResponse('self_message_skipped', startTime, { remoteJid: key.remoteJid })
+    }
     // ✋ Mensaje del VENDOR (manual desde WhatsApp)
     return await handleVendorMessage({
       leadInfo: leadResolution,
@@ -466,7 +482,19 @@ async function handleVendorMessage({
 
     console.log(`[EventRouter] Lead ${leadInfo.leadId} marked as HUMAN_ACTIVE`)
 
-    // ─── 3. TODO: guardar Message en BD con origen='VENDEDOR' ───
+    // ─── 3. Persistir el mensaje del VENDEDOR (B.1) ───
+    // Sin esto, lo que el humano le escribe al lead por WhatsApp se perdía: el
+    // historial guardaba solo LEAD/BOT y la mitad humana de la conversación
+    // quedaba ciega para el CRM, la memoria episódica y un futuro auto-resume.
+    // Best-effort: si falla, se loguea y NO tumba el manejo del turno.
+    try {
+      const textoVendedor = (text && text.trim())
+        ? text.trim()
+        : `[mensaje no-texto del vendedor${messageType ? ` · ${messageType}` : ''}]`
+      await prisma.message.create({ data: { leadId: leadInfo.leadId, origen: 'VENDEDOR', texto: textoVendedor } })
+    } catch (err) {
+      console.error(`[EventRouter] No se pudo persistir mensaje VENDEDOR lead ${leadInfo.leadId}:`, err.message)
+    }
 
     return buildResponse('vendor_message_handled', startTime, {
       leadId: leadInfo.leadId,

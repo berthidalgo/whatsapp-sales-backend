@@ -24,7 +24,7 @@ import { sendToWhatsApp } from './sender.js'
  * @param {string?} args.ultimoMensajeLead  - último mensaje del lead (contexto)
  * @param {string?} args.respuestaBot       - lo que el bot le respondió
  * @param {string?} args.stage              - etapa del funnel
- * @param {object?} args.dataExtra          - data extra para el payload/briefing (ej: comprobante leído)
+ * @param {object?} args.dataExtra          - data extra para el payload/briefing. Campos opcionales: { briefingLinea } (data del comprobante leído) · { comoCerrarlo } (inteligencia comercial IA del cerebro → bloque 🎯 CÓMO CERRARLO)
  * @returns {Promise<{ sent: boolean, persisted: boolean }>}
  */
 export async function notificarEscalamiento({
@@ -56,6 +56,18 @@ export async function notificarEscalamiento({
     lineas.push(DIV)
     lineas.push(`💬  Con sus palabras:`)
     lineas.push(`    "${String(ultimoMensajeLead).slice(0, 220)}"`)
+  }
+  // Inteligencia comercial (la genera el cerebro en el turno del escalamiento).
+  // Solo aparece si vino con contenido — el camino del comprobante no la trae.
+  if (dataExtra?.comoCerrarlo) {
+    lineas.push(DIV)
+    lineas.push(`🎯  CÓMO CERRARLO`)
+    // Cap defensivo: si el modelo se desboca, no empujamos el cierre del briefing
+    // contra el límite de 4096 del sender.
+    const consejo = String(dataExtra.comoCerrarlo).trim().slice(0, 600)
+    for (const l of consejo.split('\n')) {
+      if (l.trim()) lineas.push(`    ${l.trim()}`)
+    }
   }
   lineas.push(DIV)
   lineas.push(`⚡  Atiéndelo pronto, no lo dejes enfriar`)

@@ -307,6 +307,10 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
         ultimoMensajeLead: mensajeActual,
         respuestaBot: brainResult.mensaje,
         stage: stageFinal,
+        // Inteligencia comercial: el cerebro la generó en ESTE mismo turno (cero
+        // llamada extra). Solo viaja si vino con contenido; si no, el briefing
+        // sale igual sin el bloque 🎯.
+        dataExtra: brainResult.como_cerrarlo ? { comoCerrarlo: brainResult.como_cerrarlo } : null,
         nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || 'el programa'
       }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
     }
