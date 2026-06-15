@@ -38,7 +38,7 @@ const PAUSA_ENTRE_MS  = 1500      // cadencia humana entre envíos (anti-baneo s
 // ventana → un "recordatorio de 24h" jamás llega a los 3 días (absurdo + huele a bot), y
 // al activar el cron no se dispara el lote de leads viejos acumulados. >48h = dormant:
 // se dejan para una campaña de reactivación aparte, no para el followup automático.
-const PISO_2H  = 2,  TECHO_2H  = 6
+const PISO_2H  = 0.15,  TECHO_2H  = 1   // ⚠️ VALORES DE TEST (~9min–1h) — REVERTIR a 2 y 6
 const PISO_24H = 24, TECHO_24H = 48
 const INSTANCE        = process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
 
