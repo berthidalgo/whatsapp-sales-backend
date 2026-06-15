@@ -105,7 +105,7 @@ const SQL_CANDIDATOS = `
     AND l.archived_at IS NULL
     AND lead_msg.last_at IS NOT NULL
     AND last_any.origen <> 'LEAD'
-    AND now() - lead_msg.last_at >= interval '2 hours'
+    AND now() - lead_msg.last_at >= interval '${PISO_2H} hours'
   ORDER BY lead_msg.last_at ASC
   LIMIT ${MAX_POR_CICLO}
 `
