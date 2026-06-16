@@ -229,6 +229,8 @@ export async function pensarYResponder({
     let lastErr = null
     let lastRawText = null
     let lastResult = null
+    let modeloFinal = modeloUsado   // cambia a gpt-oss-120b si entra el fallback (BLOQUE #2)
+    let usoFallback = false
 
     for (let intento = 0; intento < 3; intento++) {
       let result = null
@@ -313,6 +315,48 @@ export async function pensarYResponder({
       }
     }
 
+    // ─── BLOQUE #2: AUTO-FALLBACK Gemini → Cerebras gpt-oss-120b (riesgo R3) ───
+    // Si tras los 3 reintentos Gemini no entregó JSON usable (timeout/500/JSON roto),
+    // caemos a Cerebras gpt-oss-120b ANTES del rescate → el bot NUNCA queda mudo.
+    // gpt-oss validado en el examen completo (80/82): bot seco-pero-correcto >>> bot mudo.
+    // Solo en VIVO (sin overrides): el banco mide el proveedor que pidió; para PROBAR el
+    // trigger en banco hay que pasar overrides.fallback=true explícito.
+    const permitirFallback = overrides ? (overrides.fallback === true) : true
+    if (!parsed && permitirFallback && provider === 'gemini' && process.env.CEREBRAS_API_KEY) {
+      console.warn(`[AgentBrain] 🛟 Gemini (${modeloUsado}) falló tras 3 intentos → FALLBACK a Cerebras gpt-oss-120b`)
+      const sysFb = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
+      for (let fbIntento = 0; fbIntento < 2 && !parsed; fbIntento++) {
+        try {
+          const fbResult = await callCerebras({
+            model: 'gpt-oss-120b',
+            systemInstruction: sysFb,
+            contents: userPrompt,
+            temperature: TEMPERATURE,
+            maxOutputTokens: 3072
+          })
+          if (!fbResult?.text) { lastErr = new Error('fallback cerebras sin texto'); continue }
+          const limpioFb = fbResult.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+          let parsedFb = null
+          try { parsedFb = JSON.parse(limpioFb) } catch (_) {
+            const m = fbResult.text.match(/\{[\s\S]*\}/)
+            if (m) { try { parsedFb = JSON.parse(m[0]) } catch (__) { /* JSON irrescatable */ } }
+          }
+          if (parsedFb) {
+            parsed = parsedFb
+            lastResult = fbResult
+            modeloFinal = 'gpt-oss-120b'
+            usoFallback = true
+            console.warn('[AgentBrain] ✅ Fallback Cerebras OK — el seguro de 2da línea respondió')
+          } else {
+            lastErr = new Error('fallback cerebras devolvió JSON inválido')
+          }
+        } catch (fbErr) {
+          lastErr = fbErr
+          console.warn(`[AgentBrain] fallback cerebras intento ${fbIntento + 1} falló: ${fbErr.message}`)
+        }
+      }
+    }
+
     // Si tras 3 intentos no hay JSON válido, rescate final: extraer SOLO el mensaje
     // del texto crudo (el mensaje va PRIMERO en el JSON, así que aunque esté cortado,
     // el campo "mensaje" suele estar completo). Mejor un mensaje sin metadatos que un hueco mudo.
@@ -350,10 +394,12 @@ export async function pensarYResponder({
       como_cerrarlo: parsed.como_cerrarlo || null,
       temperatura_lead: parsed.temperatura_lead || 'warm',
       guardrail_flags: validado.flags,
+      via_fallback: usoFallback,   // BLOQUE #2: true si respondió el seguro Cerebras
       audit: {
-        model: modeloUsado,
+        model: modeloFinal,
+        fallback: usoFallback,
         tokens: result?.usage?.totalTokenCount || 0,
-        cost_usd: result?.usage ? calculateCost(modeloUsado, result.usage) : null,
+        cost_usd: result?.usage ? calculateCost(modeloFinal, result.usage) : null,
         latency_ms: Date.now() - startTime
       }
     }
