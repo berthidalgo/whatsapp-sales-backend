@@ -252,7 +252,9 @@ async function handleLeadMessage({
       if (media.ok) {
         const tr = await transcribirAudio({ base64: media.base64, mimeType: media.mimeType, language: 'es' })
         if (tr.ok && tr.texto) {
-          console.log(`[EventRouter] 🎙️→📝 Audio de lead ${leadInfo.leadId} transcrito (${tr.latencyMs}ms): "${tr.texto.slice(0, 120)}"`)
+          // Seguridad/privacidad: NO logueamos el contenido del lead (la transcripción
+          // puede traer PII). El texto vive SOLO en Supabase (control de acceso). Logs = metadata.
+          console.log(`[EventRouter] 🎙️→📝 Audio de lead ${leadInfo.leadId} transcrito (${tr.latencyMs}ms, ${tr.texto.length} chars) → al cerebro`)
           text = tr.texto   // ← el audio ahora fluye como texto normal
         } else {
           console.warn(`[EventRouter] No se pudo transcribir audio de lead ${leadInfo.leadId}: ${tr.error}`)
@@ -394,7 +396,7 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
           })
           if (r.ok && r.respuesta) {
             respuesta = r.respuesta
-            console.log(`[EventRouter] 📷 Imagen leída lead ${leadId} (${r.categoria}): ${r.descripcion}`)
+            console.log(`[EventRouter] 📷 Imagen leída lead ${leadId} (categoria: ${r.categoria})`)
           }
         } else {
           console.warn(`[EventRouter] No se pudo descargar imagen no-comprobante lead ${leadId}: ${media.error}`)
@@ -448,10 +450,12 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
               const partes = [d.metodo, d.monto, d.nombreDestino ? `a ${d.nombreDestino}` : '', d.numeroOperacion ? `op ${d.numeroOperacion}` : '', d.fecha].filter(Boolean)
               briefingLinea = `🧾 ${partes.join(' · ') || lectura.resumen}`
               motivo = '💰 COMPROBANTE de pago recibido y LEÍDO — validar y confirmar inscripción'
-              console.log(`[EventRouter] 🧾 Comprobante leído lead ${leadId}: ${briefingLinea}`)
+              // Seguridad: NO logueamos datos del comprobante (monto/op/Yape = financiero).
+              // Van SOLO a la notificación al vendedor + Supabase, no a los logs de Render.
+              console.log(`[EventRouter] 🧾 Comprobante leído lead ${leadId} (datos extraídos OK → notificación al vendedor)`)
             } else if (lectura.ok && !lectura.esComprobante) {
               briefingLinea = `🤔 La imagen NO parece un comprobante (${lectura.resumen}). El lead está en etapa de pago — revisar.`
-              console.log(`[EventRouter] 🤔 Imagen no-comprobante lead ${leadId}: ${lectura.resumen}`)
+              console.log(`[EventRouter] 🤔 Imagen no parece comprobante lead ${leadId} (en etapa de pago → revisar)`)
             }
           } else {
             console.warn(`[EventRouter] No se pudo descargar la imagen lead ${leadId}: ${media.error}`)
