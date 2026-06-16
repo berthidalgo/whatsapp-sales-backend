@@ -23,7 +23,7 @@
 
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
-import { sendToWhatsApp } from '../webhook/sender.js'
+import { sendToWhatsApp, sendTemplateCloud, proveedorActivo } from '../whatsapp/send.js'
 
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -148,7 +148,23 @@ export async function ejecutarFollowups() {
     const texto = interpolar(PLANTILLAS[tipo], { nombre: c.nombre, producto: c.producto })
 
     try {
-      const r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: INSTANCE })
+      // En Cloud API el followup_24h cae FUERA de la ventana de servicio de 24h →
+      // Meta exige TEMPLATE aprobado (el de 2h va como texto, sigue dentro de ventana).
+      // Con Evolution, ambos van como texto normal (sin cambio).
+      let r
+      if (proveedorActivo() === 'cloud' && tipo === 'followup_24h') {
+        r = await sendTemplateCloud({
+          telefono: c.telefono,
+          templateName: process.env.CLOUD_TEMPLATE_FOLLOWUP_24H || 'followup_24h',
+          languageCode: 'es',
+          components: [{ type: 'body', parameters: [
+            { type: 'text', text: (c.nombre && String(c.nombre).trim()) || 'qué tal' },
+            { type: 'text', text: (c.producto && String(c.producto).trim()) || 'tu producto' }
+          ]}]
+        })
+      } else {
+        r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: INSTANCE })
+      }
       if (!r.ok) { errores++; detalle.push({ leadId: c.leadId, tipo, error: r.error }); continue }
 
       // Persistir el followup como mensaje BOT (queda en el historial; no afecta el

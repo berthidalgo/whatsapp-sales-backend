@@ -43,6 +43,10 @@ import { flattenFactSheet } from './response/factsheet-loader.js'
 // ── Fase D: motor de followups (disparado por cron externo) ──
 import { ejecutarFollowups, FOLLOWUP_ENGINE_VERSION } from './motor/followupEngine.js'
 
+// ── WhatsApp Cloud API (Meta): recepción. Apagado por default (WHATSAPP_PROVIDER=evolution) ──
+import { procesarWebhookCloud } from './whatsapp/cloud/router.js'
+import { verifyWebhookChallenge, verifySignature } from './whatsapp/cloud/webhook.js'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -1114,6 +1118,27 @@ async function handleCronFollowup(req, reply) {
 }
 app.get('/cron/followup',  handleCronFollowup)
 app.post('/cron/followup', handleCronFollowup)
+
+// ── Webhook Cloud API (Meta) — endpoint SEPARADO, NO toca /webhook de Evolution ──
+// GET = handshake de verificación de Meta (hub.challenge). POST = mensajes entrantes.
+// Inerte hasta que se configure el número (CLOUD_* env vars) y WHATSAPP_PROVIDER=cloud.
+app.get('/webhook/cloud', async (req, reply) => {
+  const r = verifyWebhookChallenge(req.query || {})
+  if (r.ok) return reply.code(200).type('text/plain').send(r.challenge)
+  return reply.code(403).send('forbidden')
+})
+app.post('/webhook/cloud', async (req, reply) => {
+  // Firma best-effort: si hay rawBody + CLOUD_APP_SECRET, se valida. La firma ESTRICTA
+  // se activa al enchufar el número (agregando el content-type parser que guarda rawBody).
+  const sig = req.headers['x-hub-signature-256']
+  if (req.rawBody && process.env.CLOUD_APP_SECRET) {
+    const v = verifySignature(req.rawBody, sig)
+    if (!v.ok) { console.warn(`[CloudWebhook] firma inválida: ${v.reason}`); return reply.code(401).send('invalid signature') }
+  }
+  // Meta espera respuesta <5s o reintenta → responder ya y procesar en segundo plano.
+  reply.code(200).send('EVENT_RECEIVED')
+  procesarWebhookCloud(req.body).catch(e => console.error('[CloudWebhook] error:', e.message))
+})
 
 // ── Leads ────────────────────────────────────────────────────
 app.get('/leads',                async (req, reply) => getLeads(req, reply, prisma))

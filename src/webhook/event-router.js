@@ -41,7 +41,7 @@ import {
 } from './lead-resolver.js'
 import { enqueueMessage, cancelDebounce } from './debounce.js'
 import { MODES, STAGES } from '../state/stage-definitions.js'
-import { sendToWhatsApp } from './sender.js'
+import { sendToWhatsApp } from '../whatsapp/send.js'
 import { notificarEscalamiento } from './notifications.js'
 import { descargarMediaBase64 } from './media.js'
 import { leerComprobante, responderAImagen } from '../lib/vision.js'

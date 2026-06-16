@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
-import { sendToWhatsApp } from './sender.js'
+import { sendToWhatsApp } from '../whatsapp/send.js'
 
 /**
  * Notifica al vendedor que un lead necesita atención humana.
