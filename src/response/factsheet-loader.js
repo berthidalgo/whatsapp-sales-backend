@@ -46,7 +46,46 @@ const SAFE_FACTSHEET_VARS = {
   pildorasTexto:    '',
   // Bloque consolidado listo para pegar en un prompt
   factSheetBloque:  'No tengo la ficha comercial exacta de este programa a la mano.',
+  presentacionBloque: '',
   tieneFactSheet:   false
+}
+
+// ════════════════════════════════════════════════════════
+// PRESENTACIÓN (M4) — arma el bloque WhatsApp-bonito desde los datos.
+// Funciones puras (sin BD): el formato vive en la data → model-agnostic.
+// ════════════════════════════════════════════════════════
+
+// Convierte el temarioResumen (string "MÓDULO 1, X (ses. 1-3): ...; MÓDULO 2, ...")
+// en viñetas CORTAS (título + sesiones), una por módulo — para que el M4 sea
+// escaneable, no un ladrillo. El detalle completo sigue en factSheetBloque para
+// cuando el lead lo pide ("detállame los módulos"). Si el formato no calza, cae a
+// una viñeta única (seguro).
+function bulletizarTemario(s) {
+  if (!s || typeof s !== 'string') return ''
+  const re = /MÓDULO\s*(\d+),?\s*([^(]+?)\s*\(ses\.\s*([^)]+)\):/gi
+  const items = []
+  let m
+  while ((m = re.exec(s)) !== null) {
+    items.push(`- Módulo ${m[1]} — ${m[2].trim()} (ses. ${m[3].trim()})`)
+  }
+  return items.length ? items.join('\n') : `- ${s.trim()}`
+}
+
+function construirPresentacion({ nombreProducto, precioTexto, incluye, inicioTexto, modalidadTexto, duracionTexto, metodosPagoTexto, temarioTexto }) {
+  const tieneNombre = nombreProducto && nombreProducto !== SAFE_FACTSHEET_VARS.nombreProducto
+  if (!tieneNombre && !precioTexto) return ''   // sin datos reales → no hay presentación
+
+  const secciones = []
+  const titulo = [tieneNombre ? `*${nombreProducto}*` : null, precioTexto].filter(Boolean).join(' · ')
+  if (titulo) secciones.push(titulo)
+  if (Array.isArray(incluye) && incluye.length) {
+    secciones.push('✅ Incluye:\n' + incluye.map(i => `- ${i}`).join('\n'))
+  }
+  const fechaLinea = [inicioTexto && `Inicio: ${inicioTexto}`, modalidadTexto, duracionTexto].filter(Boolean).join(' · ')
+  if (fechaLinea) secciones.push(`📅 ${fechaLinea}`)
+  if (metodosPagoTexto) secciones.push(`💳 Pagos: ${metodosPagoTexto}`)
+  if (temarioTexto) secciones.push(`📋 Temario:\n${bulletizarTemario(temarioTexto)}`)
+  return secciones.join('\n\n')
 }
 
 // ════════════════════════════════════════════════════════
@@ -164,8 +203,18 @@ export function flattenFactSheet(config) {
     ? lineas.join('\n')
     : SAFE_FACTSHEET_VARS.factSheetBloque
 
+  // ─── BLOQUE DE PRESENTACIÓN (M4) — formato WhatsApp legible y CONSISTENTE ───
+  // El diseño vive en la DATA, no en el capricho del modelo: cualquier modelo
+  // (Gemini, Cerebras, etc.) que copie este bloque produce el MISMO formato
+  // ordenado. Emoji ligero por sección (sin recargar), nombre en *negrita* (bold
+  // de WhatsApp), listas con viñetas, una línea en blanco entre secciones.
+  const presentacionBloque = construirPresentacion({
+    nombreProducto, precioTexto, incluye: fs.incluye, inicioTexto, modalidadTexto, duracionTexto, metodosPagoTexto, temarioTexto
+  })
+
   return {
     nombreProducto,
+    presentacionBloque,
     precioTexto,                      // null si no hay → el prompt NO da precio
     precioMonto,
     incluyeTexto,
