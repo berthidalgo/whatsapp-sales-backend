@@ -71,6 +71,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { callGemini, calculateCost } from '../lib/gemini.js'
+import { callGroq, schemaToPrompt } from '../lib/groq.js'
 import { flattenFactSheet } from '../response/factsheet-loader.js'
 
 // ════════════════════════════════════════════════════════
@@ -188,6 +189,7 @@ export async function pensarYResponder({
   const startTime = Date.now()
 
   const modeloUsado = overrides?.model || BRAIN_MODEL
+  const provider = (overrides?.provider || 'gemini').toLowerCase()  // 'gemini' (vivo) | 'groq' (banco/fallback)
   const usarSchema = overrides?.sinSchema ? null : BRAIN_RESPONSE_SCHEMA
   // Dos palancas para domar el thinking del modelo en banco (son excluyentes):
   //   - thinkingLevel ('low'|'medium'|'high'): control de los Gemini 3.x.
@@ -230,19 +232,34 @@ export async function pensarYResponder({
     for (let intento = 0; intento < 3; intento++) {
       let result = null
       try {
-        result = await callGemini({
-          model: modeloUsado,
-          systemInstruction,
-          contents: userPrompt,
-          temperature: TEMPERATURE,
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-          thinkingBudget: thinkingBudgetUsado,
-          thinkingLevel: thinkingLevelUsado,
-          responseSchema: usarSchema,
-          location: locationUsada,
-          apiKey: apiKeyUsada,
-          tenantId: estadoLead?.tenantId || 'peru_exporta'
-        })
+        if (provider === 'groq') {
+          // Groq (OpenAI-compatible): sin responseSchema nativo → inyectamos la
+          // descripción del schema en el system prompt para que devuelva el mismo JSON.
+          const sysGroq = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
+          result = await callGroq({
+            model: modeloUsado,
+            systemInstruction: sysGroq,
+            contents: userPrompt,
+            temperature: TEMPERATURE,
+            // Groq no "piensa" con presupuesto como Gemini; el JSON del cerebro es corto.
+            // 8000 inflaba el "tokens requested" y rompía el límite TPM del free tier.
+            maxOutputTokens: 3072
+          })
+        } else {
+          result = await callGemini({
+            model: modeloUsado,
+            systemInstruction,
+            contents: userPrompt,
+            temperature: TEMPERATURE,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            thinkingBudget: thinkingBudgetUsado,
+            thinkingLevel: thinkingLevelUsado,
+            responseSchema: usarSchema,
+            location: locationUsada,
+            apiKey: apiKeyUsada,
+            tenantId: estadoLead?.tenantId || 'peru_exporta'
+          })
+        }
       } catch (callErr) {
         lastErr = callErr
         if (intento < 2) await new Promise(r => setTimeout(r, 1200))
