@@ -332,7 +332,7 @@ export async function pensarYResponder({
     const fbDisponible = fbProvider === 'gemini' ? true : !!process.env.CEREBRAS_API_KEY
     if (!parsed && permitirFallback && fbDisponible) {
       const fbModel = fbProvider === 'cerebras' ? 'gpt-oss-120b' : BRAIN_MODEL
-      console.warn(`[AgentBrain] 🛟 ${provider} (${modeloUsado}) falló tras 3 intentos → FALLBACK a ${fbProvider} (${fbModel})`)
+      console.warn(`[AgentBrain] 🛟 ${provider} (${modeloUsado}) falló tras 3 intentos (causa: ${lastErr?.message || 'desconocida'}) → FALLBACK a ${fbProvider} (${fbModel})`)
       for (let fbIntento = 0; fbIntento < 2 && !parsed; fbIntento++) {
         try {
           let fbResult
