@@ -242,8 +242,9 @@ export async function pensarYResponder({
             contents: userPrompt,
             temperature: TEMPERATURE,
             // Groq no "piensa" con presupuesto como Gemini; el JSON del cerebro es corto.
-            // 8000 inflaba el "tokens requested" y rompía el límite TPM del free tier.
-            maxOutputTokens: 3072
+            // El free tier tiene TPM ajustado (6-12K) y "requested" = input + maxOutputTokens.
+            // Con la ficha real (~9K input) hay que minimizar el output para que quepa.
+            maxOutputTokens: 1024
           })
         } else {
           result = await callGemini({
