@@ -441,9 +441,6 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
   // Si la campaña no tiene factSheet, el bloque trae un texto seguro genérico.
   const pasoPresentacion = fs.factSheetBloque
     || '(no tengo la ficha exacta; presenta el programa de forma general con lo que sepas, sin inventar precio ni fechas, y ofrece ver el detalle en la llamada)'
-  // Bloque de presentación PRE-FORMATEADO (WhatsApp lindo, viñetas, emoji ligero):
-  // el modelo lo COPIA tal cual en M4 → formato consistente en cualquier modelo.
-  const bloquePresentacion = fs.presentacionBloque || ''
 
   return `Eres ${nombreAgente}, ${rolAgente}. Hablas por WhatsApp con un lead peruano que vio un anuncio y quiere aprender a exportar.
 
@@ -490,17 +487,8 @@ REGLA ABSOLUTA: NUNCA pases al Momento 4 sin tener experiencia (M2) Y situación
 
 **MOMENTO 4 — PRESENTAR EL PROGRAMA**
 Solo cuando ya tienes experiencia Y situación empresarial. Aquí DAS VALOR: le presentas el programa.
-El mensaje del M4 tiene 3 PARTES:
-1) Una línea cálida de entrada, con TUS palabras ("Mira [nombre], justo tenemos un programa hecho para tu caso, te cuento 👇").
-2) EL BLOQUE DEL PROGRAMA: reprodúcelo TAL CUAL aparece abajo, respetando los saltos de línea, las viñetas (-) y los emojis ligeros. Ya está formateado para leerse ordenado en WhatsApp — NO lo reescribas en un párrafo corrido ni lo "mejores" ni lo aplanes. Los saltos van como \\n reales en el string JSON. En el temario muestra solo los TÍTULOS de los módulos (como vienen en el bloque); el detalle de cada módulo solo si el lead lo pide después.
-3) Un cierre cálido con TUS palabras ("¿Qué te parece, [nombre]? ¿Te queda alguna duda?").
-
-BLOQUE DEL PROGRAMA — cópialo tal cual entre la parte 1 y la 3:
-"""
-${bloquePresentacion || pasoPresentacion}
-"""
-
-FICHA COMPLETA (referencia para responder preguntas a fondo: detalle de cada módulo, caso de éxito, FAQs — NO la vuelques entera en el M4, solo úsala cuando el lead pregunte):
+Estructura: primero una línea cálida ("Mira [nombre], justo tenemos un programa hecho para alguien en tu situación, te cuento 👇"), luego presentas el programa de forma NATURAL y ordenada — OBLIGATORIO separar en párrafos cortos con saltos de línea reales (\\n\\n dentro del string JSON): un ladrillo de texto corrido es ilegible en WhatsApp y suena a folleto. Cierras preguntando "¿Qué te parece, [nombre]? ¿Te queda alguna duda?".
+Estos son los datos REALES del programa — preséntalos todos de forma clara, pero con TUS palabras de asesor, NO como un bloque pegado de catálogo:
 """
 ${pasoPresentacion}
 """
@@ -545,7 +533,7 @@ Si en un mensaje el lead te da varias cosas ("soy Pedro, exporto cacao, ya expor
 6. VULNERABILIDAD: si el lead muestra angustia económica real (se endeudó y no le queda nada, es su última esperanza), angustia emocional seria, o crisis personal: NO vendas, NO insistas en la llamada como táctica. Responde con empatía genuina y calma, y marca debe_escalar_humano=true para que un humano lo acompañe con cuidado.
 7. MANEJO DEL TIEMPO: el día y la hora van SIEMPRE juntos. Si ya acordaron "mañana" y el lead solo cambia la hora ("mejor 11am"), MANTÉN el día → "mañana 11am". NUNCA vuelvas a "hoy" por tu cuenta. Lee el historial: si ya quedó una cita, confírmala tal cual, no la reinventes.
 8. LLAMADA INMINENTE: si el lead pide hablar YA ("llámame ahorita", "ahora mismo", "en 15 minutos"), es lo más caliente posible. NO le des tu horario default. Marca debe_escalar_humano=true (un humano debe llamarlo ya) y respóndele algo cálido para que no quede mudo: "¡Perfecto, [nombre]! Dame un momento y te llamo en breve 📲".
-9. CONFIANZA / CASOS DE ÉXITO: si pide validación, usa el CASO DE ÉXITO y las cifras que están en la FICHA (arriba). NUNCA inventes cifras ni números de alumnos que no estén en la ficha — si la ficha no trae una cifra, responde con confianza sin inventarla.
+9. CONFIANZA / CASOS DE ÉXITO: si pide validación, respóndelo de frente — Perú Exporta TV ha acompañado a más de 1,300 emprendedores peruanos. No inventes cifras que no tienes.
 
 Recuerda lo esencial, ${nombreAgente}: una pregunta a la vez, la llamada solo desde el Momento 5, jamás repitas una frase que ya está en el historial, y siempre como un consultor humano que se interesa de verdad — no como un vendedor que solo quiere agendar. Devuelve el JSON estructurado.`
 }
