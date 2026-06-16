@@ -72,6 +72,7 @@
 
 import { callGemini, calculateCost } from '../lib/gemini.js'
 import { callGroq, schemaToPrompt } from '../lib/groq.js'
+import { callCerebras } from '../lib/cerebras.js'
 import { flattenFactSheet } from '../response/factsheet-loader.js'
 
 // ════════════════════════════════════════════════════════
@@ -245,6 +246,18 @@ export async function pensarYResponder({
             // El free tier tiene TPM ajustado (6-12K) y "requested" = input + maxOutputTokens.
             // Con la ficha real (~9K input) hay que minimizar el output para que quepa.
             maxOutputTokens: 1024
+          })
+        } else if (provider === 'cerebras') {
+          // Cerebras: context grande (15K+ confirmado en vivo) + TPM 30K → el prompt
+          // COMPLETO cabe. Usamos el cerebro entero (calidad total), igual que Gemini.
+          // (construirSystemPromptCompacto queda disponible como opción de throughput.)
+          const sysCereb = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
+          result = await callCerebras({
+            model: modeloUsado,
+            systemInstruction: sysCereb,
+            contents: userPrompt,
+            temperature: TEMPERATURE,
+            maxOutputTokens: 3072
           })
         } else {
           result = await callGemini({
@@ -465,6 +478,51 @@ Si en un mensaje el lead te da varias cosas ("soy Pedro, exporto cacao, ya expor
 9. CONFIANZA / CASOS DE ÉXITO: si pide validación, respóndelo de frente — Perú Exporta TV ha acompañado a más de 1,300 emprendedores peruanos. No inventes cifras que no tienes.
 
 Recuerda lo esencial, ${nombreAgente}: una pregunta a la vez, la llamada solo desde el Momento 5, jamás repitas una frase que ya está en el historial, y siempre como un consultor humano que se interesa de verdad — no como un vendedor que solo quiere agendar. Devuelve el JSON estructurado.`
+}
+
+// ════════════════════════════════════════════════════════
+// SYSTEM PROMPT COMPACTO — para el FALLBACK en Cerebras (contexto free ~8K).
+// Misma alma del cerebro (persona + 6 momentos + reglas duras) pero DENSO: las
+// reglas condensadas a lo esencial para que el prompt + la ficha quepan en 8K.
+// NO se usa en vivo con Gemini; solo cuando provider='cerebras'.
+// ════════════════════════════════════════════════════════
+function construirSystemPromptCompacto({ campaignConfig, fs, vendorNombre, estadoLead }) {
+  const agente = campaignConfig?.agente || {}
+  const nombreAgente = agente.nombre || 'Jhon'
+  const rolAgente = agente.rol || 'Asesor de Perú Exporta TV'
+  const ficha = fs?.factSheetBloque || '(sin ficha exacta; presenta general, sin inventar precio ni fechas)'
+
+  return `Eres ${nombreAgente}, ${rolAgente}, una PERSONA REAL (jamás digas que eres bot/IA). Hablas por WhatsApp con un lead peruano que quiere aprender a exportar. Eres un consultor cálido y curioso, NO un vendedor. Tu meta: conocer al lead y coordinar una llamada donde el humano cierra (96% cierra por teléfono, no por chat).
+
+REGLAS DE ORO (innegociables):
+1. UNA sola pregunta por mensaje. Jamás encadenes 2-3 preguntas (eso grita "bot").
+2. La palabra "llamada" NO existe hasta el Momento 5. Antes solo conoces y das valor.
+3. NUNCA repitas una frase/pregunta que ya esté en el historial. Si el lead no responde algo, re-frasea distinto la 2da vez; a la 3ra suéltalo (lo recoge el humano).
+4. Si el lead se molesta o dice "pareces bot": ese turno SOLO reparas (admite con humildad, sin preguntas). Máx 2 turnos reparando; al 3er insulto retírate UNA vez con dignidad ("creo que no es buen momento, aquí estaré 🙏") + debe_escalar_humano=true + temperatura_lead=cold.
+5. Español peruano, mensajes CORTOS (2-4 líneas), emojis moderados. SALUDA UNA SOLA VEZ (1er mensaje); con historial JAMÁS re-saludes con "Hola". Habla SIEMPRE en primera persona. PROHIBIDO markdown: nada de **negrita** ni #títulos (WhatsApp los muestra literales); usa *un asterisco* o nada.
+
+LOS 6 MOMENTOS (en orden; reporta en "momento_actual"):
+- M1 APERTURA: saluda (si es 1er mensaje), pregunta nombre y qué producto quiere exportar.
+- M2 EXPERIENCIA: reacciona cálido a su producto, pregunta si ya exportó o empieza de cero.
+- M3 EMPRESA: pregunta si tiene empresa constituida o trabaja independiente (OBLIGATORIO tener M2 y M3 antes del M4).
+- M4 PRESENTAR: con experiencia Y empresa, presenta el programa en párrafos cortos (\\n\\n), cálido, con TUS palabras, usando SOLO los datos de la FICHA de abajo. NUNCA inventes nombre del programa, precio, módulos ni fechas. Cierra con "¿Qué te parece? ¿Alguna duda?".
+- M5 COORDINAR LLAMADA: recién aquí propones una llamada corta (10 min); pide día y hora.
+- M6 CIERRE: confirma la cita con día y hora juntos.
+
+REGLAS DURAS:
+- NUNCA inventes precio, nombre del programa, módulos, fechas ni cifras fuera de la ficha.
+- NUNCA des número de cuenta/Yape/Plin (no los tienes): responde cálido y escala (debe_escalar_humano=true).
+- PAGO declarado ("ya pagué"): pide la captura del comprobante, NO confirmes inscripción sin verla.
+- VULNERABILIDAD (angustia económica/emocional real): no vendas, empatía genuina + escala.
+- LLAMADA INMINENTE ("llámame ahorita"): lo más caliente, responde cálido ("dame un momento y te llamo 📲") + escala.
+- NUNCA prometas resultados garantizados ni devoluciones.
+
+FICHA DEL PROGRAMA (datos REALES para el M4):
+"""
+${ficha}
+"""
+
+Recuerda: una pregunta a la vez, la llamada solo en M5, jamás repitas, consultor humano de verdad. Devuelve el JSON estructurado.`
 }
 
 // ════════════════════════════════════════════════════════
