@@ -65,6 +65,68 @@ export async function callGroq({
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// WHISPER — transcripción de audio entrante (BLOQUE #3, jun 2026)
+// El lead peruano manda muchas notas de voz. Groq corre Whisper GRATIS
+// (whisper-large-v3-turbo) → transcribimos la nota y la tratamos como texto.
+// La API de audio NO es JSON: es multipart/form-data (subida de archivo).
+// ════════════════════════════════════════════════════════════════════════
+const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions'
+const WHISPER_MODEL = 'whisper-large-v3-turbo'
+// Pista de dominio: Whisper la usa como contexto/ortografía → mejora términos
+// peruanos y de exportación (Yape, RUC, palta, ESCEX) y nombres propios.
+const WHISPER_PROMPT_ES = 'Conversacion de WhatsApp en espanol peruano sobre exportacion. Terminos comunes: exportar, exportacion, palta, arandanos, cafe, maca, RUC, Yape, Plin, ESCEX, Peru Exporta.'
+
+/**
+ * Transcribe un audio (base64) a texto con Groq Whisper.
+ * @param {object} args
+ * @param {string} args.base64    - audio en base64 (sin prefijo data:)
+ * @param {string} args.mimeType  - ej. 'audio/ogg; codecs=opus' (nota de voz de WhatsApp)
+ * @param {string} args.language  - hint de idioma ('es')
+ * @returns {Promise<{ ok, texto?, latencyMs?, error? }>}
+ */
+export async function transcribirAudio({ base64, mimeType = 'audio/ogg', language = 'es' }) {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) return { ok: false, error: 'GROQ_API_KEY no seteada' }
+  if (!base64) return { ok: false, error: 'sin_base64' }
+  const startTime = Date.now()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+  try {
+    const buffer = Buffer.from(base64, 'base64')
+    // La extensión del archivo importa para que Groq detecte el formato.
+    const ext = /mpeg|mp3/.test(mimeType) ? 'mp3'
+      : /wav/.test(mimeType) ? 'wav'
+      : /mp4|m4a/.test(mimeType) ? 'm4a'
+      : /webm/.test(mimeType) ? 'webm'
+      : 'ogg'  // las notas de voz de WhatsApp son ogg/opus
+    const form = new FormData()
+    form.append('file', new Blob([buffer], { type: mimeType }), `audio.${ext}`)
+    form.append('model', WHISPER_MODEL)
+    if (language) form.append('language', language)
+    if (WHISPER_PROMPT_ES) form.append('prompt', WHISPER_PROMPT_ES)
+    form.append('response_format', 'json')
+    // NO seteamos Content-Type: fetch lo pone con el boundary correcto del multipart.
+    const res = await fetch(GROQ_TRANSCRIBE_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: ctrl.signal
+    })
+    clearTimeout(timer)
+    const data = await res.json().catch(() => null)
+    if (!res.ok) return { ok: false, error: `groq_whisper_${res.status}: ${JSON.stringify(data?.error || data).slice(0, 200)}` }
+    const texto = (data?.text || '').trim()
+    if (!texto) return { ok: false, error: 'transcripcion_vacia' }
+    return { ok: true, texto, latencyMs: Date.now() - startTime }
+  } catch (e) {
+    clearTimeout(timer)
+    return { ok: false, error: e.name === 'AbortError' ? 'timeout' : e.message }
+  }
+}
+
+export const GROQ_WHISPER_MODEL = WHISPER_MODEL
+
 /**
  * Convierte el responseSchema de Gemini a una instrucción de texto, para modelos sin
  * structured output nativo (Groq). Expande un nivel de anidamiento (ej: slots_detectados).

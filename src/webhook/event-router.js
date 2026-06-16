@@ -45,6 +45,7 @@ import { sendToWhatsApp } from '../whatsapp/send.js'
 import { notificarEscalamiento } from './notifications.js'
 import { descargarMediaBase64 } from './media.js'
 import { leerComprobante, responderAImagen } from '../lib/vision.js'
+import { transcribirAudio } from '../lib/groq.js'
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — routeEvent()
@@ -236,13 +237,42 @@ async function handleLeadMessage({
   startTime
 }) {
 
+  // ─── BLOQUE #3: AUDIO ENTRANTE — transcribir nota de voz con Whisper (Groq) ───
+  // El lead peruano manda muchas notas de voz. En vez de rechazarlas, las
+  // transcribimos con Groq Whisper (whisper-large-v3-turbo) y las tratamos como si
+  // las hubiera escrito → entran al cerebro por el flujo normal (debounce → cerebro),
+  // heredando la compuerta de modo y la persistencia. Si la transcripción falla,
+  // `text` sigue vacío → cae al redirect cortés del handler de no-texto (abajo).
+  if (messageType === 'audio' && !text && !leadInfo.isArchived) {
+    try {
+      const media = await descargarMediaBase64({
+        instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME,
+        messageKey
+      })
+      if (media.ok) {
+        const tr = await transcribirAudio({ base64: media.base64, mimeType: media.mimeType, language: 'es' })
+        if (tr.ok && tr.texto) {
+          console.log(`[EventRouter] 🎙️→📝 Audio de lead ${leadInfo.leadId} transcrito (${tr.latencyMs}ms): "${tr.texto.slice(0, 120)}"`)
+          text = tr.texto   // ← el audio ahora fluye como texto normal
+        } else {
+          console.warn(`[EventRouter] No se pudo transcribir audio de lead ${leadInfo.leadId}: ${tr.error}`)
+        }
+      } else {
+        console.warn(`[EventRouter] No se pudo descargar audio de lead ${leadInfo.leadId}: ${media.error}`)
+      }
+    } catch (err) {
+      console.error(`[EventRouter] Error transcribiendo audio de lead ${leadInfo.leadId}:`, err.message)
+    }
+  }
+
   // ─── Mensaje SIN texto (imagen/audio sin pie de foto) ───
   // Si hay TEXTO (conversación O pie de foto/caption de una imagen), cae al flujo
   // normal del cerebro — el caption es el mensaje del lead (lo lee el código, gratis).
-  // Solo lo SIN texto (imagen sin caption, audio) va al handler especial, que:
+  // Solo lo SIN texto (imagen sin caption, audio que NO se pudo transcribir) va al
+  // handler especial, que:
   //   - imagen en etapa de pago → la LEE con Gemini (comprobante) + escala
   //   - otra imagen → la LEE con Gemini y responde natural (producto/troll)
-  //   - audio → redirect cortés (Whisper = Fase D)
+  //   - audio sin transcripción (descarga/Whisper falló) → redirect cortés
   if (!text) {
     return await manejarNoTextoDelLead({ leadInfo, messageType, instanceName, messageKey, startTime })
   }
