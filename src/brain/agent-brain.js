@@ -83,6 +83,11 @@ import { flattenFactSheet } from '../response/factsheet-loader.js'
 // cambiar de modelo o hacer rollback = editar la env var, sin tocar código.
 // Default seguro: gemini-2.5-flash (la línea base validada).
 const BRAIN_MODEL = process.env.BRAIN_MODEL || 'gemini-2.5-flash'
+// BRAIN_PROVIDER (switch de PRIMARIO, jun 2026): 'gemini' (default) o 'cerebras'.
+// Con BRAIN_PROVIDER=cerebras el cerebro PRINCIPAL pasa a gpt-oss-120b (gratis, ~700ms,
+// calidad 80 vs pro 84 en el examen completo) y el fallback simétrico cae a Gemini.
+// Reversible por env var, sin tocar código → para A/B en vivo (un día pro, otro Cerebras).
+// Default sin la var = comportamiento idéntico de hoy (Gemini principal, Cerebras seguro).
 // Perillas por env var (Sprint A.2, multi-modelo D.1) — prender el 3.5 en
 // producción = setear estas 3 en Render, sin tocar código; rollback = borrarlas.
 //   BRAIN_MODEL=gemini-3.5-flash · BRAIN_LOCATION=global · BRAIN_THINKING_LEVEL=low
@@ -189,8 +194,8 @@ export async function pensarYResponder({
 }) {
   const startTime = Date.now()
 
-  const modeloUsado = overrides?.model || BRAIN_MODEL
-  const provider = (overrides?.provider || 'gemini').toLowerCase()  // 'gemini' (vivo) | 'groq' (banco/fallback)
+  const provider = (overrides?.provider || process.env.BRAIN_PROVIDER || 'gemini').toLowerCase()  // 'gemini' (default) | 'cerebras' (switch BRAIN_PROVIDER en vivo) | 'groq' (banco)
+  const modeloUsado = overrides?.model || (provider === 'cerebras' ? 'gpt-oss-120b' : provider === 'groq' ? 'llama-3.3-70b-versatile' : BRAIN_MODEL)
   const usarSchema = overrides?.sinSchema ? null : BRAIN_RESPONSE_SCHEMA
   // Dos palancas para domar el thinking del modelo en banco (son excluyentes):
   //   - thinkingLevel ('low'|'medium'|'high'): control de los Gemini 3.x.
@@ -315,26 +320,33 @@ export async function pensarYResponder({
       }
     }
 
-    // ─── BLOQUE #2: AUTO-FALLBACK Gemini → Cerebras gpt-oss-120b (riesgo R3) ───
-    // Si tras los 3 reintentos Gemini no entregó JSON usable (timeout/500/JSON roto),
-    // caemos a Cerebras gpt-oss-120b ANTES del rescate → el bot NUNCA queda mudo.
-    // gpt-oss validado en el examen completo (80/82): bot seco-pero-correcto >>> bot mudo.
-    // Solo en VIVO (sin overrides): el banco mide el proveedor que pidió; para PROBAR el
-    // trigger en banco hay que pasar overrides.fallback=true explícito.
+    // ─── AUTO-FALLBACK SIMÉTRICO (BLOQUE #2 + switch de primario, riesgo R3) ───
+    // Si el PRIMARIO no entregó JSON usable tras 3 intentos (timeout/500/JSON roto),
+    // caemos al OTRO proveedor ANTES del rescate → el bot NUNCA queda mudo.
+    // Funciona en ambos sentidos: primario Gemini → fallback Cerebras gpt-oss-120b;
+    // primario Cerebras (BRAIN_PROVIDER=cerebras) → fallback Gemini. gpt-oss validado
+    // en el examen (80/82): bot seco-pero-correcto >>> bot mudo.
+    // Solo en VIVO (sin overrides); en banco se activa con overrides.fallback=true.
     const permitirFallback = overrides ? (overrides.fallback === true) : true
-    if (!parsed && permitirFallback && provider === 'gemini' && process.env.CEREBRAS_API_KEY) {
-      console.warn(`[AgentBrain] 🛟 Gemini (${modeloUsado}) falló tras 3 intentos → FALLBACK a Cerebras gpt-oss-120b`)
-      const sysFb = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
+    const fbProvider = provider === 'cerebras' ? 'gemini' : 'cerebras'
+    const fbDisponible = fbProvider === 'gemini' ? true : !!process.env.CEREBRAS_API_KEY
+    if (!parsed && permitirFallback && fbDisponible) {
+      const fbModel = fbProvider === 'cerebras' ? 'gpt-oss-120b' : BRAIN_MODEL
+      console.warn(`[AgentBrain] 🛟 ${provider} (${modeloUsado}) falló tras 3 intentos → FALLBACK a ${fbProvider} (${fbModel})`)
       for (let fbIntento = 0; fbIntento < 2 && !parsed; fbIntento++) {
         try {
-          const fbResult = await callCerebras({
-            model: 'gpt-oss-120b',
-            systemInstruction: sysFb,
-            contents: userPrompt,
-            temperature: TEMPERATURE,
-            maxOutputTokens: 3072
-          })
-          if (!fbResult?.text) { lastErr = new Error('fallback cerebras sin texto'); continue }
+          let fbResult
+          if (fbProvider === 'cerebras') {
+            const sysFb = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
+            fbResult = await callCerebras({ model: fbModel, systemInstruction: sysFb, contents: userPrompt, temperature: TEMPERATURE, maxOutputTokens: 3072 })
+          } else {
+            fbResult = await callGemini({
+              model: fbModel, systemInstruction, contents: userPrompt, temperature: TEMPERATURE,
+              maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingBudget: thinkingBudgetUsado, thinkingLevel: thinkingLevelUsado,
+              responseSchema: usarSchema, location: locationUsada, apiKey: apiKeyUsada, tenantId: estadoLead?.tenantId || 'peru_exporta'
+            })
+          }
+          if (!fbResult?.text) { lastErr = new Error(`fallback ${fbProvider} sin texto`); continue }
           const limpioFb = fbResult.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
           let parsedFb = null
           try { parsedFb = JSON.parse(limpioFb) } catch (_) {
@@ -344,15 +356,15 @@ export async function pensarYResponder({
           if (parsedFb) {
             parsed = parsedFb
             lastResult = fbResult
-            modeloFinal = 'gpt-oss-120b'
+            modeloFinal = fbModel
             usoFallback = true
-            console.warn('[AgentBrain] ✅ Fallback Cerebras OK — el seguro de 2da línea respondió')
+            console.warn(`[AgentBrain] ✅ Fallback ${fbProvider} OK — el seguro respondió`)
           } else {
-            lastErr = new Error('fallback cerebras devolvió JSON inválido')
+            lastErr = new Error(`fallback ${fbProvider} devolvió JSON inválido`)
           }
         } catch (fbErr) {
           lastErr = fbErr
-          console.warn(`[AgentBrain] fallback cerebras intento ${fbIntento + 1} falló: ${fbErr.message}`)
+          console.warn(`[AgentBrain] fallback ${fbProvider} intento ${fbIntento + 1} falló: ${fbErr.message}`)
         }
       }
     }
