@@ -778,4 +778,7 @@ export function summarizeEventResult(result) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
+// Exportados para tests unitarios — parseo PURO (sin efectos, sin BD/LLM)
+export { detectMessageType, extractText, extractAddressing, extractAdContext }
+
 export const EVENT_ROUTER_VERSION = 'v3_sprint2_lid_extract'
