@@ -144,6 +144,79 @@ async function construirHistorial(prisma, leadId, limite = 12) {
   }))
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// MEMORIA EPISÓDICA — lead que vuelve (jun 2026)
+// Cuando un contacto que YA conversó antes (su conversación quedó en
+// `conversaciones_archivadas`, p.ej. tras un reset) vuelve a escribir, el cerebro
+// arrancaba de CERO (bug Rafael/Alberto). Esto le da "memoria entre sesiones":
+// carga un RESUMEN DE HECHOS de sus conversaciones previas (nombre, producto,
+// experiencia, hasta dónde llegó), NO el transcript crudo (memoria de hechos,
+// estilo agent-memory 2026). SIN vector DB: a esta escala leer de Postgres es lo
+// correcto y más barato (investigación 2026: long-context < stack vectorial para
+// pocos usuarios/sesiones). ADDITIVE: si no hay historial previo devuelve null y
+// el prompt queda IDÉNTICO (cero regresión para leads nuevos).
+// ─────────────────────────────────────────────────────────────────────────
+const STAGE_LEGIBLE_MEMORIA = {
+  first_contact:         'apenas se estaban saludando',
+  discovery:             'estaban conociéndose (qué quería exportar)',
+  qualifying_empresa:    'ya habían hablado de su experiencia y empresa',
+  presenting:            'ya le habías presentado el programa',
+  call_scheduling:       'ya estaban coordinando una llamada',
+  call_confirmed:        'ya habían confirmado una llamada',
+  post_close:            'ya había avanzado al cierre',
+  returning_recognition: 'ya había vuelto antes'
+}
+
+// Función PURA (testeable sin BD): arma el bloque de memoria desde filas archivadas.
+export function construirResumenMemoria(filas, ahora = Date.now()) {
+  if (!Array.isArray(filas) || filas.length === 0) return null
+  const ult = filas[0]  // la conversación archivada más reciente
+  const slots = ult.slots || {}
+  // Filtra valores-basura para no "recordar" datos vacíos o de descarte.
+  const limpio = (v) => (v && typeof v === 'string' && v.trim() && !/no especificad|no tengo|explorando|descart/i.test(v)) ? v.trim() : null
+
+  const nombre = limpio(slots.nombre) || (ult.nombre_detectado && ult.nombre_detectado !== 'null' ? ult.nombre_detectado : null)
+  const datos = []
+  if (nombre) datos.push(`Nombre: ${nombre}`)
+  if (limpio(slots.producto))    datos.push(`Le interesaba exportar: ${limpio(slots.producto)}`)
+  if (limpio(slots.experiencia)) datos.push(`Experiencia: ${limpio(slots.experiencia)}`)
+  if (limpio(slots.empresa))     datos.push(`Situación: ${limpio(slots.empresa)}`)
+
+  let cuando = ''
+  if (ult.archived_at) {
+    const dias = Math.floor((ahora - new Date(ult.archived_at).getTime()) / 86400000)
+    cuando = dias <= 0 ? ', hoy mismo' : dias === 1 ? ', hace 1 día' : `, hace ${dias} días`
+  }
+
+  const lineas = [
+    `# 🧠 MEMORIA — ESTE CONTACTO NO ES NUEVO (ya conversaron antes${cuando})`,
+    `⚠️ MUY IMPORTANTE — LEE ESTO ANTES DE RESPONDER: aunque el historial de mensajes de abajo esté vacío, este lead YA habló contigo en una sesión anterior (se archivó). Por lo tanto NO estás en el Momento 1 y este lead NO es un desconocido. Esto es lo que YA sabes de él/ella:`,
+    ...datos.map(d => `- ${d}`)
+  ]
+  const hastaDonde = STAGE_LEGIBLE_MEMORIA[ult.stage_final]
+  if (hastaDonde) lineas.push(`- La última vez ${hastaDonde}.`)
+  lineas.push(`→ PROHIBIDO presentarte desde cero o preguntar su nombre/producto: YA los sabes (arriba). Salúdalo como un REENCUENTRO cálido y por su nombre (ej: "¡${nombre || 'Hola de nuevo'}! Qué gusto que vuelvas 😊"), y retoma con naturalidad desde donde quedaron. Trátalo como alguien CONOCIDO, no como un lead nuevo. (Este bloque MANDA sobre la apertura del Momento 1.)`)
+  return lineas.join('\n')
+}
+
+async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual) {
+  if (!telefono) return null
+  try {
+    const filas = await prisma.$queryRawUnsafe(
+      `SELECT nombre_detectado, slots, stage_final, archived_at
+         FROM conversaciones_archivadas
+        WHERE telefono = $1 AND lead_id_original <> $2
+        ORDER BY id DESC LIMIT 3`,
+      String(telefono), Number(leadIdActual) || 0
+    )
+    return construirResumenMemoria(filas)
+  } catch (err) {
+    // Degradación elegante (ADN #11): si la memoria falla, el cerebro sigue normal.
+    console.error(`[BrainPipeline] memoria episódica falló (lead ${leadIdActual}):`, err.message)
+    return null
+  }
+}
+
 /**
  * Procesa un mensaje entrante usando el cerebro unificado.
  *
@@ -231,6 +304,13 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     await persistirMensajeLead(leadId, mensajeActual)
 
     // ─── 3. Armar el estadoLead que el cerebro espera ───
+    // Memoria episódica: si este contacto ya conversó antes (conversación
+    // archivada), cargamos un resumen de hechos para que el cerebro lo RECONOZCA
+    // (lead que vuelve). null si es nuevo → el prompt queda idéntico.
+    const memoriaEpisodica = await cargarMemoriaEpisodica(prisma, telefono, leadId)
+    if (memoriaEpisodica) {
+      console.log(`[BrainPipeline] 🧠 Memoria episódica activa para lead ${leadId} (contacto ya conocido)`)
+    }
     const estadoLead = {
       stage: leadState?.currentStage || STAGES.FIRST_CONTACT,
       slots: leadState?.slotsFilled || {},
@@ -238,7 +318,8 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       vendorNombre,
       // Etiqueta del agente en el historial del prompt (nombreCorto). El nombre
       // real lo manda config.agente.nombre (Jhon); sin esto salía "AGENTE".
-      agenteNombre: campaignConfig?.agente?.nombre || vendorNombre
+      agenteNombre: campaignConfig?.agente?.nombre || vendorNombre,
+      memoriaEpisodica
     }
 
     // ─── 4. Llamar al CEREBRO ───

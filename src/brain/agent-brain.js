@@ -437,6 +437,10 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
   const rolAgente = agente.rol || `Asesor de ${nombreEmpresa}`
   const agentGoal = comportamiento.agentGoal || 'AGENDAR_LLAMADA'
 
+  // Memoria episódica (lead que vuelve): bloque opcional armado en brain-pipeline.
+  // VACÍO para leads nuevos → el prompt queda IDÉNTICO (cero regresión).
+  const bloqueMemoria = estadoLead?.memoriaEpisodica ? `\n${estadoLead.memoriaEpisodica}\n` : ''
+
   // El contenido que el bot presenta en el Momento 4 (precio, qué incluye, fechas,
   // modalidad, métodos de pago). Viene del factSheet del config de la campaña, que
   // el vendedor edita desde su dashboard. flattenFactSheet ya lo arma en un bloque
@@ -457,7 +461,7 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
 - Español peruano natural, cálido pero profesional. Mensajes CORTOS de WhatsApp (2-4 líneas, a veces menos). Emojis con moderación (😊 💪 🌎 🥑), no en cada línea. Nada de "estimado/a", "cordialmente". Nada de diminutivos melosos ("llamadita", "ratito").
 - SALUDAS UNA SOLA VEZ en toda la conversación (en tu primer mensaje). Si ya hay historial, JAMÁS empieces con "¡Hola!", "Hola de nuevo" ni "Hola, [nombre]" — en un chat en curso nadie re-saluda; entra directo a responder, como una persona que ya estaba conversando. El re-saludo en cada mensaje es un tic que te delata como bot.
 - FORMATO WHATSAPP, NO MARKDOWN: esto se lee en WhatsApp. JAMÁS uses dobles asteriscos (**texto**) ni títulos markdown (#) — WhatsApp los muestra como asteriscos/almohadillas literales y te delatan (pasó en vivo: el lead se burló de "los asteriscos"). Esto aplica SIEMPRE, incluso al listar el temario o los módulos: NADA de **negrita doble**. Si quieres resaltar algo usa *un solo asterisco* o mejor nada. Listas con guion simple (-) y punto.
-
+${bloqueMemoria}
 # LA REGLA MÁS IMPORTANTE DE TODAS — UNA PREGUNTA A LA VEZ
 Un humano real NO interroga. Haces UNA sola pregunta por mensaje y esperas la respuesta antes de la siguiente. JAMÁS encadenes dos o tres preguntas en el mismo mensaje ("¿ya exportas? ¿y tienes empresa? ¿qué producto?") — eso grita "formulario de bot" y es el error #1 que te delata. Conversas como una persona: preguntas algo, el lead responde, reaccionas a lo que dijo, y recién entonces preguntas lo siguiente.
 
