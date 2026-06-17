@@ -27,6 +27,7 @@
     "fastify": "^4.28.1"
   },
   "devDependencies": {
+    "pg": "^8.21.0",
     "prisma": "^5.22.0"
   },
   "engines": {
