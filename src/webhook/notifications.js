@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
 import { sendToWhatsApp } from '../whatsapp/send.js'
+import { reportError } from '../lib/observability.js'
 
 /**
  * Notifica al vendedor que un lead necesita atención humana.
@@ -88,6 +89,7 @@ export async function notificarEscalamiento({
       if (!sent) console.error(`[Notif] WhatsApp al vendedor falló (lead ${leadId}): ${r.error}`)
     } catch (err) {
       console.error(`[Notif] Excepción enviando WhatsApp al vendedor (lead ${leadId}):`, err.message)
+      reportError(err, { module: 'notifications:whatsapp', leadId })
     }
   } else {
     console.warn('[Notif] NUMERO_JOAN no seteado → no se envía ping de WhatsApp al vendedor')
@@ -104,6 +106,7 @@ export async function notificarEscalamiento({
     persisted = true
   } catch (err) {
     console.error(`[Notif] No se pudo escribir crm_notifications (lead ${leadId}):`, err.message)
+    reportError(err, { module: 'notifications:crm', leadId })
   }
 
   console.log(`[Notif] 🔔 Vendedor notificado del lead ${leadId} | wa:${sent ? 'ok' : 'no'} | crm:${persisted ? 'ok' : 'no'} | ${motivo}`)

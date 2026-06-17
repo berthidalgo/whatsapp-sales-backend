@@ -46,6 +46,7 @@ import { pensarYResponder, summarizeBrainResult, AGENT_BRAIN_VERSION } from './a
 import prisma from '../db/prisma.js'
 import { STAGES, MODES } from '../state/stage-definitions.js'
 import { notificarEscalamiento } from '../webhook/notifications.js'
+import { reportError } from '../lib/observability.js'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Orden del embudo (para proteger contra retrocesos de stage).
@@ -385,6 +386,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
 
   } catch (err) {
     console.error('[BrainPipeline] Error:', err.message)
+    reportError(err, { module: 'brain-pipeline', leadId })
     return {
       ok: false,
       error: `brain_pipeline_exception: ${err.message}`,

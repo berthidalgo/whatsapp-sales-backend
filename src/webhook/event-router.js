@@ -46,6 +46,7 @@ import { notificarEscalamiento } from './notifications.js'
 import { descargarMediaBase64 } from './media.js'
 import { leerComprobante, responderAImagen } from '../lib/vision.js'
 import { transcribirAudio } from '../lib/groq.js'
+import { reportError } from '../lib/observability.js'
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — routeEvent()
@@ -97,6 +98,7 @@ export async function routeEvent(payload, processPipelineFn) {
   } catch (err) {
     console.error(`[EventRouter] Error processing ${eventType}:`, err.message)
     console.error(err.stack?.split('\n').slice(0, 5).join('\n'))
+    reportError(err, { module: 'event-router', eventType })
     return buildErrorResponse('handler_error', startTime, {
       eventType,
       error: err.message
@@ -264,6 +266,7 @@ async function handleLeadMessage({
       }
     } catch (err) {
       console.error(`[EventRouter] Error transcribiendo audio de lead ${leadInfo.leadId}:`, err.message)
+      reportError(err, { module: 'event-router:audio', leadId: leadInfo?.leadId })
     }
   }
 
@@ -480,6 +483,7 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
   } catch (err) {
     // Un fallo aquí JAMÁS tumba el webhook: degradamos al comportamiento viejo (skip).
     console.error(`[EventRouter] Error manejando no-texto de lead ${leadId}:`, err.message)
+    reportError(err, { module: 'event-router:nontext', leadId, messageType })
     return buildResponse('non_text_message_skipped', startTime, { leadId, messageType, error: err.message })
   }
 }
@@ -539,6 +543,7 @@ async function handleVendorMessage({
 
   } catch (err) {
     console.error(`[EventRouter] Error handling vendor message:`, err.message)
+    reportError(err, { module: 'event-router:vendor', leadId: leadInfo?.leadId })
     return buildErrorResponse('vendor_message_handler_failed', startTime, {
       leadId: leadInfo.leadId,
       error: err.message
