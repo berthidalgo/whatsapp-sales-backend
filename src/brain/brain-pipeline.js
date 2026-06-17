@@ -80,7 +80,7 @@ const STAGES_SOLO_HUMANO = new Set([
   STAGES.POST_CLOSE
 ])
 
-function stageRank(stage) {
+export function stageRank(stage) {
   const i = STAGE_ORDER.indexOf(stage)
   return i === -1 ? 0 : i
 }
@@ -102,7 +102,7 @@ function stageRank(stage) {
 // ─────────────────────────────────────────────────────────────────────────
 const HUMAN_ACTIVE_RESUME_HORAS = Number(process.env.HUMAN_ACTIVE_RESUME_HORAS ?? 6)
 
-function debeAutoReanudar(leadState) {
+export function debeAutoReanudar(leadState) {
   if (!(HUMAN_ACTIVE_RESUME_HORAS > 0)) return false  // desactivado o valor inválido
   const entered = leadState?.modeEnteredAt ? new Date(leadState.modeEnteredAt).getTime() : null
   if (!entered) return false
