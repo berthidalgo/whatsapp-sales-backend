@@ -18,7 +18,7 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.join(__dirname, '..')
-const OUT_DIR = path.join(ROOT, 'contexto', 'examen-modelos-2026-06-16')
+const OUT_DIR = path.join(ROOT, 'contexto', process.env.EXAMEN_OUT_SUBDIR || 'examen-modelos-2026-06-16')
 const BASE = 'https://whatsapp-sales-backend.onrender.com'
 
 // ── Config de proveedores ──────────────────────────────────────────────
@@ -200,6 +200,7 @@ async function correrProveedor(prov, evalIds) {
 async function main() {
   const arg = (process.argv[2] || 'both').toLowerCase()
   const evalIds = leerEvalIds()
+  fs.mkdirSync(OUT_DIR, { recursive: true })   // crea la carpeta fresca si no existe (antes solo escribía)
   console.log(`Dataset: ${evalIds.length} casos de eval. Replay: ${REPLAY_CONVS.length} convos. Out: ${OUT_DIR}`)
   const t0 = Date.now()
 
