@@ -84,6 +84,30 @@ function stageRank(stage) {
   return i === -1 ? 0 : i
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// AUTO-RESUME de HUMAN_ACTIVE (Bloque #4, jun 2026)
+// Cuando el cerebro (o un comprobante, o el vendedor) deja al lead en
+// HUMAN_ACTIVE, el bot se calla para no pisar al humano. Pero si NADIE atiende,
+// el lead quedaba mudo PARA SIEMPRE (dolor visto en vivo 2026-06-15: el lead
+// insistió tras escalar y recibió silencio). Este timer lo arregla:
+//   modeEnteredAt = "última vez que un humano tocó la conversación" — se refresca
+//   en CADA mensaje del vendedor (event-router) y en CADA escalada. Si pasaron
+//   más de HUMAN_ACTIVE_RESUME_HORAS sin actividad humana, el cerebro RETOMA
+//   cuando el lead vuelve a escribir (event-driven, sin cron).
+// Seguro por diseño: si el humano está atendiendo, modeEnteredAt se refresca y
+// el timer nunca vence → cero interrupción. Solo reanuda conversaciones
+// ABANDONADAS. PAUSED (rechazo/cierre) NO se reanuda jamás — es terminal.
+// Knob: HUMAN_ACTIVE_RESUME_HORAS (env, default 6; 0 = desactivado = pánico).
+// ─────────────────────────────────────────────────────────────────────────
+const HUMAN_ACTIVE_RESUME_HORAS = Number(process.env.HUMAN_ACTIVE_RESUME_HORAS ?? 6)
+
+function debeAutoReanudar(leadState) {
+  if (!(HUMAN_ACTIVE_RESUME_HORAS > 0)) return false  // desactivado o valor inválido
+  const entered = leadState?.modeEnteredAt ? new Date(leadState.modeEnteredAt).getTime() : null
+  if (!entered) return false
+  return (Date.now() - entered) >= HUMAN_ACTIVE_RESUME_HORAS * 3.6e6
+}
+
 /**
  * Arma el historial de la conversación para el cerebro.
  * Jala los últimos N mensajes del lead desde la BD, ordenados cronológicamente.
@@ -150,7 +174,22 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // del lead e interrumpía al vendedor humano (el handoff solo cancelaba el
     // buffer del instante, no los turnos siguientes). El mensaje del lead SÍ se
     // persiste: la conversación no pierde memoria mientras el humano atiende.
-    const modoActual = leadState?.currentMode || MODES.AUTO_CONSULTIVO
+    let modoActual = leadState?.currentMode || MODES.AUTO_CONSULTIVO
+
+    // ─── 1c. AUTO-RESUME (Bloque #4) ───
+    // Si el lead lleva HUMAN_ACTIVE_RESUME_HORAS en HUMAN_ACTIVE sin que ningún
+    // humano lo atendiera (modeEnteredAt congelado), el cerebro RETOMA en vez de
+    // seguir mudo. Solo HUMAN_ACTIVE (PAUSED es terminal). Ver debeAutoReanudar.
+    if (modoActual === MODES.HUMAN_ACTIVE && debeAutoReanudar(leadState)) {
+      const horas = ((Date.now() - new Date(leadState.modeEnteredAt).getTime()) / 3.6e6).toFixed(1)
+      await prisma.leadState.update({
+        where: { leadId },
+        data: { currentMode: MODES.AUTO_CONSULTIVO, modeEnteredAt: new Date() }
+      })
+      console.log(`[BrainPipeline] ▶️ Auto-resume lead ${leadId}: ${horas}h sin actividad humana en HUMAN_ACTIVE → el cerebro retoma (umbral ${HUMAN_ACTIVE_RESUME_HORAS}h)`)
+      modoActual = MODES.AUTO_CONSULTIVO
+    }
+
     if (modoActual === MODES.HUMAN_ACTIVE || modoActual === MODES.PAUSED) {
       await persistirMensajeLead(leadId, mensajeActual)
       console.log(`[BrainPipeline] 🔇 Lead ${leadId} en modo ${modoActual} → cerebro en silencio (handoff)`)
@@ -270,7 +309,11 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
         currentStage: stageFinal,
         slotsFilled: slotsFusionados,
         lastMessageAt: new Date(),
-        ...(brainResult.debe_escalar_humano ? { currentMode: MODES.HUMAN_ACTIVE } : {})
+        // Al escalar arrancamos el reloj del auto-resume (modeEnteredAt = ahora).
+        // Sin esto el reloj quedaba en la fecha de creación del lead → el bot
+        // retomaría casi al instante (bug cazado al diseñar el Bloque #4). El
+        // comprobante (event-router) y el handoff del vendedor ya lo seteaban.
+        ...(brainResult.debe_escalar_humano ? { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() } : {})
       },
       create: {
         leadId,
@@ -351,4 +394,4 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
   }
 }
 
-export const BRAIN_PIPELINE_VERSION = 'v4_1_sprintA2_escalada_sin_retroceso'
+export const BRAIN_PIPELINE_VERSION = 'v4_2_bloque4_autoresume_human_active'
