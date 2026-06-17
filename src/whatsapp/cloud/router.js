@@ -12,6 +12,8 @@ import { resolveLead } from '../../webhook/lead-resolver.js'
 import { enqueueMessage } from '../../webhook/debounce.js'
 import { procesarConCerebro } from '../../brain/brain-pipeline.js'
 import { parseCloudWebhook } from './parser.js'
+import { sendToWhatsAppCloud } from './sender.js'
+import prisma from '../../db/prisma.js'
 
 export async function procesarWebhookCloud(payload) {
   const eventos = parseCloudWebhook(payload)
@@ -51,18 +53,50 @@ async function procesarMensajeCloud(ev) {
   }
 
   // Mismo camino que Evolution: debounce agrupa ráfagas y el cerebro corre una vez.
+  // CIERRA EL LAZO (fix 2026-06-17): procesarConCerebro CALCULA la respuesta pero NO
+  // la envía ni persiste el msg del BOT — en el path Evolution esa segunda mitad la
+  // hace handler.js (processPipelineFn: send + persist). Llamando al cerebro directo
+  // había que replicarla aquí, o el lead en Cloud quedaría MUDO y el historial roto.
   enqueueMessage({
     leadId,
     text: ev.text,
     processFn: async (combinedText) => {
-      await procesarConCerebro({
+      const resultado = await procesarConCerebro({
         leadId, telefono, mensajeActual: combinedText,
         tenantId: resolution.tenantId, vendorNombre: resolution.vendorNombre
       })
+      await enviarYPersistir(leadId, telefono, resultado)
     },
     metadata: { messageId: ev.messageId, messageType: ev.messageType, provider: 'cloud' }
   })
   return { queued: true, leadId }
+}
+
+// Segunda mitad del turno (la que en Evolution vive en handler.js processPipelineFn):
+// envía la respuesta del cerebro POR CLOUD + persiste el msg del BOT. Mismos guards
+// que el handler: si el cerebro calló (compuerta de modo / sin texto) no se envía; el
+// msg del BOT solo se persiste si el envío fue OK (un no-entregado no entra al historial).
+async function enviarYPersistir(leadId, telefono, resultado) {
+  if (!resultado?.ok) {
+    console.error(`[CloudRouter] cerebro no produjo respuesta lead ${leadId}: ${resultado?.error || 'desconocido'}`)
+    return
+  }
+  const botResponse = resultado.botResponse
+  if (!botResponse || !botResponse.bot_responded || !botResponse.text) {
+    console.log(`[CloudRouter] 🔇 sin envío lead ${leadId}: ${botResponse?.generation?.reason || 'sin respuesta'}`)
+    return
+  }
+  const sendResult = await sendToWhatsAppCloud({ telefono, text: botResponse.text })
+  if (sendResult.ok) {
+    console.log(`[CloudRouter] ✅ enviado a ${telefono} (${botResponse.text.length} chars, ${sendResult.latency_ms}ms)`)
+    try {
+      await prisma.message.create({ data: { leadId, origen: 'BOT', texto: botResponse.text } })
+    } catch (err) {
+      console.error(`[CloudRouter] no se pudo persistir msg BOT lead ${leadId}:`, err.message)
+    }
+  } else {
+    console.error(`[CloudRouter] ❌ envío Cloud falló lead ${leadId}: ${sendResult.error} ${sendResult.errors?.join(' | ') || ''}`)
+  }
 }
 
 export const CLOUD_ROUTER_VERSION = 'v1_cloud_to_pipeline'
