@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import * as Sentry from '@sentry/node'
 import { PrismaClient } from '@prisma/client'
 import { handleWebhook } from './webhook/handler.js'
 import {
@@ -52,6 +53,12 @@ const __dirname = dirname(__filename)
 
 const prisma = new PrismaClient({ log: ['error'] })
 const app = Fastify({ logger: false })
+
+// Sentry: captura los errores que Fastify atrapa en los handlers de ruta (los
+// no atrapados ya los toma la SDK por los handlers globales). INERTE si no hay
+// SENTRY_DSN: la init real vive en instrument.mjs (cargado vía --import antes
+// que todo); acá solo enganchamos el error handler de Fastify si está activo.
+if (process.env.SENTRY_DSN) Sentry.setupFastifyErrorHandler(app)
 
 await app.register(cors, {
   origin: [
