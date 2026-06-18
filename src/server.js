@@ -153,6 +153,7 @@ app.post('/debug/brain-test', async (req, reply) => {
       stage_sugerido: result.stage_sugerido,
       debe_escalar_humano: result.debe_escalar_humano,
       temperatura_lead: result.temperatura_lead,
+      compromiso: result.compromiso || null,   // motor de compromisos (Fase D): {tipo, descripcion, fecha_iso}
       guardrail_flags: result.guardrail_flags,
       audit: result.audit,
       campaign_usada: config ? campaignSlug : 'NINGUNA (genérico)',
