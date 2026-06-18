@@ -33,7 +33,7 @@ import { BRAIN_EVALS, BRAIN_EVALS_VERSION } from './brain/brain-evals-dataset.js
 import { flattenFactSheet } from './response/factsheet-loader.js'
 
 // ── Fase D: motor de followups (disparado por cron externo) ──
-import { ejecutarFollowups, FOLLOWUP_ENGINE_VERSION } from './motor/followupEngine.js'
+import { ejecutarFollowups, ejecutarRecordatoriosCompromiso, FOLLOWUP_ENGINE_VERSION } from './motor/followupEngine.js'
 
 // ── WhatsApp Cloud API (Meta): recepción. Apagado por default (WHATSAPP_PROVIDER=evolution) ──
 import { procesarWebhookCloud } from './whatsapp/cloud/router.js'
@@ -443,8 +443,12 @@ async function handleCronFollowup(req, reply) {
   if (secret !== process.env.CRON_SECRET) {
     return reply.code(401).send({ error: 'unauthorized' })
   }
-  const r = await ejecutarFollowups()
-  return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, ...r })
+  // Dos motores en el mismo tick (UptimeRobot llama /cron/followup cada 5 min):
+  // followups por SILENCIO + recordatorios de COMPROMISOS fechados. SECUENCIAL (no
+  // paralelo) para no mandar dos WhatsApp a la vez = cadencia anti-baneo respetada.
+  const followups = await ejecutarFollowups()
+  const compromisos = await ejecutarRecordatoriosCompromiso()
+  return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, followups, compromisos })
 }
 app.get('/cron/followup',  handleCronFollowup)
 app.post('/cron/followup', handleCronFollowup)

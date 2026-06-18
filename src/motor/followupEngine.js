@@ -194,4 +194,77 @@ export async function ejecutarFollowups() {
   return resumen
 }
 
-export const FOLLOWUP_ENGINE_VERSION = 'v4_cerebro_v20_2h_24h_ventana'
+// ════════════════════════════════════════════════════════
+// MOTOR DE COMPROMISOS — recordatorios de promesas FECHADAS (Fase D)
+// El cerebro detecta "te pago el viernes" y lo guarda en `commitments` con due_date.
+// Aquí, cuando un compromiso VENCE sin cumplirse, mandamos UN recordatorio suave y
+// marcamos reminder_sent (una sola vez por compromiso). MISMAS reglas de seguridad que
+// los followups: ventana horaria, solo AUTO_CONSULTIVO, no archivados, cadencia anti-baneo.
+// Distinto del followup por silencio: aquí el disparo es la FECHA del compromiso, no el silencio.
+// ════════════════════════════════════════════════════════
+const PLANTILLA_COMPROMISO =
+  'Hola {{nombre}} 👋 ¿Cómo vas? Quedó algo pendiente de lo que conversamos — sin apuro, pero aquí estoy si quieres que lo cerremos juntos 😊'
+
+const SQL_COMPROMISOS_VENCIDOS = `
+  SELECT c.id AS commitment_id, c.lead_id AS "leadId", l.telefono,
+         COALESCE(NULLIF(l."nombreDetectado",''), ls.slots_filled->>'nombre') AS nombre
+  FROM commitments c
+  JOIN leads l ON l.id = c.lead_id
+  JOIN lead_state ls ON ls.lead_id = c.lead_id
+  WHERE c.fulfilled = false
+    AND c.reminder_sent = false
+    AND c.due_date <= now()
+    AND ls.current_mode = 'AUTO_CONSULTIVO'
+    AND l.archived_at IS NULL
+  ORDER BY c.due_date ASC
+  LIMIT ${MAX_POR_CICLO}
+`
+
+export async function ejecutarRecordatoriosCompromiso() {
+  const t0 = Date.now()
+
+  // Misma guarda de ventana horaria: nada de recordatorios de madrugada.
+  if (!enVentanaHoraria()) {
+    return { ok: true, skipped: 'fuera_de_ventana_horaria', hora_peru: horaPeru(), enviados: 0 }
+  }
+
+  let vencidos = []
+  try {
+    vencidos = await prisma.$queryRawUnsafe(SQL_COMPROMISOS_VENCIDOS)
+  } catch (err) {
+    console.error('[Compromiso] Error consultando vencidos:', err.message)
+    return { ok: false, error: 'query_failed', detail: err.message }
+  }
+
+  let enviados = 0, errores = 0
+  for (const c of vencidos) {
+    const texto = interpolar(PLANTILLA_COMPROMISO, { nombre: c.nombre })
+    try {
+      // Nota Cloud API (futuro): un compromiso vencido suele caer FUERA de la ventana de
+      // servicio de 24h → allá requerirá template aprobado (igual que followup_24h). Con
+      // Evolution va como texto normal. Por ahora (Evolution) se envía texto.
+      const r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: INSTANCE })
+      if (!r.ok) { errores++; continue }
+
+      // Marcar PRIMERO el recordatorio como enviado (idempotencia: si el insert del mensaje
+      // falla, no reintentamos el envío en el próximo ciclo).
+      await prisma.$executeRaw`
+        UPDATE commitments SET reminder_sent = true, reminder_sent_at = now(), updated_at = now()
+        WHERE id = ${c.commitment_id}::uuid`
+      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto } })
+
+      enviados++
+      console.log(`[Compromiso] ✅ recordatorio a lead ${c.leadId} (commitment ${c.commitment_id})`)
+      if (enviados < vencidos.length) await sleep(PAUSA_ENTRE_MS)   // cadencia humana
+    } catch (err) {
+      errores++
+      console.error(`[Compromiso] Error enviando a lead ${c.leadId}:`, err.message)
+    }
+  }
+
+  const resumen = { ok: true, vencidos: vencidos.length, enviados, errores, hora_peru: horaPeru(), ms: Date.now() - t0 }
+  console.log(`[Compromiso] 🔔 ciclo: ${JSON.stringify(resumen)}`)
+  return resumen
+}
+
+export const FOLLOWUP_ENGINE_VERSION = 'v5_cerebro_v20_followups_+_compromisos'

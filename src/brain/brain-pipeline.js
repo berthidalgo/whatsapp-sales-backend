@@ -42,6 +42,7 @@
 //   espera el visto bueno humano.
 // ════════════════════════════════════════════════════════════════════════
 
+import { randomUUID } from 'node:crypto'
 import { pensarYResponder, summarizeBrainResult, AGENT_BRAIN_VERSION } from './agent-brain.js'
 import prisma from '../db/prisma.js'
 import { STAGES, MODES } from '../state/stage-definitions.js'
@@ -126,6 +127,42 @@ async function persistirMensajeLead(leadId, texto) {
     await prisma.message.create({ data: { leadId, origen: 'LEAD', texto } })
   } catch (err) {
     console.error(`[BrainPipeline] No se pudo persistir mensaje LEAD ${leadId}:`, err.message)
+  }
+}
+
+// Pure: ¿el compromiso es FECHABLE? (tiene fecha_iso parseable y a FUTURO). Exportado para test.
+export function compromisoEsValido(compromiso, ahoraMs = Date.now()) {
+  if (!compromiso?.fecha_iso) return false
+  const t = new Date(compromiso.fecha_iso).getTime()
+  return !isNaN(t) && t > ahoraMs
+}
+
+// Registra/actualiza el COMPROMISO fechado del lead (motor de compromisos, Fase D).
+// El cerebro detecta "te pago el viernes" y lo normaliza a ISO (compromiso.fecha_iso);
+// aquí se guarda en `commitments` para que el motor lo recuerde al vencer. UPSERT del
+// compromiso ACTIVO (sin cumplir + sin recordar): si el lead reprograma, se ACTUALIZA en
+// vez de duplicar. Tabla por SQL crudo (no está en el schema de Prisma, igual que followup_queue).
+async function persistirCompromiso(leadId, compromiso) {
+  if (!compromisoEsValido(compromiso)) return   // sin fecha, inválida o pasada → ignorar
+  const due = new Date(compromiso.fecha_iso)
+  const desc = `${compromiso.tipo || 'otro'}: ${(compromiso.descripcion || 'compromiso del lead').trim()}`.slice(0, 300)
+  try {
+    const activo = await prisma.$queryRaw`
+      SELECT id FROM commitments
+      WHERE lead_id = ${leadId} AND fulfilled = false AND reminder_sent = false
+      LIMIT 1`
+    if (activo.length) {
+      await prisma.$executeRaw`
+        UPDATE commitments SET due_date = ${due.toISOString()}::timestamptz, description = ${desc}, updated_at = now()
+        WHERE id = ${activo[0].id}::uuid`
+    } else {
+      await prisma.$executeRaw`
+        INSERT INTO commitments (id, lead_id, description, due_date, fulfilled, reminder_sent, created_at, updated_at)
+        VALUES (${randomUUID()}::uuid, ${leadId}, ${desc}, ${due.toISOString()}::timestamptz, false, false, now(), now())`
+    }
+    console.log(`[BrainPipeline] 📌 compromiso lead ${leadId}: ${desc} @ ${due.toISOString()}`)
+  } catch (err) {
+    console.error(`[BrainPipeline] No se pudo registrar compromiso lead ${leadId}:`, err.message)
   }
 }
 
@@ -438,6 +475,15 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
         dataExtra: brainResult.como_cerrarlo ? { comoCerrarlo: brainResult.como_cerrarlo } : null,
         nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || 'el programa'
       }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
+    }
+
+    // ─── 7d. Registrar COMPROMISO del lead (motor de compromisos, Fase D) ───
+    // Fire-and-forget: si el lead prometió algo con fecha ("te pago el viernes"), lo
+    // guardamos para que el motor lo recuerde al vencer. NO bloquea la respuesta al lead.
+    // null en la inmensa mayoría de turnos → cero efecto.
+    if (brainResult.compromiso?.fecha_iso) {
+      persistirCompromiso(leadId, brainResult.compromiso)
+        .catch(err => console.error(`[BrainPipeline] compromiso lead ${leadId}:`, err.message))
     }
 
     // ─── 8. Devolver con la forma que espera el handler ───

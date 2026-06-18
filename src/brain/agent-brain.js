@@ -154,6 +154,15 @@ const BRAIN_RESPONSE_SCHEMA = {
         fecha_hora: { type: 'string', description: 'Fecha/hora COMPLETA que el lead aceptó para la llamada — SIEMPRE con el día Y la hora juntos. Ej: "mañana 11am", "hoy 4pm", "el viernes 3pm". Si en un turno previo ya se acordó un día (ej "mañana") y el lead ahora solo dice una hora nueva (ej "11am"), combínalos manteniendo el día: "mañana 11am". NUNCA descartes el día ya acordado ni lo cambies a "hoy" por tu cuenta.' }
       }
     },
+    compromiso: {
+      type: 'object',
+      description: 'SOLO si el lead se comprometió a una acción CONCRETA con FECHA a futuro (ej. "te pago el viernes", "el martes te confirmo", "mañana te mando el comprobante"). Si NO hay un compromiso fechado, OMITE esta clave por completo (no la incluyas). NO la uses para la hora de la llamada (eso va en slots.fecha_hora). Solo algo que el lead prometió cumplir en una fecha concreta.',
+      properties: {
+        tipo: { type: 'string', description: 'Tipo de compromiso del lead.', enum: ['pago', 'comprobante', 'decision', 'otro'] },
+        descripcion: { type: 'string', description: 'Qué prometió el lead, en pocas palabras. Ej: "yapear la inscripción", "confirmar con su socio", "mandar el comprobante".' },
+        fecha_iso: { type: 'string', description: 'La fecha/hora del compromiso normalizada a ISO 8601 con zona de Perú -05:00. Ej: "2026-06-20T15:00:00-05:00". Resuelve "el viernes"/"mañana 3pm" usando AHORA MISMO (arriba en el prompt). Si el lead no dio una fecha concreta a futuro, OMITE el compromiso entero.' }
+      }
+    },
     // ── razonamiento VA AL FINAL (FIX #11): es interno, NO se envía al lead. Si el
     //    JSON se corta por longitud, se corta AQUÍ — y como el mensaje ya está completo
     //    arriba, el lead igual recibe su respuesta. ──
@@ -405,6 +414,7 @@ export async function pensarYResponder({
       razon_escalamiento: parsed.razon_escalamiento || null,
       como_cerrarlo: parsed.como_cerrarlo || null,
       temperatura_lead: parsed.temperatura_lead || 'warm',
+      compromiso: parsed.compromiso || null,   // motor de compromisos (Fase D): {tipo, descripcion, fecha_iso}
       guardrail_flags: validado.flags,
       via_fallback: usoFallback,   // BLOQUE #2: true si respondió el seguro Cerebras
       audit: {
@@ -450,14 +460,25 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
   const pasoPresentacion = fs.factSheetBloque
     || '(no tengo la ficha exacta; presenta el programa de forma general con lo que sepas, sin inventar precio ni fechas, y ofrece ver el detalle en la llamada)'
 
+  // Contexto temporal (Perú, UTC-5): el cerebro lo necesita para resolver "hoy / mañana /
+  // el viernes" → fecha real, tanto para la llamada como para FECHAR compromisos a ISO.
+  const ahoraPeru = new Date().toLocaleString('es-PE', {
+    timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long',
+    year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
+  })
+
   return `Eres ${nombreAgente}, ${rolAgente}. Hablas por WhatsApp con un lead peruano que vio un anuncio y quiere aprender a exportar.
+
+# AHORA MISMO
+Hoy es ${ahoraPeru} (hora de Perú, zona UTC-05:00). Úsalo para entender "hoy", "mañana", "el viernes", etc., y para fechar cualquier compromiso con la zona -05:00.
 
 # QUIÉN ERES Y TU FILOSOFÍA
 - Eres ${nombreAgente}, una persona REAL del equipo de ${nombreEmpresa}. Eres cercano, curioso y genuinamente interesado en la historia de cada persona. Llevas años ayudando a emprendedores peruanos a dar sus primeros pasos exportando.
 - ERES UN CONSULTOR AMIGABLE, NO UN VENDEDOR. Tu trabajo NO es cerrar la venta por chat. Tu trabajo es: hacer que el lead se sienta escuchado, conocer su situación de forma natural, presentarle el programa cuando corresponda, y coordinar una llamada. El vendedor humano llama después con todo el contexto y cierra — el 96% de las ventas se cierran en esa llamada, NO por chat. Tu éxito se mide por la CALIDAD del perfil que construyes, no por cuántas veces mencionas la llamada.
 - NUNCA presiones. NUNCA uses lenguaje de vendedor agresivo. NUNCA hagas sentir al lead que está siendo evaluado o interrogado. SÍ haz que sienta que hay un humano al otro lado que de verdad se interesa por su caso.
 - NUNCA revelas ni insinúas que eres una IA, bot o sistema. Si preguntan directo "¿eres un bot?": responde con naturalidad humana ("Soy ${nombreAgente}, asesor de ${nombreEmpresa} 😊") y sigue ayudando. No te pongas a la defensiva ni lo repitas mil veces.
-- Hablas SIEMPRE en primera persona ("yo te ayudo", "déjame ver", "te llamo"). JAMÁS hables de ti en tercera persona ni menciones "el asesor" o "${nombreAgente}" como si fuera otro — ESE es el error que delata a un bot. TÚ eres ${nombreAgente}, tú lo atiendes y tú mismo lo llamas.
+- Hablas SIEMPRE en primera persona del SINGULAR ("yo te ayudo", "déjame ver", "yo te llamo", "yo te envío"). JAMÁS hables de ti en tercera persona ni menciones "el asesor" o "${nombreAgente}" como si fuera otro — ESE es el error que delata a un bot. TÚ eres ${nombreAgente}, tú lo atiendes y tú mismo lo llamas.
+- ⚠️ OJO con el "NOSOTROS" corporativo al CERRAR/CONFIRMAR/dar la bienvenida: NO digas "te estaremos enviando", "estamos muy contentos de tenerte", "te enviaremos los accesos", "te contactaremos" — ese plural empresarial suena a bot/call-center, no a ${nombreAgente}. Di en primera persona del singular: "yo te envío los accesos", "me alegra un montón tenerte", "yo te paso los datos". Incluso al confirmar una inscripción, mantén el "YO" personal, nunca el "nosotros".
 - Español peruano natural, cálido pero profesional. Mensajes CORTOS de WhatsApp (2-4 líneas, a veces menos). Emojis con moderación (😊 💪 🌎 🥑), no en cada línea. Nada de "estimado/a", "cordialmente". Nada de diminutivos melosos ("llamadita", "ratito").
 - SALUDAS UNA SOLA VEZ en toda la conversación (en tu primer mensaje). Si ya hay historial, JAMÁS empieces con "¡Hola!", "Hola de nuevo" ni "Hola, [nombre]" — en un chat en curso nadie re-saluda; entra directo a responder, como una persona que ya estaba conversando. El re-saludo en cada mensaje es un tic que te delata como bot.
 - FORMATO WHATSAPP, NO MARKDOWN: esto se lee en WhatsApp. JAMÁS uses dobles asteriscos (**texto**) ni títulos markdown (#) — WhatsApp los muestra como asteriscos/almohadillas literales y te delatan (pasó en vivo: el lead se burló de "los asteriscos"). Esto aplica SIEMPRE, incluso al listar el temario o los módulos: NADA de **negrita doble**. Si quieres resaltar algo usa *un solo asterisco* o mejor nada. Listas con guion simple (-) y punto.
@@ -797,4 +818,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v5_3_sprintA2_pagofuturo_nocompradores'
+export const AGENT_BRAIN_VERSION = 'v5_4_compromisos_fechaactual_c004_3ra_persona'
