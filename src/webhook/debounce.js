@@ -43,6 +43,55 @@ const debounceState = new Map()
 // }
 
 // ════════════════════════════════════════════════════════
+// KILL-STALE (Paso 2 — anti-cascade) — generación monotónica por lead
+// ════════════════════════════════════════════════════════
+// El problema: el cerebro tarda ~18s pero la ventana de debounce es 6s. Si el lead
+// manda un mensaje MIENTRAS el cerebro piensa, el pipeline en vuelo igual enviaba su
+// respuesta y luego el mensaje nuevo generaba OTRA → 2 mensajes en cascada (incidente
+// real con Óscar: 2 Enter → 2 respuestas, cada una con su pregunta).
+//
+// El fix: cada mensaje nuevo del lead INCREMENTA esta generación. El pipeline captura
+// la generación al ARRANCAR (getMessageGeneration) y, antes de ENVIAR, si la generación
+// actual es MAYOR (llegó algo nuevo mientras pensaba) DESCARTA su respuesta obsoleta —
+// el mensaje nuevo (ya encolado en el buffer) producirá la respuesta final que lee TODO.
+//
+// MUTE-SAFE: un bump SIEMPRE ocurre dentro de enqueueMessage, que SIEMPRE bufferea el
+// mensaje → si descartamos, hay garantizado un mensaje encolado que se procesará. Jamás
+// queda mudo. SINGLE-INSTANCE: Render corre 1 instancia → la memoria es la fuente de
+// verdad compartida (multi-instancia futuro → mover a Redis, igual que el debounce/lock).
+//
+// Mapa con poda por TTL (mismo patrón que idempotency.js): el TTL (10min) >> lo que dura
+// un turno (<1min) → JAMÁS poda algo en vuelo. Se poda perezoso al crecer (sin timer).
+const messageGeneration = new Map()   // leadId → { gen, touched }
+const GENERATION_TTL_MS = 10 * 60 * 1000
+const GENERATION_PRUNE_AT = 1000      // poda perezosa cuando el mapa pasa este tamaño
+
+function pruneGenerations() {
+  const now = Date.now()
+  for (const [leadId, v] of messageGeneration.entries()) {
+    if (now - v.touched > GENERATION_TTL_MS) messageGeneration.delete(leadId)
+  }
+}
+
+// Incrementa la generación del lead (un mensaje nuevo llegó). Devuelve la nueva.
+function bumpGeneration(leadId) {
+  if (messageGeneration.size > GENERATION_PRUNE_AT) pruneGenerations()
+  const gen = (messageGeneration.get(leadId)?.gen || 0) + 1
+  messageGeneration.set(leadId, { gen, touched: Date.now() })
+  return gen
+}
+
+/**
+ * Generación actual del lead. El pipeline la captura al arrancar y la re-chequea antes
+ * de enviar: si subió, su respuesta quedó obsoleta (llegó un mensaje nuevo) → descártala.
+ * @param {number} leadId
+ * @returns {number} generación (0 si el lead nunca encoló)
+ */
+export function getMessageGeneration(leadId) {
+  return messageGeneration.get(leadId)?.gen || 0
+}
+
+// ════════════════════════════════════════════════════════
 // API PÚBLICA — enqueueMessage()
 // ════════════════════════════════════════════════════════
 
@@ -108,6 +157,12 @@ export function enqueueMessage({ leadId, text, processFn, metadata = {} }) {
     timestamp: Date.now(),
     metadata
   })
+
+  // ─── KILL-STALE: un mensaje nuevo del lead invalida cualquier respuesta en vuelo ───
+  // Se incrementa SIEMPRE que entra un mensaje (incluido el re-encolado por el lock):
+  // así el pipeline que esté pensando detecta que su respuesta quedó obsoleta y la
+  // descarta antes de enviarla (evita la cascada de 2 mensajes).
+  bumpGeneration(leadId)
 
   // ─── Cancelar timer anterior si existe ───
   if (leadDebounce.timer) {
@@ -253,10 +308,11 @@ export function clearAllDebounces() {
     }
   }
   debounceState.clear()
+  messageGeneration.clear()   // kill-stale: resetear generaciones junto con el debounce
   console.log('[Debounce] All debounces cleared')
 }
 
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const DEBOUNCE_VERSION = 'v3_6s_window_latencia'
+export const DEBOUNCE_VERSION = 'v4_killstale_anticascade'

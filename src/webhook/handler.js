@@ -27,7 +27,7 @@
 import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
-import { enqueueMessage } from './debounce.js'
+import { enqueueMessage, getMessageGeneration } from './debounce.js'
 import { sendToWhatsApp } from './sender.js'
 import { procesarConCerebro } from '../brain/brain-pipeline.js'
 
@@ -147,8 +147,14 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
 
   processingLeads.add(leadId)
 
+  // ─── KILL-STALE (Paso 2, anti-cascade) ───
+  // Generación del lead al ARRANCAR este turno. Si el lead manda un mensaje nuevo
+  // mientras el cerebro piensa (~18s > ventana de debounce de 6s), la generación subirá
+  // y, antes de enviar, descartaremos esta respuesta por obsoleta (ver más abajo).
+  const genAtStart = getMessageGeneration(leadId)
+
   try {
-    console.log(`[Pipeline] ▶️ Starting for lead ${leadId} (${telefono}): ${bufferMetadata?.messageCount || 1} msg combined`)
+    console.log(`[Pipeline] ▶️ Starting for lead ${leadId} (${telefono}): ${bufferMetadata?.messageCount || 1} msg combined (gen ${genAtStart})`)
 
     let stateResult
 
@@ -183,6 +189,18 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
 
     if (!botResponse.text) {
       console.warn(`[Pipeline] bot_responded=true but text is empty for lead ${leadId}`)
+      return
+    }
+
+    // ─── KILL-STALE: ¿llegó un mensaje nuevo mientras el cerebro pensaba? ───
+    // Si la generación subió, el lead siguió escribiendo (varios Enter) → ESTA respuesta
+    // quedó OBSOLETA (no leyó lo último que dijo). La DESCARTAMOS sin enviar ni persistir:
+    // el mensaje nuevo ya está encolado en el debounce y producirá la respuesta FINAL que
+    // lee todo. Así se evita la cascada (2 mensajes seguidos, cada uno con su pregunta).
+    // El avance del lead (slots/stage que el cerebro ya guardó) NO se pierde; solo se
+    // descarta el ENVÍO obsoleto. MUTE-SAFE: el mensaje nuevo encolado siempre responde.
+    if (getMessageGeneration(leadId) > genAtStart) {
+      console.warn(`[Pipeline] 🗑️ Lead ${leadId}: llegó mensaje nuevo mientras el cerebro pensaba (gen ${genAtStart}→${getMessageGeneration(leadId)}) → DESCARTO respuesta obsoleta; responde el turno nuevo (anti-cascade)`)
       return
     }
 
@@ -246,4 +264,4 @@ export function getActivePipelines() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const HANDLER_VERSION = 'v23_sprintA_persist_bot_msg'
+export const HANDLER_VERSION = 'v24_killstale_anticascade'
