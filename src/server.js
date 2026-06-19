@@ -154,6 +154,7 @@ app.post('/debug/brain-test', async (req, reply) => {
       debe_escalar_humano: result.debe_escalar_humano,
       temperatura_lead: result.temperatura_lead,
       compromiso: result.compromiso || null,   // motor de compromisos (Fase D): {tipo, descripcion, fecha_iso}
+      cierre: result.cierre || null,           // closer consultivo (v5_5): {ofrecio_llamada, objecion_trabajada, palanca}
       guardrail_flags: result.guardrail_flags,
       audit: result.audit,
       campaign_usada: config ? campaignSlug : 'NINGUNA (genérico)',
@@ -436,6 +437,18 @@ app.get('/webhook',  async () => ({ status: 'webhook activo', version: '7.0.0' }
 // Lo dispara un cron externo (cron-job.org / Render Cron) cada ~15 min.
 // Protegido por secret (?secret= o header x-cron-secret). El motor ya tiene su
 // propia ventana horaria, así que es seguro pegarle aunque sea de madrugada.
+//
+// CANDADO DE CONCURRENCIA (incidente Óscar 2026-06-19): UptimeRobot puede pegarle a
+// /cron/followup dos veces casi simultáneas (timeout/retry). Sin candado, ambas corridas
+// leían al mismo lead como "en silencio" — la idempotencia de followup_queue se LEE al
+// inicio de la corrida pero se ESCRIBE recién tras enviar → ventana de carrera → mandaban
+// el MISMO mensaje 2 veces (visto: doble followup a Óscar con 1.1s de diferencia). El flag
+// en memoria serializa las corridas concurrentes del MISMO proceso. Render corre UNA sola
+// instancia (verificado) + UptimeRobot lo mantiene despierto → un flag basta y protege a
+// los DOS motores con un guard. (El día que escalemos a multi-instancia → advisory lock de
+// Postgres, porque la memoria deja de ser compartida entre procesos.)
+let cronEjecutandose = false
+
 async function handleCronFollowup(req, reply) {
   if (!process.env.CRON_SECRET) {
     return reply.code(503).send({ error: 'CRON_SECRET no configurado en el entorno' })
@@ -444,12 +457,22 @@ async function handleCronFollowup(req, reply) {
   if (secret !== process.env.CRON_SECRET) {
     return reply.code(401).send({ error: 'unauthorized' })
   }
-  // Dos motores en el mismo tick (UptimeRobot llama /cron/followup cada 5 min):
-  // followups por SILENCIO + recordatorios de COMPROMISOS fechados. SECUENCIAL (no
-  // paralelo) para no mandar dos WhatsApp a la vez = cadencia anti-baneo respetada.
-  const followups = await ejecutarFollowups()
-  const compromisos = await ejecutarRecordatoriosCompromiso()
-  return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, followups, compromisos })
+  // Si ya hay una corrida en vuelo, esta se descarta (anti doble-envío). El flag se setea
+  // SÍNCRONO antes de cualquier await → una 2da request concurrente lo ve true y sale.
+  if (cronEjecutandose) {
+    return reply.send({ skipped: 'already_running', engine: FOLLOWUP_ENGINE_VERSION })
+  }
+  cronEjecutandose = true
+  try {
+    // Dos motores en el mismo tick (UptimeRobot llama /cron/followup cada 5 min):
+    // followups por SILENCIO + recordatorios de COMPROMISOS fechados. SECUENCIAL (no
+    // paralelo) para no mandar dos WhatsApp a la vez = cadencia anti-baneo respetada.
+    const followups = await ejecutarFollowups()
+    const compromisos = await ejecutarRecordatoriosCompromiso()
+    return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, followups, compromisos })
+  } finally {
+    cronEjecutandose = false  // se libera pase lo que pase (éxito o excepción)
+  }
 }
 app.get('/cron/followup',  handleCronFollowup)
 app.post('/cron/followup', handleCronFollowup)

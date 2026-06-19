@@ -137,6 +137,44 @@ export function compromisoEsValido(compromiso, ahoraMs = Date.now()) {
   return !isNaN(t) && t > ahoraMs
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// ESTADO DEL CLOSER (v5_5, anti-disco-rayado del cierre)
+// El cerebro reporta su jugada de cierre por turno (brainResult.cierre); aquí la
+// ACUMULAMOS turno a turno en lead_state (bajo la clave interna _cierre dentro de
+// slotsFilled, sin migración de BD) y le inyectamos de vuelta un RESUMEN legible.
+// Cierra el bucle: el bot SABE cuántas veces ya ofreció la llamada y qué objeciones
+// ya resolvió → no puede rogar/repetir aunque el LLM "olvide". Estrategia "Write"
+// del dossier de investigación (context engineering). Funciones PURAS = testeables.
+// ─────────────────────────────────────────────────────────────────────────
+const CIERRE_VACIO = { ofertas_llamada: 0, objeciones: [], ultima_palanca: null }
+
+// Acumula el estado de cierre previo + la jugada de ESTE turno → nuevo estado.
+export function acumularCierre(cierrePrev, cierreTurno) {
+  const prev = cierrePrev || CIERRE_VACIO
+  const c = cierreTurno || {}
+  const objecionesPrev = Array.isArray(prev.objeciones) ? prev.objeciones : []
+  const objeciones = (c.objecion_trabajada && c.objecion_trabajada !== 'ninguna' && !objecionesPrev.includes(c.objecion_trabajada))
+    ? [...objecionesPrev, c.objecion_trabajada]
+    : objecionesPrev
+  return {
+    ofertas_llamada: (prev.ofertas_llamada || 0) + (c.ofrecio_llamada === true ? 1 : 0),
+    objeciones,
+    ultima_palanca: (c.palanca && c.palanca !== 'ninguna') ? c.palanca : (prev.ultima_palanca || null)
+  }
+}
+
+// Resumen legible del estado de cierre para inyectar al prompt. null si no hay nada
+// que recordar (lead nuevo / sin cierre aún) → el prompt queda idéntico.
+export function resumenCierre(cierrePrev) {
+  const c = cierrePrev
+  if (!c || ((c.ofertas_llamada || 0) === 0 && (!Array.isArray(c.objeciones) || c.objeciones.length === 0))) return null
+  const partes = []
+  if (c.ofertas_llamada > 0) partes.push(`ya propusiste la llamada ${c.ofertas_llamada} ${c.ofertas_llamada === 1 ? 'vez' : 'veces'}`)
+  if (Array.isArray(c.objeciones) && c.objeciones.length) partes.push(`ya resolviste estas objeciones: ${c.objeciones.join(', ')}`)
+  if (c.ultima_palanca) partes.push(`tu última palanca fue "${c.ultima_palanca}"`)
+  return partes.join('; ')
+}
+
 // Registra/actualiza el COMPROMISO fechado del lead (motor de compromisos, Fase D).
 // El cerebro detecta "te pago el viernes" y lo normaliza a ISO (compromiso.fecha_iso);
 // aquí se guarda en `commitments` para que el motor lo recuerde al vencer. UPSERT del
@@ -348,6 +386,10 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     if (memoriaEpisodica) {
       console.log(`[BrainPipeline] 🧠 Memoria episódica activa para lead ${leadId} (contacto ya conocido)`)
     }
+    // Estado del closer acumulado (v5_5): vive bajo _cierre en slotsFilled. Lo leemos
+    // ANTES de llamar al cerebro para inyectarle el resumen (cuántas veces ya ofreció
+    // la llamada, qué objeciones ya resolvió) → no se raya. null si es lead nuevo.
+    const cierrePrev = leadState?.slotsFilled?._cierre || null
     const estadoLead = {
       stage: leadState?.currentStage || STAGES.FIRST_CONTACT,
       slots: leadState?.slotsFilled || {},
@@ -356,7 +398,8 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       // Etiqueta del agente en el historial del prompt (nombreCorto). El nombre
       // real lo manda config.agente.nombre (Jhon); sin esto salía "AGENTE".
       agenteNombre: campaignConfig?.agente?.nombre || vendorNombre,
-      memoriaEpisodica
+      memoriaEpisodica,
+      cierreResumen: resumenCierre(cierrePrev)
     }
 
     // ─── 4. Llamar al CEREBRO ───
@@ -418,6 +461,13 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       if (v && typeof v === 'string' && v.trim() && !v.toLowerCase().includes('vacío')) {
         slotsFusionados[k] = v
       }
+    }
+
+    // Acumular el estado de cierre del closer (v5_5). _cierre ya viene copiado en
+    // slotsFusionados (del spread de slotsExistentes); solo lo ACTUALIZAMOS si el
+    // cerebro reportó su jugada de cierre en este turno. Si no, se preserva tal cual.
+    if (brainResult.cierre) {
+      slotsFusionados._cierre = acumularCierre(cierrePrev, brainResult.cierre)
     }
 
     // ─── 7. Guardar el estado actualizado en la BD ───

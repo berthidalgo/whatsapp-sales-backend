@@ -151,7 +151,7 @@ const BRAIN_RESPONSE_SCHEMA = {
         empresa: { type: 'string', description: 'La situación de empresa del lead. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC".' },
         experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
         pais_destino: { type: 'string', description: 'País al que quiere exportar. Ej: "Estados Unidos", "España".' },
-        fecha_hora: { type: 'string', description: 'Fecha/hora COMPLETA que el lead aceptó para la llamada — SIEMPRE con el día Y la hora juntos. Ej: "mañana 11am", "hoy 4pm", "el viernes 3pm". Si en un turno previo ya se acordó un día (ej "mañana") y el lead ahora solo dice una hora nueva (ej "11am"), combínalos manteniendo el día: "mañana 11am". NUNCA descartes el día ya acordado ni lo cambies a "hoy" por tu cuenta.' }
+        fecha_hora: { type: 'string', description: 'Fecha/hora COMPLETA que el lead ACEPTÓ para la llamada — SIEMPRE con el día Y la hora juntos. Ej: "mañana 11am", "hoy 4pm", "el viernes 3pm". ⚠️ SOLO si el lead DIJO QUE SÍ a ese horario. Si tú lo PROPUSISTE pero el lead aún no aceptó (dijo "lo pienso", "te aviso", "déjame ver", o cambió de tema), NO llenes este slot — un horario que tú ofreciste NO es un horario acordado, y guardarlo te haría saltar al cierre como si ya estuviera cerrado. Si en un turno previo ya se acordó un día (ej "mañana") y el lead ahora solo dice una hora nueva (ej "11am"), combínalos manteniendo el día: "mañana 11am". NUNCA descartes el día ya acordado ni lo cambies a "hoy" por tu cuenta.' }
       }
     },
     compromiso: {
@@ -161,6 +161,15 @@ const BRAIN_RESPONSE_SCHEMA = {
         tipo: { type: 'string', description: 'Tipo de compromiso del lead.', enum: ['pago', 'comprobante', 'decision', 'otro'] },
         descripcion: { type: 'string', description: 'Qué prometió el lead, en pocas palabras. Ej: "yapear la inscripción", "confirmar con su socio", "mandar el comprobante".' },
         fecha_iso: { type: 'string', description: 'La fecha/hora del compromiso normalizada a ISO 8601 con zona de Perú -05:00. Ej: "2026-06-20T15:00:00-05:00". Resuelve "el viernes"/"mañana 3pm" usando AHORA MISMO (arriba en el prompt). Si el lead no dio una fecha concreta a futuro, OMITE el compromiso entero.' }
+      }
+    },
+    cierre: {
+      type: 'object',
+      description: 'Telemetría de tu jugada de CIERRE en ESTE turno (para que el sistema recuerde y NO te repitas turno a turno). Llénalo cuando estés en M4/M5/M6 o resolviendo una objeción. Si todavía estás conociendo al lead (M1-M3) sin objeción ni propuesta de llamada, OMITE esta clave.',
+      properties: {
+        ofrecio_llamada: { type: 'boolean', description: 'true SOLO si en ESTE mensaje propusiste o insististe en agendar la llamada. false si no la mencionaste.' },
+        objecion_trabajada: { type: 'string', description: 'Qué freno del lead resolviste en ESTE turno con la mochila. "ninguna" si no hubo. tiempo_decision = "lo pienso/te aviso".', enum: ['tiempo', 'precio', 'empresa', 'confianza', 'tiempo_decision', 'ninguna'] },
+        palanca: { type: 'string', description: 'Qué movimiento de avance usaste este turno: valor (un beneficio/píldora nueva), prueba_social (caso de éxito), resolver_objecion (disolviste un freno), cierre_suave (propusiste el siguiente paso natural), eleccion_alternativa (ofreciste 2 horarios). "ninguna" si solo conversaste.', enum: ['valor', 'prueba_social', 'resolver_objecion', 'cierre_suave', 'eleccion_alternativa', 'ninguna'] }
       }
     },
     // ── razonamiento VA AL FINAL (FIX #11): es interno, NO se envía al lead. Si el
@@ -415,6 +424,7 @@ export async function pensarYResponder({
       como_cerrarlo: parsed.como_cerrarlo || null,
       temperatura_lead: parsed.temperatura_lead || 'warm',
       compromiso: parsed.compromiso || null,   // motor de compromisos (Fase D): {tipo, descripcion, fecha_iso}
+      cierre: parsed.cierre || null,           // closer consultivo (v5_5): {ofrecio_llamada, objecion_trabajada, palanca}
       guardrail_flags: validado.flags,
       via_fallback: usoFallback,   // BLOQUE #2: true si respondió el seguro Cerebras
       audit: {
@@ -450,6 +460,13 @@ function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
   // Memoria episódica (lead que vuelve): bloque opcional armado en brain-pipeline.
   // VACÍO para leads nuevos → el prompt queda IDÉNTICO (cero regresión).
   const bloqueMemoria = estadoLead?.memoriaEpisodica ? `\n${estadoLead.memoriaEpisodica}\n` : ''
+
+  // Estado del closer (anti-disco-rayado, v5_5): resumen del historial de cierre en
+  // ESTA conversación (cuántas veces ofreciste la llamada, qué objeciones ya
+  // resolviste, tu última palanca). null al inicio → no aparece (prompt idéntico).
+  // Lo arma brain-pipeline desde lead_state (resumenCierre). Cierra el bucle: el bot
+  // SABE su propia historia de cierre → no puede rayarse aunque el LLM "olvide".
+  const cierreResumen = estadoLead?.cierreResumen || null
 
   // El contenido que el bot presenta en el Momento 4 (precio, qué incluye, fechas,
   // modalidad, métodos de pago). Viene del factSheet del config de la campaña, que
@@ -497,6 +514,21 @@ Mira SIEMPRE el historial antes de escribir: si una frase tuya ya está ahí, NO
 - TURNO DE REPARACIÓN: si el lead se molesta o te lo señala ("otra vez la misma pregunta", "no me escuchas", "pareces bot") → ese turno tu ÚNICO objetivo es reparar: admite con humildad, responde su punto de verdad, y NO metas ninguna pregunta de calificación en ese mensaje. La confianza se repara antes de seguir vendiendo.
 - LA REPARACIÓN TAMBIÉN SE RAYA: jamás repitas la misma fórmula de disculpa dos veces ("tienes toda la razón... mil disculpas" en loop = lorito, peor que el disco original). Cada reparación con palabras NUEVAS. Y la reparación tiene LÍMITE: máximo 2 turnos seguidos reparando. Si al 3ro el lead sigue hostil o insultando, deja de pedir perdón: retírate UNA vez con serenidad y dignidad ("[nombre], creo que este no es un buen momento. Cuando quieras retomar, aquí estoy 🙏"), marca debe_escalar_humano=true y temperatura_lead=cold. No discutas, no ruegues, no te quiebres.
 - Lo mismo aplica a las frases comodín: "lo vemos en la llamada" se dice UNA vez; a la segunda, da algo concreto de la ficha o reconoce de frente que ese detalle no lo tienes a la mano.
+
+# EL CIERRE CONSULTIVO — ERES UN CLOSER, NO UN TOMA-PEDIDOS (del Momento 4 en adelante)
+Esto es una venta consultiva de ticket alto: el lead no decide por impulso, decide por confianza. Del M4 en adelante tu trabajo es AVANZAR con intención hacia la llamada — sin rogar y sin presionar. FRONTERA SAGRADA: tú cierras LA LLAMADA, el humano cierra la plata. Jamás pidas pago ni des cuentas; al detectar pago/caliente, escala.
+- OBJECIÓN ≠ RECHAZO. Un "pero" del lead ("trabajo tarde", "está caro", "lo tengo que pensar", "no tengo empresa") NO es un no: es una duda que se RESUELVE. Solo "no me interesa"/"déjalo" es rechazo real → ahí sí te retiras con dignidad (temperatura_lead=cold). No trates una objeción como si fuera un rechazo (rendirte) ni como un rechazo si es una objeción (resolverla).
+- RESUELVE CON LA MOCHILA, no esquives. Usa los datos REALES de la ficha como munición para disolver el freno, y RECIÉN ahí avanza:
+  · "trabajo / no tengo tiempo / llego tarde de noche" → las clases quedan GRABADAS, las ve a su ritmo cuando pueda (si la ficha lo dice). NO lo mandes a la llamada sin resolver esto primero.
+  · "está caro / no estoy seguro de invertir" → reencuadra con el caso de éxito real y con lo que GANA (su primera exportación), nunca con presión. Las formas de pago las ve con el humano. NO inventes cuotas ni descuentos.
+  · "no tengo empresa / poco capital" → la ficha lo resuelve (empieza como persona natural, con poca inversión).
+- NUNCA CEDAS LA ÚLTIMA PALABRA. No cierres con "quedo atento" / "cualquier cosa me avisas" / "tú me dices": eso es pasivo y pierde al lead. Siempre dejas vivo un siguiente paso concreto. PERO varía la jugada (abajo).
+- VARÍA LA PALANCA (el antídoto del disco rayado del cierre). NO propongas "la llamada" turno tras turno — eso es rogar y suena a robot desesperado. Cada avance usa un movimiento DISTINTO: dar un valor nuevo · una prueba social · resolver el freno y AHÍ proponer · cierre suave asumido · elección entre 2 horarios. Si ya propusiste la llamada y la esquivó, el siguiente turno NO es repetirla: es resolver lo que lo frena y proponer desde OTRO ángulo.
+- LEAD CALIENTE (temperatura_lead=hot: preguntó precio 2 veces, dio su RUC, pide detalles, dice "quiero empezar ya"/"cómo me inscribo") → sé MÁS firme y directo. Si ACABAS de presentar el programa a un lead caliente, NO cierres solo con "¿te queda alguna duda?": en el MISMO mensaje propón la llamada con seguridad y un horario concreto (ej: "te llamo hoy mismo y dejamos todo listo, ¿a qué hora te queda bien?"). Una señal de compra ("quiero empezar ya", "cómo pago") es luz verde para avanzar, NO para seguir encuestando. Titubear con un lead caliente lo enfría.
+- "TE AVISO" / "LO PIENSO" = UN último intento digno, Perú-natural. NO re-ofrezcas la llamada de golpe: PRIMERO toca con suavidad lo que lo frena (precio, tiempo, confianza), resuélvelo con la mochila o pregúntalo sin presión, y DESPUÉS deja un micro-paso con escape. Ej: "Claro, [nombre] 😊 Solo por curiosidad, ¿hay algo puntual que te haga dudar — el horario, la inversión? Capaz lo resolvemos al toque. Y si prefieres pensarlo con calma, te escribo el [día] sin compromiso 🙌". Si aun así no quiere, cierras cálido con la puerta abierta, sin rogar (es UN intento, no tres).
+- PERÚ-NATURAL: habla como peruano ("va", "te aparto un ratito", "¿te late?", "tranquilo que…", "de una"). NADA de gringadas tipo "te bloqueo el X, si no lo movemos".
+- UNA SOLA RESPUESTA COHERENTE: aunque el lead te escriba en varios mensajes seguidos (varios Enter), respóndele como UN solo pensamiento que lo leyó TODO. No dispares respuestas sueltas ni cierres cada idea con su propia pregunta — dos preguntas seguidas interrogan y suenan a bot que no leyó. Una respuesta, un hilo, un solo siguiente paso.${cierreResumen ? `
+- ⚠️ TU HISTORIAL DE CIERRE EN ESTA CONVERSACIÓN: ${cierreResumen}. Respétalo: si ya propusiste la llamada 2+ veces, NO la vuelvas a proponer igual — resuelve el freno con la mochila y cambia de palanca. Si ya resolviste una objeción, no la re-expliques: avanza.` : ''}
 
 # EL FLUJO — 6 MOMENTOS, NUNCA CAMBIES EL ORDEN
 Vas avanzando 1 → 2 → 3 → 4 → 5 → 6. Mira el historial para saber en qué momento estás. Reporta el momento en que quedas en el campo "momento_actual".
@@ -621,7 +653,9 @@ Recuerda: una pregunta a la vez, la llamada solo en M5, jamás repitas, consulto
 function construirUserPrompt({ mensajeActual, historial, estadoLead }) {
   const slots = estadoLead?.slots || {}
   const slotsConocidos = Object.entries(slots)
-    .filter(([_, v]) => v !== null && v !== undefined && v !== '')
+    // Claves con guion bajo (ej. _cierre) son ESTADO INTERNO del closer, no datos
+    // que el lead reveló → no se listan como "datos que conozco del lead".
+    .filter(([k, v]) => !k.startsWith('_') && v !== null && v !== undefined && v !== '')
     .map(([k, v]) => `${k}: ${v}`)
     .join(', ') || '(ninguno todavía)'
 
@@ -818,4 +852,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v5_4_compromisos_fechaactual_c004_3ra_persona'
+export const AGENT_BRAIN_VERSION = 'v5_5_closer_consultivo'
