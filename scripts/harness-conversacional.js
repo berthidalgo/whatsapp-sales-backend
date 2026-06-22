@@ -64,6 +64,14 @@ const PERSONAS = [
     maxTurnos: 5,
     focos: 'retiro digno ante rechazo explícito; NO insistir ni rogar; cerrar cálido con la puerta abierta.',
     persona: `Eres un peruano que entró por curiosidad pero NO te interesa un curso pago. Tras un par de mensajes lo dices claro: "no me interesa", "déjalo nomás", "solo estaba mirando". Eres cortante pero no grosero.`
+  },
+  {
+    id: 'blanca',
+    descripcion: 'Pide info del programa en RACHA (costo, días, profe, certificado, modalidad). Da el nombre rápido. Acepta la llamada recién tras varias preguntas.',
+    opener: 'Hola, dame información de los cursos',
+    maxTurnos: 9,
+    focos: 'dar la info que pide sin machacar; NO pedir el horario tras CADA pregunta (sembrar mientras hay racha, incluso post-presentación); coordinar recién cuando ACEPTA; respetar el horario que elige.',
+    persona: `Eres Blanca, una peruana interesada en aprender a exportar. Pides información del programa de forma DIRECTA y en RACHA: preguntas el costo, los días de clase, si dan certificado, quién es el profesor, cuántos alumnos por clase, si es presencial o virtual — una pregunta tras otra, sin aceptar nada todavía. Si te piden tu nombre lo das completo ("Blanca Hidalgo Tacas"). NO aceptas la llamada hasta haber preguntado VARIAS cosas; recién tras varias respuestas dices "sí, claro, quisiera que me llamen". Cuando aceptas, eliges "mejor mañana por la noche" como horario.`
   }
 ]
 
