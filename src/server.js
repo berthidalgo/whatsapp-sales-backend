@@ -328,7 +328,7 @@ app.post('/debug/brain-replay', async (req, reply) => {
 
     // Cargar conversaciones archivadas (raw SQL: la tabla no está en el schema Prisma)
     let convs = await prisma.$queryRawUnsafe(
-      `SELECT id, telefono, motivo, mensajes FROM conversaciones_archivadas ORDER BY id`
+      `SELECT id, telefono, motivo, mensajes, nombre_detectado FROM conversaciones_archivadas ORDER BY id`
     )
     if (convFilter && Array.isArray(convFilter)) convs = convs.filter(c => convFilter.includes(Number(c.id)))
 
@@ -348,7 +348,8 @@ app.post('/debug/brain-replay', async (req, reply) => {
               convId: Number(conv.id), motivo: conv.motivo,
               turnoIdx: usados + 1,
               historial, mensajeLead: leadMsgs.filter(Boolean).join('\n'),
-              respuestaHistorica: msgs[i].texto
+              respuestaHistorica: msgs[i].texto,
+              nombreConv: conv.nombre_detectado
             })
             usados++
           }
@@ -401,10 +402,27 @@ async function correrUnTurnoReplay(turno, campaignConfig, banco = {}) {
   const t0 = Date.now()
   const { overrides = null, fichaBloque = null } = banco
   try {
+    // Estado del turno. Por defecto VACÍO: sirve para comparar 2 modelos en igualdad
+    // (ambos rastrean del historial), como el examen 06-16. Con overrides.reconstruirEstado
+    // se reconstruye del historial (nombre ya declarado + stage por avance) para medir UN
+    // modelo con FIDELIDAD: así disparan los guardrails deterministas que LEEN el estado
+    // (p.ej. el del nombre repetido en validarSalida), que de otro modo quedan apagados y
+    // subestiman al bot (caza del peritaje de Óscar: 14/17 nombres = artefacto, no bug).
+    let estadoLead = { stage: 'first_contact', slots: {} }
+    if (overrides?.reconstruirEstado) {
+      const nom = (turno.nombreConv || '').trim()
+      const histTieneNombre = nom.length >= 2 && (turno.historial || []).some(
+        h => h.rol === 'lead' && new RegExp(`\\b${nom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(h.texto || '')
+      )
+      estadoLead = {
+        stage: (turno.turnoIdx || 1) >= 4 ? 'presenting' : 'first_contact',
+        slots: histTieneNombre ? { nombre: nom } : {}
+      }
+    }
     const brainResult = await pensarYResponder({
       mensajeActual: turno.mensajeLead,
       historial: turno.historial,
-      estadoLead: { stage: 'first_contact', slots: {} },  // sin slots: ambos modelos rastrean del historial → comparación justa
+      estadoLead,
       campaignConfig, vendorNombre: 'Jhon', overrides
     })
     const veredicto = await juzgarPorRubrica({ historial: turno.historial, mensajeLead: turno.mensajeLead, brainResult, fichaBloque })

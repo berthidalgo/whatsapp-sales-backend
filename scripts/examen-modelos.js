@@ -41,7 +41,11 @@ const PROVIDERS = {
   },
 }
 
-const REPLAY_CONVS = [1, 9, 10, 13, 14, 17, 18, 24]
+// Re-anclado 2026-06-22: las convos de referencia originales [1,9,10,13,14,17,18]
+// fueron borradas de conversaciones_archivadas durante los tests de la saga del
+// closer (la tabla es efímera: se limpia entre sesiones). Sobrevivían solo IDs
+// vivos con turnos LEAD→BOT reales: 23 (palta, 4msgs), 24 (12msgs), 30 (Blanca, 34msgs).
+const REPLAY_CONVS = [23, 24, 30]
 const MAX_TURNS = 6
 
 const JUDGE_FAIL_FLAGS = new Set(['juez_sin_respuesta', 'juez_json_invalido', 'juez_exception'])

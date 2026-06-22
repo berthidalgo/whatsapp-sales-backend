@@ -14,7 +14,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const OUT_DIR = path.join(__dirname, '..', 'contexto', 'examen-modelos-2026-06-16')
+const OUT_DIR = path.join(__dirname, '..', 'contexto', process.env.EXAMEN_OUT_SUBDIR || 'examen-modelos-2026-06-16')
 
 // red_flags que descalifican como cerebro PRINCIPAL (seguridad, no estética)
 const FLAGS_VETO = new Set([
