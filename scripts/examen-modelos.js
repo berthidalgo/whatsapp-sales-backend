@@ -45,7 +45,16 @@ const PROVIDERS = {
 // fueron borradas de conversaciones_archivadas durante los tests de la saga del
 // closer (la tabla es efímera: se limpia entre sesiones). Sobrevivían solo IDs
 // vivos con turnos LEAD→BOT reales: 23 (palta, 4msgs), 24 (12msgs), 30 (Blanca, 34msgs).
-const REPLAY_CONVS = [23, 24, 30]
+// + GOLD STANDARD de Óscar (id 45, es_test): los 17 turnos del lead escéptico que
+//   originó la saga del closer → ancla permanente. Por ser largo (17 turnos) lleva
+//   maxTurns/chunkSize propios para no reventar el timeout del endpoint (300s).
+// Cada item: { id, maxTurns?, chunkSize? } (default MAX_TURNS / 1).
+const REPLAY_CONVS = [
+  { id: 23 },
+  { id: 24 },
+  { id: 30 },
+  { id: 45, maxTurns: 18, chunkSize: 3 },  // Óscar gold standard (17 turnos)
+]
 const MAX_TURNS = 6
 
 const JUDGE_FAIL_FLAGS = new Set(['juez_sin_respuesta', 'juez_json_invalido', 'juez_exception'])
@@ -165,17 +174,24 @@ async function correrEvals(prov, evalIds) {
 async function correrReplay(prov) {
   const file = path.join(OUT_DIR, `${prov.key}-replay.json`)
   const store = cargar(file, { meta: { provider: prov.key, model: prov.overrides.model, startedAt: new Date().toISOString() }, convs: {} })
-  const pendientes = REPLAY_CONVS.filter(c => !store.convs[String(c)])
+  const pendientes = REPLAY_CONVS.filter(c => !store.convs[String(c.id)])
   console.log(`\n[${prov.key}] REPLAY: ${pendientes.length} convos pendientes de ${REPLAY_CONVS.length} (${Object.keys(store.convs).length} ya hechas)`)
 
+  // reconstruirEstado: mide UN modelo con FIDELIDAD (reconstruye nombre+stage del
+  // historial → disparan los guardrails deterministas). Inerte en evals; solo el
+  // replay lo lee. (peritaje de Óscar: sin esto el nombre salía 14/17 = artefacto.)
+  const replayOverrides = { ...prov.overrides, reconstruirEstado: true }
+
   for (let i = 0; i < pendientes.length; i++) {
-    const convId = pendientes[i]
+    const convId = pendientes[i].id
+    const maxTurns = pendientes[i].maxTurns || MAX_TURNS
+    const chunkSize = pendientes[i].chunkSize || 1
     let intentosJuez = 0
     let resp = null
     while (intentosJuez < 2) {
       resp = await postJSON(`${BASE}/debug/brain-replay`, {
-        convFilter: [convId], maxTurns: MAX_TURNS, overrides: prov.overrides,
-        chunkSize: 1, pauseMs: prov.replayPauseMs,
+        convFilter: [convId], maxTurns, overrides: replayOverrides,
+        chunkSize, pauseMs: prov.replayPauseMs,
       })
       const turnos = resp.todos || []
       if (tieneFalloJuez(turnos)) {
