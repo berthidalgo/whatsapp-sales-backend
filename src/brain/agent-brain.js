@@ -701,6 +701,24 @@ function nombreCorto(estadoLead) {
 // GUARDRAIL DE SALIDA — control determinístico post-generación
 // La red de seguridad: valida lo que el cerebro dijo ANTES de enviarlo.
 // ════════════════════════════════════════════════════════
+// Guardrail del nombre como función PURA (testeable): quita el vocativo ", Nombre"
+// usando SOLO el primer token del nombre → robusto a nombres completos ("Blanca Hidalgo
+// Tacas" — bug cazado en el test de Blanca 2026-06-22: el slot guardaba el nombre
+// completo, el regex buscaba ", Blanca Hidalgo Tacas" que nunca aparece → no limpiaba,
+// Blanca salió 5/9 vs Oscar 1/17). Devuelve { mensaje, limpiado }.
+export function limpiarVocativoNombre(mensaje, nombreConocido) {
+  const primerNombre = (typeof nombreConocido === 'string' ? nombreConocido : '').trim().split(/\s+/)[0] || ''
+  if (primerNombre.length < 2) return { mensaje, limpiado: false }
+  const n = primerNombre.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const limpio = mensaje
+    .replace(new RegExp(`\\s*,\\s*${n}\\b(?=[\\s,.!?:;]|$)`, 'gi'), '')  // "..., Oscar." → "..."
+    .replace(new RegExp(`(^|¡)\\s*${n}\\s*,\\s*`, 'gi'), '$1')           // "Oscar, ..." → "..."
+    .replace(/¡\s*([!.])/g, '$1')                                        // "¡!" residual → limpio
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+  return { mensaje: limpio, limpiado: limpio !== mensaje }
+}
+
 /**
  * Valida el mensaje del cerebro contra el factSheet.
  * Si detecta un precio que NO está en la ficha, lo marca (y en modo estricto, reescribe).
@@ -730,17 +748,8 @@ function validarSalida(parsed, fs, nombreConocido = null) {
   // limpiamos determinísticamente: si el nombre YA era conocido de un turno previo
   // (nombreConocido), quitamos el vocativo con coma. En el turno que RECIÉN lo aprende
   // (nombreConocido vacío), NO se toca → conserva el "¡un gusto, Oscar!" de bienvenida.
-  if (nombreConocido && typeof nombreConocido === 'string' && nombreConocido.trim().length >= 2) {
-    const n = nombreConocido.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const antes = mensaje
-    mensaje = mensaje
-      .replace(new RegExp(`\\s*,\\s*${n}\\b(?=[\\s,.!?:;]|$)`, 'gi'), '')  // "..., Oscar." → "..."
-      .replace(new RegExp(`(^|¡)\\s*${n}\\s*,\\s*`, 'gi'), '$1')           // "Oscar, ..." → "..."
-      .replace(/¡\s*([!.])/g, '$1')                                        // "¡!" residual → limpio
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim()
-    if (mensaje !== antes) flags.push('nombre_vocativo_limpiado')
-  }
+  const r3 = limpiarVocativoNombre(mensaje, nombreConocido)
+  if (r3.limpiado) { mensaje = r3.mensaje; flags.push('nombre_vocativo_limpiado') }
 
   // ── Guardrail 1: precio fantasma ──
   // Busca cifras tipo S/XXXX o $XXX en el mensaje y verifica contra el factSheet.
@@ -887,4 +896,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v6_5_sembrar_vs_coordinar_no_pedir_horario_calcado'
+export const AGENT_BRAIN_VERSION = 'v6_6_fix_guardrail_nombre_usa_primer_token'
