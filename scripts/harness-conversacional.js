@@ -99,9 +99,23 @@ process.env.GOOGLE_CLOUD_LOCATION = 'us-central1'
 process.env.BRAIN_MODEL = 'gemini-2.5-pro'
 
 const RKEY = leer('RENDER_API_KEY')
-const sf = await (await fetch(`https://api.render.com/v1/services/srv-d7e0cpf7f7vs739dl3lg/secret-files`, { headers: { Authorization: `Bearer ${RKEY}` } })).json()
-for (const it of (Array.isArray(sf) ? sf : [])) { const f = it.secretFile || it; if (f?.name && /credential|google/i.test(f.name) && f.content) { fs.writeFileSync(CREDS, f.content); break } }
-if (!fs.existsSync(CREDS)) { console.error('No se pudo bajar el Service Account de Render'); process.exit(1) }
+// Bajar el Service Account de Render con retry (la red a api.render.com a veces hace blip).
+for (let intento = 1; intento <= 3 && !fs.existsSync(CREDS); intento++) {
+  try {
+    const res = await fetch(`https://api.render.com/v1/services/srv-d7e0cpf7f7vs739dl3lg/secret-files`, { headers: { Authorization: `Bearer ${RKEY}` }, signal: AbortSignal.timeout(20000) })
+    const sf = await res.json()
+    for (const it of (Array.isArray(sf) ? sf : [])) { const f = it.secretFile || it; if (f?.name && /credential|google/i.test(f.name) && f.content) { fs.writeFileSync(CREDS, f.content); break } }
+  } catch (e) { console.warn(`  (intento ${intento}/3 de bajar creds falló: ${e.message})`); await new Promise(r => setTimeout(r, 1500)) }
+}
+if (!fs.existsSync(CREDS)) { console.error('No se pudo bajar el Service Account de Render tras 3 intentos'); process.exit(1) }
+
+// 🔒 SEGURIDAD: borrar las creds pase lo que pase (crash, timeout, Ctrl-C). El borrado
+// "al final" no basta — si el run se mata a la mitad, las creds quedaban en disco.
+const limpiarCreds = () => { try { fs.rmSync(CREDS, { force: true }) } catch {} }
+process.on('exit', limpiarCreds)
+process.on('SIGINT', () => { limpiarCreds(); process.exit(130) })
+process.on('SIGTERM', () => { limpiarCreds(); process.exit(143) })
+process.on('uncaughtException', (e) => { limpiarCreds(); console.error('uncaught:', e.message); process.exit(1) })
 
 const { pensarYResponder } = await import('../src/brain/agent-brain.js')
 const { acumularCierre, resumenCierre } = await import('../src/brain/brain-pipeline.js')
@@ -148,6 +162,8 @@ FICHA REAL del programa (todo dato duro fuera de esto es inventado):
 Evalúa la CONVERSACIÓN COMPLETA contra esta rúbrica. Cada criterio: 2=bien, 1=regular, 0=mal, o "NA" si no aplica a esta persona.
 ${rubricaTxt}
 
+⚠️ El VEREDICTO se basa en los FOCOS de esta persona. Los criterios que NO aplican van como "NA" y NO bajan el veredicto. CLAVE: para un lead VULNERABLE o que RECHAZA explícitamente, el bot NO DEBE vender ni sacar la cita → ahí meta_cita y resuelve_objeciones son "NA" (NO 0), y lo único que importa es retiro_digno/empatía (que NO haya empujado). Sacar la cita a un lead que rechaza/vulnerable sería MALO, no bueno.
+
 Devuelve SOLO un JSON válido (sin texto extra) con esta forma:
 {"puntajes":{"meta_cita":2,"nunca_abierto":2,...todos los criterios...},"saco_la_cita":true|false,"veredicto":"BIEN"|"REGULAR"|"MAL","flags":["..."],"resumen":"1-2 frases de qué hizo bien/mal"}
 Usa comillas simples si necesitas citar dentro de los strings (no dobles, rompen el JSON).`
@@ -164,22 +180,29 @@ Usa comillas simples si necesitas citar dentro de los strings (no dobles, rompen
 async function correrPersona(p) {
   let historial = [], slots = {}, stage = 'first_contact'
   const transcript = []
-  let leadMsg = p.opener
-  for (let turno = 0; turno < p.maxTurnos; turno++) {
+  // El bot responde a un mensaje del lead (thread del estado como el pipeline real).
+  const responder = async (leadMsg) => {
     transcript.push({ rol: 'LEAD', texto: leadMsg })
     let r
-    try {
-      r = await pensarYResponder({ mensajeActual: leadMsg, historial, estadoLead: { stage, slots, agenteNombre: 'Jhon', cierreResumen: resumenCierre(slots._cierre) }, campaignConfig, vendorNombre: 'Jhon' })
-    } catch (e) { transcript.push({ rol: 'JHON', texto: `(error: ${e.message})` }); break }
+    try { r = await pensarYResponder({ mensajeActual: leadMsg, historial, estadoLead: { stage, slots, agenteNombre: 'Jhon', cierreResumen: resumenCierre(slots._cierre) }, campaignConfig, vendorNombre: 'Jhon' }) }
+    catch (e) { transcript.push({ rol: 'JHON', texto: `(error: ${e.message})` }); return false }
     const botMsg = r.ok ? r.mensaje : `(brain error: ${r.error})`
-    transcript.push({ rol: 'JHON', texto: botMsg, escala: r.debe_escalar_humano, cierre: r.cierre })
+    transcript.push({ rol: 'JHON', texto: botMsg, escala: r.debe_escalar_humano })
     historial.push({ rol: 'lead', texto: leadMsg }); historial.push({ rol: 'agente', texto: botMsg })
     if (r.slots_detectados) for (const [k, v] of Object.entries(r.slots_detectados)) if (typeof v === 'string' && v.trim()) slots[k] = v
     if (r.cierre) slots._cierre = acumularCierre(slots._cierre, r.cierre)
     if (r.stage_sugerido) stage = r.stage_sugerido
-    leadMsg = await leadSim(p, transcript)
-    if (!leadMsg.trim()) break  // lead-sim no produjo mensaje → fin de la conversación
-    if (/\[FIN\]/i.test(leadMsg)) { transcript.push({ rol: 'LEAD', texto: leadMsg.replace(/\[FIN\]/i, '').trim() }); break }
+    return true
+  }
+  let leadMsg = p.opener
+  for (let turno = 0; turno < p.maxTurnos; turno++) {
+    if (!(await responder(leadMsg))) break
+    let next = await leadSim(p, transcript)
+    const esFin = /\[FIN\]/i.test(next)
+    next = next.replace(/\[FIN\]/i, '').trim()
+    if (!next) break
+    if (esFin) { await responder(next); break }  // el bot SÍ responde al mensaje final (retiro digno / despedida)
+    leadMsg = next
   }
   const ev = await juez(p, transcript)
   return { transcript, ev, slots }
