@@ -410,7 +410,8 @@ export async function pensarYResponder({
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
     // Aquí está la red de seguridad: validamos lo que el cerebro produjo
     // ANTES de devolverlo. Esto es lo que nos diferencia de un autoresponder.
-    const validado = validarSalida(parsed, fs, estadoLead?.slots?.nombre)
+    const yaSaludo = Array.isArray(historial) && historial.some(m => m?.rol === 'agente')
+    const validado = validarSalida(parsed, fs, estadoLead?.slots?.nombre, yaSaludo)
 
     return {
       ok: true,
@@ -651,6 +652,7 @@ LOS 6 MOMENTOS (en orden; reporta en "momento_actual"):
 REGLAS DURAS:
 - NUNCA inventes precio, nombre del programa, módulos, fechas ni cifras fuera de la ficha.
 - NUNCA des número de cuenta/Yape/Plin (no los tienes): responde cálido y escala (debe_escalar_humano=true).
+- DATOS LOGÍSTICOS QUE NO TIENES (no los inventes): si el lead pregunta algo que NO está en la ficha — sobre todo "¿desde qué número me llamas?", links, direcciones — sé HONESTO sin fabricar: la llamada la hace el asesor humano, así que "te llama el asesor a la hora que coordinemos, y te aviso por aquí un minuto antes 🙌". ⛔ JAMÁS te inventes un número ni expliques con "es de la central", "un número de Lima", "el sistema usa varios números" — fabricar un dato que no tienes te delata como bot y rompe la confianza. Mejor admitir con naturalidad que ese detalle lo coordina el asesor.
 - PAGO declarado ("ya pagué"): pide la captura del comprobante, NO confirmes inscripción sin verla.
 - VULNERABILIDAD (angustia económica/emocional real): no vendas, empatía genuina + escala.
 - LLAMADA INMINENTE ("llámame ahorita"): lo más caliente, responde cálido ("dame un momento y te llamo 📲") + escala.
@@ -720,13 +722,31 @@ export function limpiarVocativoNombre(mensaje, nombreConocido) {
   return { mensaje: limpio, limpiado: limpio !== mensaje }
 }
 
+// Guardrail del RE-SALUDO como función PURA (testeable): si el bot YA saludó antes en
+// la conversación (yaSaludo), abrir de nuevo con "¡Hola [nombre]!" / "Buenas tardes!" /
+// "Un gusto saludarte." es un tic de bot que delata (el prompt lo prohíbe pero el modelo
+// reincide). Quita SOLO el saludo de apertura, dejando el resto del mensaje. Conservador:
+// si al quitarlo el mensaje queda vacío/casi vacío (era SOLO saludo), NO toca.
+export function limpiarReSaludo(mensaje, yaSaludo) {
+  if (!yaSaludo || typeof mensaje !== 'string') return { mensaje, limpiado: false }
+  let m = mensaje
+    .replace(/^\s*[¡!]*\s*hola\b[^.!?\n]*[.!?]+\s*/i, '')                              // "¡Hola [nombre]!"
+    .replace(/^\s*[¡!]*\s*buen[oa]s(\s+(d[ií]as|tardes|noches))?\b[^.!?\n]*[.!?]+\s*/i, '') // "Buenas tardes!"
+    .replace(/^\s*[¡!]*\s*(un|qué|que)\s+gusto\b[^.!?\n]*[.!?]+\s*/i, '')              // "Un gusto saludarte."
+    .replace(/^[¡\s]+/, '')
+    .trim()
+  if (m.length < 8 || m === mensaje.trim()) return { mensaje, limpiado: false }       // era casi solo saludo → no tocar
+  m = m.charAt(0).toUpperCase() + m.slice(1)                                          // capitaliza lo que quedó
+  return { mensaje: m, limpiado: true }
+}
+
 /**
  * Valida el mensaje del cerebro contra el factSheet.
  * Si detecta un precio que NO está en la ficha, lo marca (y en modo estricto, reescribe).
  *
  * @returns {{ mensaje: string, flags: string[] }}
  */
-function validarSalida(parsed, fs, nombreConocido = null) {
+function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false) {
   const flags = []
   let mensaje = parsed.mensaje || ''
 
@@ -751,6 +771,10 @@ function validarSalida(parsed, fs, nombreConocido = null) {
   // (nombreConocido vacío), NO se toca → conserva el "¡un gusto, Oscar!" de bienvenida.
   const r3 = limpiarVocativoNombre(mensaje, nombreConocido)
   if (r3.limpiado) { mensaje = r3.mensaje; flags.push('nombre_vocativo_limpiado') }
+
+  // ── Guardrail 4: re-saludo (si ya saludó antes, no vuelve a abrir con "Hola/Buenas") ──
+  const r4 = limpiarReSaludo(mensaje, yaSaludo)
+  if (r4.limpiado) { mensaje = r4.mensaje; flags.push('re_saludo_limpiado') }
 
   // ── Guardrail 1: precio fantasma ──
   // Busca cifras tipo S/XXXX o $XXX en el mensaje y verifica contra el factSheet.
@@ -897,4 +921,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v6_7_no_pedir_horario_en_racha_de_preguntas_m5'
+export const AGENT_BRAIN_VERSION = 'v6_8_guardrail_re_saludo_y_anti_invento_numero'

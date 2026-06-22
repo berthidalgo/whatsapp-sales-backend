@@ -6,7 +6,7 @@
 // Fix: usar SOLO el primer token del nombre.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { limpiarVocativoNombre } from '../src/brain/agent-brain.js'
+import { limpiarVocativoNombre, limpiarReSaludo } from '../src/brain/agent-brain.js'
 
 test('nombre simple: quita el vocativo ", Oscar"', () => {
   const r = limpiarVocativoNombre('¡Mucho gusto, Oscar! Ahora cuéntame.', 'Oscar')
@@ -35,4 +35,38 @@ test('turno que RECIÉN aprende el nombre (nombreConocido vacío) → NO toca (c
 test('nombre como sustantivo (sin coma vocativa) NO se sobre-limpia', () => {
   const r = limpiarVocativoNombre('El producto de Oscar tiene potencial.', 'Oscar')
   assert.equal(r.mensaje, 'El producto de Oscar tiene potencial.')
+})
+
+// ── Guardrail 4: re-saludo (limpiarReSaludo) ──
+// Tic cazado en el test de Blanca: el bot re-abría con "¡Hola Blanca!" en turnos
+// posteriores (ya había saludado). El prompt lo prohíbe pero el modelo reincide.
+
+test('re-saludo: si YA saludó, quita "¡Hola Blanca!" inicial y deja el resto', () => {
+  const r = limpiarReSaludo('¡Hola Blanca! Claro que sí, te detallo el programa.', true)
+  assert.equal(r.limpiado, true)
+  assert.ok(!/^¡?\s*hola/i.test(r.mensaje), 'no debe arrancar con Hola')
+  assert.ok(/te detallo/i.test(r.mensaje), 'conserva el contenido')
+})
+
+test('re-saludo: PRIMER turno (yaSaludo=false) NO toca el saludo de bienvenida', () => {
+  const r = limpiarReSaludo('¡Hola Blanca! Un gusto, soy Jhon.', false)
+  assert.equal(r.limpiado, false)
+  assert.equal(r.mensaje, '¡Hola Blanca! Un gusto, soy Jhon.')
+})
+
+test('re-saludo: mensaje SIN saludo no se toca', () => {
+  const r = limpiarReSaludo('Claro, el costo es S/1,500.', true)
+  assert.equal(r.limpiado, false)
+})
+
+test('re-saludo: mensaje que era SOLO saludo NO queda vacío', () => {
+  const r = limpiarReSaludo('¡Hola!', true)
+  assert.equal(r.limpiado, false)
+  assert.equal(r.mensaje, '¡Hola!')
+})
+
+test('re-saludo: "¡Buenas tardes!" + contenido → quita el saludo', () => {
+  const r = limpiarReSaludo('¡Buenas tardes! El programa dura 3 meses.', true)
+  assert.equal(r.limpiado, true)
+  assert.ok(/programa dura/i.test(r.mensaje))
 })
