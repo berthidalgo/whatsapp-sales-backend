@@ -68,11 +68,19 @@ await app.register(cors, {
 })
 
 // ── Auth JWT (Hito 1) — los endpoints v2 lo exigen; los viejos siguen abiertos por compat ──
+// FAIL-CLOSED: en producción (Render) JWT_SECRET es OBLIGATORIO. Sin él abortamos el boot, en
+// vez de arrancar con un secreto de DEV que está en el repo PÚBLICO (cualquiera forjaría tokens
+// de ADMIN). En local sí cae a un secreto de dev para no frenar el desarrollo.
+const JWT_SECRET = process.env.JWT_SECRET
+if (!JWT_SECRET && (process.env.RENDER || process.env.NODE_ENV === 'production')) {
+  console.error('[auth] FATAL: JWT_SECRET es obligatorio en producción. Abortando boot (fail-closed).')
+  process.exit(1)
+}
 await app.register(jwt, {
-  secret: process.env.JWT_SECRET || 'dev-only-insecure-secret-cambiar-en-prod'
+  secret: JWT_SECRET || 'dev-only-insecure-secret-SOLO-LOCAL'
 })
-if (!process.env.JWT_SECRET) {
-  console.warn('[auth] JWT_SECRET no seteado — usando secreto de DEV (inseguro). Setéalo en Render antes de producción.')
+if (!JWT_SECRET) {
+  console.warn('[auth] JWT_SECRET no seteado — usando secreto de DEV (SOLO local; en prod el boot aborta).')
 }
 
 // ── Health ───────────────────────────────────────────────────

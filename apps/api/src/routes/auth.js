@@ -52,7 +52,7 @@ export async function loginVendor(request, reply, prisma) {
       vendorId: vendor.id,
       role: vendor.role,                 // ADMIN | VENDOR (SUPERVISOR a futuro)
       tenantId: vendor.tenantId,
-    })
+    }, { expiresIn: '7d' })              // el token CADUCA; el front maneja el 401 → re-login
 
     // Nunca devolver el PIN al cliente
     const { pin: _, ...vendorSafe } = vendor
