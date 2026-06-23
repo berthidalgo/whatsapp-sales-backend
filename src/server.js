@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import jwt from '@fastify/jwt'
 import * as Sentry from '@sentry/node'
 import { PrismaClient } from '@prisma/client'
 import { handleWebhook } from './webhook/handler.js'
@@ -23,6 +24,10 @@ import {
   saveSteps, addTrigger, deleteTrigger, testTrigger, activarCampaign
 } from './routes/campaigns.js'
 import { loginVendor, getVendorNames } from './routes/auth.js'
+
+// ── Hito 1 (Fase Frontend): contrato v2 del Inbox + guard JWT ──
+import { listLeadsV2, leadDetailV2, conversationV2 } from './api/inbox.js'
+import { verifyJwt } from './lib/auth-guard.js'
 
 import { geminiHealthCheck } from './lib/gemini.js'
 
@@ -61,6 +66,14 @@ await app.register(cors, {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 })
+
+// ── Auth JWT (Hito 1) — los endpoints v2 lo exigen; los viejos siguen abiertos por compat ──
+await app.register(jwt, {
+  secret: process.env.JWT_SECRET || 'dev-only-insecure-secret-cambiar-en-prod'
+})
+if (!process.env.JWT_SECRET) {
+  console.warn('[auth] JWT_SECRET no seteado — usando secreto de DEV (inseguro). Setéalo en Render antes de producción.')
+}
 
 // ── Health ───────────────────────────────────────────────────
 app.get('/health', async () => ({
@@ -552,6 +565,12 @@ app.get('/vendors', async (req, reply) => {
   })
   return vendors
 })
+
+// ── v2 (Inbox del CRM nuevo) — protegidos por JWT + scoping RBAC server-side ──
+// Exponen el estado REAL del cerebro (lead_state). Aditivos: no tocan los endpoints viejos.
+app.get('/v2/leads',                  { preHandler: verifyJwt }, (req, reply) => listLeadsV2(req, reply, prisma))
+app.get('/v2/leads/:id',              { preHandler: verifyJwt }, (req, reply) => leadDetailV2(req, reply, prisma))
+app.get('/v2/leads/:id/conversation', { preHandler: verifyJwt }, (req, reply) => conversationV2(req, reply, prisma))
 
 
 

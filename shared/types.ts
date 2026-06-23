@@ -1,0 +1,65 @@
+// shared/types.ts — Contrato de API v2 (Hidata Sales OS)
+// FUENTE DE VERDAD del seam back↔front. El backend (JS) implementa estos shapes;
+// el frontend (TS) los importa. Si cambia un endpoint, se cambia AQUÍ primero.
+
+export type Role = 'ADMIN' | 'VENDOR' | 'SUPERVISOR'
+
+export interface AuthUser {
+  id: number
+  nombre: string
+  role: Role
+  tenantId: string
+  initials: string
+  color: string
+  whatsappNumber?: string
+}
+
+export interface LoginResponse {
+  ok: true
+  token: string
+  vendor: AuthUser
+}
+
+// Etapa del cerebro (los "momentos" consultivos). String abierto: el backend puede
+// agregar stages; el front mapea los conocidos y cae a un default para el resto.
+export type LeadStage = string
+export type LeadMode = 'AUTO_CONSULTIVO' | 'HUMAN_ACTIVE' | 'PAUSED' | (string & {})
+
+export interface LeadListItem {
+  id: number
+  nombre: string                 // nombre detectado o, si no hay, el teléfono
+  telefono: string
+  producto: string | null
+  stage: LeadStage
+  mode: LeadMode
+  temperatura: string | null
+  objecion: string | null
+  ultimoMensaje: string | null
+  ultimoMensajeAt: string | null              // ISO
+  ultimoOrigen: 'LEAD' | 'BOT' | 'VENDEDOR' | null
+  vendedor: string | null
+  esRecurrente: boolean
+}
+
+export interface LeadDetail {
+  id: number
+  nombre: string
+  telefono: string
+  stage: LeadStage
+  mode: LeadMode
+  slots: Record<string, unknown>   // slotsFilled del cerebro, SIN claves internas (_)
+  cierreResumen: string | null     // resumen legible del estado del closer (_cierre)
+  esRecurrente: boolean
+  vendedor: string | null
+  creadoEn: string                 // ISO
+}
+
+// Timeline unificado de la conversación. Discriminated union por `kind`.
+export type ConversationEvent =
+  | { kind: 'message'; origen: 'LEAD' | 'BOT' | 'VENDEDOR'; texto: string; at: string }
+  | { kind: 'state'; label: string; priority: string; at: string }
+
+export interface ConversationResponse {
+  leadId: number
+  eventos: ConversationEvent[]
+}
