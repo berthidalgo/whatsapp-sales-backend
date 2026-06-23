@@ -1,105 +1,33 @@
-# Hidata — WhatsApp Sales OS (backend)
+# Hidata — Sales OS (monorepo)
 
-Sales Operating System WhatsApp-native para edtech LATAM. Un agente conversacional ("el cerebro") califica leads con un flujo consultivo de 6 momentos y agenda la llamada donde el humano cierra.
+WhatsApp Sales OS para edtech LATAM. Monorepo: backend (cerebro + API), frontend (CRM) y el contrato compartido.
 
----
-
-## Stack
-
-| Capa | Tecnología |
-|---|---|
-| Backend | Node.js · Fastify · Prisma |
-| Base de datos | PostgreSQL (Supabase) |
-| Transporte WhatsApp | Evolution API v2.3.7 (Baileys) |
-| IA (cerebro) | Vertex AI — Gemini 2.5 Pro · fallback Cerebras (gpt-oss-120b) |
-| Audio entrante | Whisper (Groq) |
-| Observabilidad | Sentry (errores + scrubber de PII) |
-| Hosting | Render (auto-deploy desde `main`) |
-
----
-
-## Arquitectura — el cerebro
-
-El núcleo es un **único cerebro LLM** (`src/brain/`) que reemplaza el pipeline determinista anterior. Cada mensaje recorre:
-
+## Estructura
 ```
-1. POST /webhook              → handler
-2. Idempotency check          → idempotency.js
-3. Event router               → event-router.js  (audio → Whisper; imagen → visión)
-4. Debounce                   → debounce.js      (agrupa ráfagas de mensajes)
-5. Lead resolver              → lead-resolver.js  (upsert atómico)
-6. Cerebro                    → brain-pipeline.js → agent-brain.js
-                                 (historial + estado + factSheet + memoria episódica
-                                  → LLM → guardrails deterministas → persistir + enviar)
-7. Sender                     → Evolution API → WhatsApp
+hidata/
+├── apps/
+│   ├── api/        ← Backend: cerebro conversacional + API (Node/Fastify + Prisma). Deploy → Render.
+│   └── web/        ← Frontend: CRM / Inbox (React + Vite + TypeScript). Deploy → Vercel.
+├── packages/
+│   └── shared/     ← Contrato de API v2 (tipos TS) = una sola fuente de verdad back↔front.
+└── contexto/       ← Documentación interna privada (gitignored).
 ```
 
-Resiliencia: si el LLM primario falla, hay **failover automático** al proveedor secundario (nunca queda mudo). Si un humano toma la conversación, el cerebro entra en silencio (compuerta de modo) y reanuda solo si la conversación queda abandonada.
+## Por qué monorepo (decisión de arquitectura — 2026-06-23)
+- Equipo chico + contract-first → cambiar back y front en un solo PR sin desincronizar; tipos compartidos en `packages/shared`.
+- Estructura estándar de la industria 2026 (`apps/` + `packages/`). Detalle y trade-offs en `contexto/05-DISEÑO-FRONTEND.md`.
+- **Tooling lean (deliberado):** sin Turborepo/Nx ni npm workspaces por ahora — 2 apps, `node_modules` separados → cero "phantom dependencies". Se sumará tooling solo si la orquestación de builds lo justifica (mismo criterio anti-sobreingeniería que con LangChain).
 
----
+## Desarrollo (local-first)
+- **Backend:** `cd apps/api && npm install && npm run dev` (necesita env: `DATABASE_URL`, `JWT_SECRET`, etc.).
+- **Frontend:** `cd apps/web && npm install && npm run dev` → http://localhost:5173
+- El front apunta al backend vía `VITE_API_URL` (default `http://localhost:3999`).
 
-## Estado del lead
+## Deploy (por hito, no por cada cambio)
+- **Render (backend):** *Root Directory* = `apps/api`. AutoDeploy desde `main` → **cada push redeploya PROD** (pierde estado en memoria; no pushear a mitad de una prueba en vivo).
+- **Vercel (frontend):** *Root Directory* = `apps/web`. Previews automáticos por rama; producción solo en merge a `main`.
+- Cada target **ignora cambios fuera de su Root Directory** (mecanismo oficial de monorepo de Render/Vercel) → un push solo-front NO redespliega el backend.
 
-**Modos** (quién maneja la conversación): `AUTO_CONSULTIVO` · `HUMAN_ACTIVE` · `PAUSED`
-
-**Stages** (momento del flujo): `first_contact` → `discovery` → `qualifying_empresa` → `presenting` → `call_scheduling` → `call_confirmed` → `post_close`
-
-**Slots:** nombre, producto, empresa, experiencia, país destino, fecha/hora, monto.
-
----
-
-## Variables de entorno
-
-Se configuran en el hosting (nombres, sin valores):
-
-```
-DATABASE_URL · DIRECT_URL
-BRAIN_MODEL · BRAIN_PROVIDER            # selección de modelo/proveedor del cerebro
-GOOGLE_APPLICATION_CREDENTIALS · GOOGLE_CLOUD_PROJECT · GOOGLE_CLOUD_LOCATION
-EVOLUTION_API_URL · EVOLUTION_API_KEY · EVOLUTION_INSTANCE_NAME
-GROQ_API_KEY · CEREBRAS_API_KEY         # audio (Whisper) + fallback LLM
-SENTRY_DSN                              # observabilidad (inerte si ausente)
-CRON_SECRET                             # protege /cron/followup
-NUMERO_JOAN                             # notificación al vendedor
-WHATSAPP_PROVIDER                       # evolution (default) | cloud
-```
-
----
-
-## Endpoints
-
-```
-POST /webhook            recibe eventos de Evolution
-GET  /health             health check
-GET/POST /cron/followup  motor de followups (requiere ?secret=)
-```
-
-CRM API: `/leads`, `/leads/:id/mensaje`, `/leads/:id/mensajes`, `/reportes`, `/campaigns`, `/config/*`, `/auth/login`.
-
-Debug: `/debug/gemini-check`, `/debug/brain-test`, `/debug/brain-evals`, `/debug/brain-replay`.
-
----
-
-## Desarrollo
-
-```bash
-npm install
-npm test          # node --test (plomería determinista; cero deps de test)
-npm run dev       # node --watch src/server.js
-```
-
-Deploy: commit a `main` → Render auto-deploya (~3-5 min) → verificar `/health`.
-
----
-
-## Notas de Evolution API
-
-- Imagen fija **v2.3.7** (Baileys). No cambiar de versión.
-- Buttons/lists/polls están bloqueados por Meta para Baileys desde 2024 → usar texto numerado (1️⃣ 2️⃣ 3️⃣).
-- Payload v2.3.7: `data.messages[]` es array, no `data.key` directo.
-
----
-
-## Multitenant
-
-Todas las tablas llevan `tenant_id` desde el día 1 → la arquitectura soporta múltiples clientes sin cambios de schema.
+## ⚠️ Pendientes operativos
+- **Poner el repo en PRIVADO** (hoy es público → expone el código del cerebro, que es el moat).
+- Setear `JWT_SECRET` en Render antes de producción.

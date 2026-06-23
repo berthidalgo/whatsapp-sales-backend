@@ -17,7 +17,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.join(__dirname, '..')
+// Monorepo: contexto/ vive en la RAÍZ (apps/api/scripts → 3 niveles arriba).
+const ROOT = path.join(__dirname, '../../..')
 const OUT_DIR = path.join(ROOT, 'contexto', process.env.EXAMEN_OUT_SUBDIR || 'examen-modelos-2026-06-16')
 const BASE = 'https://whatsapp-sales-backend.onrender.com'
 

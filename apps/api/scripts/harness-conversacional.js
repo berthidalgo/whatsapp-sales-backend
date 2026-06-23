@@ -95,7 +95,8 @@ const CRITERIOS = [
 // ════════════════════════════════════════════════════════
 // SETUP — credenciales (Vertex desde Render) + env (Cerebras/Groq desde .env.claude)
 // ════════════════════════════════════════════════════════
-const envClaude = fs.readFileSync('.env.claude', 'utf8')
+// .env.claude vive en la RAÍZ del monorepo (3 niveles arriba de apps/api/scripts/).
+const envClaude = fs.readFileSync(new URL('../../../.env.claude', import.meta.url), 'utf8')
 const leer = (k) => (envClaude.match(new RegExp(`^${k}=(.+)$`, 'm'))?.[1] || '').trim().replace(/^["']|["']$/g, '')
 const CREDS = 'C:/tmp/gcreds.json'
 process.env.DATABASE_URL = leer('DATABASE_URL')
