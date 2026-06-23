@@ -63,3 +63,15 @@ export interface ConversationResponse {
   leadId: number
   eventos: ConversationEvent[]
 }
+
+// ── Hito 2: acciones de escritura del Inbox ──
+export interface ReplyRequest { texto: string }
+export interface ReplyResponse { ok: true; evento: ConversationEvent }
+
+// Toggle manual: tomar control (HUMAN_ACTIVE) o devolver al bot (AUTO_CONSULTIVO).
+// PAUSED es terminal (rechazo/cierre del cerebro), NO un toggle del vendedor.
+export interface ModeRequest { mode: 'HUMAN_ACTIVE' | 'AUTO_CONSULTIVO' }
+
+export interface AssignRequest { vendorId: number }
+
+export interface OkResponse { ok: true; [k: string]: unknown }

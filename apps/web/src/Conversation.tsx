@@ -1,11 +1,46 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import type { ConversationEvent } from '@shared/types'
 
 export default function Conversation({ leadId }: { leadId: number }) {
+  const qc = useQueryClient()
   const detailQ = useQuery({ queryKey: ['lead', leadId], queryFn: () => api.leadDetail(leadId) })
   const convQ = useQuery({ queryKey: ['conv', leadId], queryFn: () => api.conversation(leadId), refetchInterval: 10_000 })
   const d = detailQ.data
+
+  const [texto, setTexto] = useState('')
+  const [enviando, setEnviando] = useState(false)
+  const [cambiandoModo, setCambiandoModo] = useState(false)
+
+  function refrescar() {
+    qc.invalidateQueries({ queryKey: ['conv', leadId] })
+    qc.invalidateQueries({ queryKey: ['lead', leadId] })
+    qc.invalidateQueries({ queryKey: ['leads'] })
+  }
+
+  async function enviar() {
+    const t = texto.trim()
+    if (!t || enviando) return
+    setEnviando(true)
+    try {
+      await api.reply(leadId, t)   // responder TOMA el control (el bot se calla)
+      setTexto('')
+      refrescar()
+    } catch { /* TODO: toast de error en un hito futuro */ }
+    finally { setEnviando(false) }
+  }
+
+  async function toggleModo() {
+    if (!d || cambiandoModo) return
+    const nuevo = d.mode === 'HUMAN_ACTIVE' ? 'AUTO_CONSULTIVO' : 'HUMAN_ACTIVE'
+    setCambiandoModo(true)
+    try { await api.setMode(leadId, nuevo); refrescar() }
+    catch { /* TODO: toast */ }
+    finally { setCambiandoModo(false) }
+  }
+
+  const humano = d?.mode === 'HUMAN_ACTIVE'
 
   return (
     <div className="conv">
@@ -16,15 +51,22 @@ export default function Conversation({ leadId }: { leadId: number }) {
             {d && (
               <>
                 <span className="stage">{d.stage}</span>
-                <span className={`pill ${d.mode === 'HUMAN_ACTIVE' ? 'pill-human' : 'pill-bot'}`}>
-                  {d.mode === 'HUMAN_ACTIVE' ? '👤 humano' : '🤖 bot'}
+                <span className={`pill ${humano ? 'pill-human' : 'pill-bot'}`}>
+                  {humano ? '👤 humano' : '🤖 bot'}
                 </span>
                 {d.esRecurrente && <span className="pill">↩ vuelve</span>}
               </>
             )}
           </div>
         </div>
-        {d?.cierreResumen && <div className="cierre" title="Estado del closer">{d.cierreResumen}</div>}
+        <div className="conv-actions">
+          {d?.cierreResumen && <div className="cierre" title="Estado del closer">{d.cierreResumen}</div>}
+          {d && (
+            <button className="btn" onClick={() => void toggleModo()} disabled={cambiandoModo}>
+              {humano ? '🤖 Devolver al bot' : '✋ Tomar control'}
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="msgs">
@@ -33,7 +75,16 @@ export default function Conversation({ leadId }: { leadId: number }) {
       </div>
 
       <div className="conv-input">
-        <input disabled placeholder="Responder se habilita en el próximo hito…" />
+        <input
+          value={texto}
+          onChange={e => setTexto(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') void enviar() }}
+          placeholder={humano ? 'Escribe tu respuesta…' : 'Escribe para responder (tomarás el control del chat)…'}
+          disabled={enviando}
+        />
+        <button className="btn btn-send" onClick={() => void enviar()} disabled={enviando || !texto.trim()}>
+          {enviando ? '…' : 'Enviar'}
+        </button>
       </div>
     </div>
   )
