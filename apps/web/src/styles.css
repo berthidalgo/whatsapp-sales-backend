@@ -40,6 +40,10 @@ button { font-family: inherit; cursor: pointer; }
 .sb-top { padding: 16px; border-bottom: 1px solid var(--border); }
 .sb-title { font-size: 16px; font-weight: 700; }
 .sb-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.sb-search { width: 100%; margin-top: 10px; padding: 7px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: 8px; outline: none; box-sizing: border-box; }
+.sb-search:focus { border-color: var(--accent); }
+.sb-filters { display: flex; gap: 6px; margin-top: 6px; }
+.sb-filters select { flex: 1; min-width: 0; padding: 5px 6px; font-size: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text-2); cursor: pointer; }
 .lead-list { flex: 1; overflow-y: auto; }
 .empty { padding: 24px 16px; color: var(--text-3); font-size: 13px; text-align: center; }
 

@@ -1,12 +1,47 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
 import type { AuthUser, LeadListItem } from '@shared/types'
+import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import Conversation from './Conversation'
+
+// Etapas del cerebro (M1-M7 + especial) con label amigable para el filtro. El valor
+// es el `stage` real que devuelve el backend; la lista puede traer otros (string
+// abierto) y se siguen mostrando — el filtro solo ofrece las conocidas.
+const STAGE_LABELS: Record<string, string> = {
+  first_contact: 'Primer contacto',
+  discovery: 'Descubrimiento',
+  qualifying_empresa: 'Calificando',
+  presenting: 'Presentando',
+  call_scheduling: 'Agendando',
+  call_confirmed: 'Cita confirmada',
+  post_close: 'Post-cierre',
+  returning_recognition: 'Reactivado',
+}
+const STAGE_ORDER = Object.keys(STAGE_LABELS)
 
 export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const [selId, setSelId] = useState<number | null>(null)
+  const [q, setQ] = useState('')
+  const [stage, setStage] = useState('')
+  const [label, setLabel] = useState('')   // '' = todas · '__none__' = sin etiqueta
   const leadsQ = useQuery({ queryKey: ['leads'], queryFn: api.leads, refetchInterval: 10_000 })
+
+  const all = leadsQ.data ?? []
+  // Filtrado client-side sobre la lista cargada (≤200). useMemo: no re-filtra en cada
+  // render, solo cuando cambian los datos o el filtro.
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase()
+    return all.filter(l => {
+      if (ql && !`${l.nombre} ${l.telefono} ${l.producto ?? ''}`.toLowerCase().includes(ql)) return false
+      if (stage && l.stage !== stage) return false
+      if (label === '__none__') { if (l.label) return false }
+      else if (label && l.label !== label) return false
+      return true
+    })
+  }, [all, q, stage, label])
+
+  const filtrando = !!(q.trim() || stage || label)
 
   return (
     <div className="app">
@@ -24,13 +59,36 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
       <aside className="sidebar">
         <div className="sb-top">
           <div className="sb-title">Inbox</div>
-          <div className="sb-sub">{user.nombre} · {user.role === 'ADMIN' ? 'todos los leads' : 'mis leads'}</div>
+          <div className="sb-sub">
+            {user.nombre} · {user.role === 'ADMIN' ? 'todos los leads' : 'mis leads'}
+            {!leadsQ.isLoading && <> · {filtrando ? `${filtered.length} de ${all.length}` : `${all.length}`}</>}
+          </div>
+          <input
+            className="sb-search"
+            placeholder="Buscar nombre, teléfono o producto…"
+            value={q}
+            onChange={e => setQ(e.target.value)}
+          />
+          <div className="sb-filters">
+            <select value={stage} onChange={e => setStage(e.target.value)} title="Filtrar por etapa">
+              <option value="">Toda etapa</option>
+              {STAGE_ORDER.map(s => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
+            </select>
+            <select value={label} onChange={e => setLabel(e.target.value)} title="Filtrar por etiqueta">
+              <option value="">Toda etiqueta</option>
+              <option value="__none__">Sin etiqueta</option>
+              {ETIQUETAS_VALIDAS.map(et => <option key={et} value={et}>{et}</option>)}
+            </select>
+          </div>
         </div>
         <div className="lead-list">
           {leadsQ.isLoading && <div className="empty">Cargando…</div>}
           {leadsQ.isError && <div className="empty">Error al cargar leads</div>}
-          {leadsQ.data?.length === 0 && <div className="empty">Sin leads todavía</div>}
-          {leadsQ.data?.map(l => (
+          {!leadsQ.isLoading && all.length === 0 && <div className="empty">Sin leads todavía</div>}
+          {!leadsQ.isLoading && all.length > 0 && filtered.length === 0 && (
+            <div className="empty">Ningún lead coincide con el filtro</div>
+          )}
+          {filtered.map(l => (
             <LeadRow key={l.id} lead={l} active={l.id === selId} onClick={() => setSelId(l.id)} />
           ))}
         </div>
@@ -56,7 +114,7 @@ function LeadRow({ lead, active, onClick }: { lead: LeadListItem; active: boolea
       </div>
       <div className="lr-2">{lead.ultimoMensaje || '—'}</div>
       <div className="lr-3">
-        <span className="stage">{lead.stage}</span>
+        <span className="stage">{STAGE_LABELS[lead.stage] ?? lead.stage}</span>
         {lead.objecion && <span className="obj">obj: {lead.objecion}</span>}
         {lead.producto && <span className="prod">{lead.producto}</span>}
       </div>
