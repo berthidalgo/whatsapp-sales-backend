@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
+import { useToast } from './Toast'
 import type { AuthUser, LeadListItem } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import { loadSeen, saveSeen, isUnread } from './unread'
@@ -27,6 +28,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
   const [stage, setStage] = useState('')
   const [label, setLabel] = useState('')   // '' = todas · '__none__' = sin etiqueta
   const [seen, setSeen] = useState(() => loadSeen(user.id))
+  const toast = useToast()
   const leadsQ = useQuery({ queryKey: ['leads'], queryFn: api.leads, refetchInterval: 10_000 })
 
   const all = leadsQ.data ?? []
@@ -57,6 +59,25 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
   useEffect(() => {
     document.title = noLeidos > 0 ? `(${noLeidos}) Hidata Inbox` : 'Hidata Inbox'
   }, [noLeidos])
+
+  // Notificación in-app: toast cuando un lead PASA a no-leído entre polls (= el lead
+  // escribió algo nuevo). `seen` vía ref para no re-disparar al marcar visto. Edge cases:
+  //  - carga inicial: el primer set es BASELINE, no avisa (no son "nuevos").
+  //  - lead abierto (selId): no se avisa, lo estás viendo.
+  //  - ya estaba no-leído: no re-avisa (solo la transición no-leído→leído→no-leído).
+  const seenRef = useRef(seen)
+  seenRef.current = seen
+  const prevUnreadRef = useRef<Set<number> | null>(null)
+  useEffect(() => {
+    if (leadsQ.isLoading) return                       // aún sin datos
+    const current = new Set(all.filter(l => isUnread(l, seenRef.current)).map(l => l.id))
+    const prev = prevUnreadRef.current
+    prevUnreadRef.current = current
+    if (prev === null) return                          // primer set con datos = baseline
+    const nuevos = all.filter(l => l.id !== selId && current.has(l.id) && !prev.has(l.id))
+    if (nuevos.length === 1) toast(`💬 Nuevo mensaje de ${nuevos[0].nombre}`, 'info')
+    else if (nuevos.length > 1) toast(`💬 ${nuevos.length} leads con mensajes nuevos`, 'info')
+  }, [all, selId, leadsQ.isLoading, toast])
   // Filtrado client-side sobre la lista cargada (≤200). useMemo: no re-filtra en cada
   // render, solo cuando cambian los datos o el filtro.
   const filtered = useMemo(() => {
