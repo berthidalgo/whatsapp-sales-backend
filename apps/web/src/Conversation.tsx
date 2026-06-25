@@ -11,7 +11,8 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   const d = detailQ.data
 
   const puedeReasignar = user.role === 'ADMIN' || user.role === 'SUPERVISOR'
-  const vendorsQ = useQuery({ queryKey: ['vendors'], queryFn: api.vendors, enabled: puedeReasignar })
+  // Picker de reasignar: vendedores del MISMO tenant (endpoint scopeado, no el público).
+  const vendorsQ = useQuery({ queryKey: ['vendors-scoped'], queryFn: api.vendorsScoped, enabled: puedeReasignar })
 
   const [texto, setTexto] = useState('')
   const [enviando, setEnviando] = useState(false)

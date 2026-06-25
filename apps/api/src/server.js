@@ -26,7 +26,7 @@ import {
 import { loginVendor, getVendorNames } from './routes/auth.js'
 
 // ── Hito 1 (Fase Frontend): contrato v2 del Inbox + guard JWT ──
-import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2 } from './api/inbox.js'
+import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
 import { replyV2, setModeV2, assignV2, setLabelV2 } from './api/inbox-actions.js'
 import { verifyJwt } from './lib/auth-guard.js'
 
@@ -577,6 +577,7 @@ app.get('/vendors', async (req, reply) => {
 
 // ── v2 (Inbox del CRM nuevo) — protegidos por JWT + scoping RBAC server-side ──
 // Exponen el estado REAL del cerebro (lead_state). Aditivos: no tocan los endpoints viejos.
+app.get('/v2/vendors',                { preHandler: verifyJwt }, (req, reply) => listVendorsV2(req, reply, prisma))
 app.get('/v2/leads',                  { preHandler: verifyJwt }, (req, reply) => listLeadsV2(req, reply, prisma))
 app.get('/v2/leads/:id',              { preHandler: verifyJwt }, (req, reply) => leadDetailV2(req, reply, prisma))
 app.get('/v2/leads/:id/conversation', { preHandler: verifyJwt }, (req, reply) => conversationV2(req, reply, prisma))

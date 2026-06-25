@@ -74,6 +74,27 @@ function resumirCierre(cierre) {
 
 // ── Handlers ───────────────────────────────────────────────────────────────
 
+// GET /v2/vendors — vendedores del MISMO tenant, para el picker de reasignar.
+// A diferencia del /auth/vendors PÚBLICO (pantalla de login, pre-auth), esta es
+// autenticada y tenant-scopeada → NO filtra vendedores de otros tenants (muro duro).
+// FAIL-CLOSED: sin tenantId en el token, lista vacía (Prisma trata `tenantId: undefined`
+// como "sin filtro" = devolvería TODOS los tenants → lo cortamos antes de la query).
+export async function listVendorsV2(request, reply, prisma) {
+  try {
+    const tenantId = request.user?.tenantId
+    if (!tenantId) return reply.send([])
+    const vendors = await prisma.vendor.findMany({
+      where: { tenantId, activo: true },
+      select: { id: true, nombre: true, role: true },
+      orderBy: { id: 'asc' },
+    })
+    return reply.send(vendors)
+  } catch (error) {
+    console.error('[inbox] listVendorsV2:', error.message)
+    return reply.code(500).send({ error: 'error al listar vendedores' })
+  }
+}
+
 export async function listLeadsV2(request, reply, prisma) {
   try {
     const leads = await prisma.lead.findMany({

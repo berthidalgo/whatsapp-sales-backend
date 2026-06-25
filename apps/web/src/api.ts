@@ -48,7 +48,10 @@ export interface VendorLite {
 }
 
 export const api = {
+  // Público (pantalla de login, pre-auth): todos los vendedores activos.
   vendors: () => req<VendorLite[]>('/auth/vendors'),
+  // Autenticado + tenant-scopeado (picker de reasignar): solo los del MISMO tenant.
+  vendorsScoped: () => req<{ id: number; nombre: string; role: string }[]>('/v2/vendors'),
   login: (nombre: string, pin: string) =>
     req<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ nombre, pin }) }),
   leads: () => req<LeadListItem[]>('/v2/leads'),
