@@ -154,7 +154,7 @@ export default function FlowBuilder({ user }: { user: AuthUser }) {
                 <div className="fnode-slots">{nodoSel.requiredSlots.map(s => <span key={s} className="fnode-slot">{s}</span>)}</div>
               </>
             )}
-            <div className="fe-hint">Los cambios se aplican al bot cuando se conecte la orquestación (próximo hito). Hoy se guardan como configuración del programa.</div>
+            <div className="fe-hint">Se guarda por programa. Afecta al bot cuando el administrador activa la orquestación de flujos; las reglas de seguridad del cerebro (no inventar precio/fechas, no prometer resultados) siempre mandan.</div>
           </aside>
         )}
       </div>

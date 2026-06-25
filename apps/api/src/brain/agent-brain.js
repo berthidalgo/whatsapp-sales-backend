@@ -447,7 +447,49 @@ export async function pensarYResponder({
 // SYSTEM PROMPT — la identidad y reglas del cerebro
 // Aquí vive el prompt engineering 100x. Persona + contexto + reglas duras.
 // ════════════════════════════════════════════════════════
-function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead }) {
+// ── Flow Builder Hito C: guía del supervisor por momento (addendum, OPT-IN) ──
+// Etiqueta legible del momento para el addendum.
+const MOMENTO_SUPERVISOR = {
+  first_contact: 'Momento 1 (Apertura)',
+  discovery: 'Momento 2 (Descubrimiento)',
+  qualifying_empresa: 'Momento 3 (Calificación)',
+  presenting: 'Momento 4 (Presentación)',
+  call_scheduling: 'Momento 5 (Agendar llamada)',
+  call_confirmed: 'Momento 6 (Confirmar cita)',
+  post_close: 'Post-cierre',
+  returning_recognition: 'Lead que vuelve',
+}
+
+// El candado: el injection del supervisor solo se activa con FLOW_OVERRIDES_ENABLED=true.
+// OFF por defecto → aunque haya overrides guardados, el prompt queda BYTE-IDÉNTICO (el
+// bot vivo no cambia hasta que el dueño de la plataforma flipea el switch en Render).
+export function flowOverridesEnabled() {
+  return process.env.FLOW_OVERRIDES_ENABLED === 'true'
+}
+
+// Función PURA: arma el addendum con la guía que el supervisor editó por momento
+// (campaign.config.flow.nodes). Devuelve '' si no hay overrides → cero cambio al prompt.
+// NO reemplaza la calibración del cerebro: la suma como guía adicional, y deja claro que
+// las reglas de seguridad SIEMPRE ganan.
+export function construirGuiaSupervisor(campaignConfig) {
+  const overrides = campaignConfig?.flow?.nodes
+  if (!overrides || typeof overrides !== 'object') return ''
+  const lineas = []
+  for (const stage of Object.keys(MOMENTO_SUPERVISOR)) {   // orden estable
+    const o = overrides[stage]
+    if (o && typeof o.guidance === 'string' && o.guidance.trim()) {
+      lineas.push(`- ${MOMENTO_SUPERVISOR[stage]}: ${o.guidance.trim()}`)
+    }
+  }
+  if (!lineas.length) return ''
+  return `\n\n# GUÍA ADICIONAL DEL SUPERVISOR (para este programa)
+El supervisor afinó estas indicaciones por momento para ESTE programa. Aplícalas, PERO siguen mandando TODAS las reglas de arriba (closer, una pregunta a la vez, anti-disco-rayado, formato WhatsApp) y las REGLAS DURAS de abajo. Si una indicación choca con una regla de seguridad (no inventar precio/fechas/módulos, no prometer resultados, no dar números de cuenta), GANA la regla de seguridad.
+${lineas.join('\n')}`
+}
+
+export function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead }) {
+  // Addendum del supervisor (Hito C). Gateado por env → OFF = '' = prompt byte-idéntico.
+  const guiaSupervisor = flowOverridesEnabled() ? construirGuiaSupervisor(campaignConfig) : ''
   const agente = campaignConfig?.agente || {}
   const comportamiento = campaignConfig?.comportamiento || {}
   const nombreAgente = agente.nombre || 'Jhon'
@@ -603,7 +645,7 @@ Si en un mensaje el lead te da varias cosas ("soy Pedro, exporto cacao, ya expor
 - **MENSAJE SIN SENTIDO / TROLL:** no te enredes. Reconduce con calma y una pregunta simple, o pide que aclare. Mantén la compostura.
 - **PRODUCTO NO PERUANO / IMPORTACIÓN (ej: "traer zapatillas de China"):** con tacto, aclara que el programa es para EXPORTAR productos peruanos al mundo, y pregunta si tiene algún producto peruano en mente. No le sigas la corriente a la importación.
 - **PREGUNTA TÉCNICA FUERA DE TEMA (ej: "¿usan Docker?"):** eso está fuera de tu alcance como asesor de exportaciones; redirige con naturalidad al tema de exportar. NO inventes respuestas técnicas.
-- **PIDE QUE LE CONSIGAN / PASEN UN COMPRADOR, BROKER O CLIENTE ("no quiero curso, quiero que me pasen un comprador", "consíganme clientes"):** ⚠️ El programa NO entrega compradores ni hace de intermediario comercial — ENSEÑA a conseguir tus PROPIOS clientes y cerrar tus exportaciones (está en el temario). Redirección honesta SIN prometer compradores: "Entiendo [nombre]. Mira, nosotros no te pasamos un comprador directo, pero el programa te enseña justamente a conseguir y cerrar tus propios compradores. ¿Te cuento cómo?". ⛔ NUNCA prometas "conectarte con compradores", "conseguirte clientes" ni "pasarte contactos" — es un servicio que NO existe (promesa prohibida).
+- **PIDE QUE LE CONSIGAN / PASEN UN COMPRADOR, BROKER O CLIENTE ("no quiero curso, quiero que me pasen un comprador", "consíganme clientes"):** ⚠️ El programa NO entrega compradores ni hace de intermediario comercial — ENSEÑA a conseguir tus PROPIOS clientes y cerrar tus exportaciones (está en el temario). Redirección honesta SIN prometer compradores: "Entiendo [nombre]. Mira, nosotros no te pasamos un comprador directo, pero el programa te enseña justamente a conseguir y cerrar tus propios compradores. ¿Te cuento cómo?". ⛔ NUNCA prometas "conectarte con compradores", "conseguirte clientes" ni "pasarte contactos" — es un servicio que NO existe (promesa prohibida).${guiaSupervisor}
 
 # REGLAS DURAS (inviolables, aplican en TODOS los momentos)
 1. RESPONDE lo que el lead pregunta. Si está en la ficha, dáselo. Lo que no esté en la ficha, "lo vemos en la llamada" (en primera persona). Nunca ignores una pregunta directa.
