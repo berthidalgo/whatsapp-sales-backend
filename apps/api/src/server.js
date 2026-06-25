@@ -28,6 +28,7 @@ import { loginVendor, getVendorNames } from './routes/auth.js'
 // ── Hito 1 (Fase Frontend): contrato v2 del Inbox + guard JWT ──
 import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
 import { replyV2, setModeV2, assignV2, setLabelV2 } from './api/inbox-actions.js'
+import { getFlowV2 } from './api/flow.js'
 import { verifyJwt } from './lib/auth-guard.js'
 
 import { geminiHealthCheck } from './lib/gemini.js'
@@ -592,6 +593,7 @@ app.post('/v2/leads/:id/reply',       { preHandler: verifyJwt }, (req, reply) =>
 app.post('/v2/leads/:id/mode',        { preHandler: verifyJwt }, (req, reply) => setModeV2(req, reply, prisma))
 app.post('/v2/leads/:id/assign',      { preHandler: verifyJwt }, (req, reply) => assignV2(req, reply, prisma))
 app.post('/v2/leads/:id/label',       { preHandler: verifyJwt }, (req, reply) => setLabelV2(req, reply, prisma))
+app.get('/v2/flow',                   { preHandler: verifyJwt }, (req, reply) => getFlowV2(req, reply))
 
 
 

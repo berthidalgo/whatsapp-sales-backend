@@ -7,8 +7,12 @@ import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import { STAGE_LABELS, STAGE_ORDER, stageLabel } from '@shared/stages'
 import { loadSeen, saveSeen, isUnread } from './unread'
 import Conversation from './Conversation'
+import FlowBuilder from './FlowBuilder'
+
+type View = 'inbox' | 'flujos'
 
 export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+  const [view, setView] = useState<View>('inbox')
   const [selId, setSelId] = useState<number | null>(null)
   const [q, setQ] = useState('')
   const [stage, setStage] = useState('')
@@ -80,14 +84,14 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
   const filtrando = !!(q.trim() || stage || label)
 
   return (
-    <div className="app">
+    <div className={`app${view === 'flujos' ? ' app-flow' : ''}`}>
       <nav className="rail">
         <div className="rail-logo">H</div>
-        <button className="rb on" title="Inbox">
+        <button className={`rb${view === 'inbox' ? ' on' : ''}`} title="Inbox" onClick={() => setView('inbox')}>
           💬<span>INBOX</span>
           {noLeidos > 0 && <span className="rb-badge">{noLeidos > 99 ? '99+' : noLeidos}</span>}
         </button>
-        <button className="rb" disabled title="Próximo hito">⚡<span>FLUJOS</span></button>
+        <button className={`rb${view === 'flujos' ? ' on' : ''}`} title="Flujos" onClick={() => setView('flujos')}>⚡<span>FLUJOS</span></button>
         <button className="rb" disabled title="Próximo hito">🧠<span>BRAIN</span></button>
         <div className="rail-sp" />
         <button className="rail-av" title={`${user.nombre} — cerrar sesión`} onClick={onLogout}>
@@ -95,6 +99,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
         </button>
       </nav>
 
+      {view === 'flujos' ? <FlowBuilder /> : <>
       <aside className="sidebar">
         <div className="sb-top">
           <div className="sb-title">Inbox</div>
@@ -138,6 +143,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
           ? <Conversation leadId={selId} user={user} />
           : <div className="placeholder">Selecciona un lead para ver la conversación</div>}
       </main>
+      </>}
     </div>
   )
 }

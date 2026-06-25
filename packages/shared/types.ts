@@ -89,3 +89,36 @@ export interface AssignRequest { vendorId: number }
 export interface LabelRequest { label: string | null }
 
 export interface OkResponse { ok: true; [k: string]: unknown }
+
+// ── Flow Builder (Hito A): el flujo del cerebro materializado como grafo editable ──
+// Tipos de nodo. `generative` = el cerebro COMPONE con la guía/munición del nodo (funciona
+// en QR hoy). Los `rail_*` = se envían tal cual (deterministas) y los interactivos
+// (botones/media) son `cloudOnly` (necesitan WhatsApp Cloud API). `terminal` = sin salida.
+export type FlowNodeType = 'generative' | 'rail_text' | 'rail_media' | 'rail_buttons' | 'terminal'
+
+export interface FlowNode {
+  id: string                 // = stage del cerebro (first_contact, presenting, …)
+  type: FlowNodeType
+  stage: string
+  momento: string            // "M1".."M7" / "★" (returning)
+  label: string              // amigable (ver stages.js)
+  guidance: string           // qué hace el cerebro en este momento (editable en Hito B)
+  requiredSlots: string[]    // slots que deben estar llenos para entrar/avanzar
+  cloudOnly?: boolean        // true si el nodo necesita Cloud API (botones/media)
+}
+
+export interface FlowEdge {
+  id: string
+  from: string               // node id
+  to: string                 // node id
+  condition: string          // legible: qué dispara la transición
+  fastTrack?: boolean        // salto directo (ej. lead pide llamada HOT)
+}
+
+export interface Flow {
+  id: string
+  name: string
+  source: 'materialized' | 'custom'   // materialized = derivado del cerebro; custom = editado
+  nodes: FlowNode[]
+  edges: FlowEdge[]
+}
