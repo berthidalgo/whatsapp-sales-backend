@@ -38,7 +38,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
 
       <main className="main">
         {selId
-          ? <Conversation leadId={selId} />
+          ? <Conversation leadId={selId} user={user} />
           : <div className="placeholder">Selecciona un lead para ver la conversación</div>}
       </main>
     </div>

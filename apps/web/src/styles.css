@@ -90,6 +90,7 @@ button { font-family: inherit; cursor: pointer; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn-send { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-send:hover:not(:disabled) { color: #fff; opacity: .92; }
+.reassign-select { cursor: pointer; max-width: 170px; }
 
 /* ── Login ── */
 .login-wrap { height: 100vh; display: grid; place-items: center; background: var(--bg); }

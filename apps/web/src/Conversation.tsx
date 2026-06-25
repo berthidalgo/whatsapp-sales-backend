@@ -1,17 +1,21 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
-import type { ConversationEvent } from '@shared/types'
+import type { AuthUser, ConversationEvent } from '@shared/types'
 
-export default function Conversation({ leadId }: { leadId: number }) {
+export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
   const detailQ = useQuery({ queryKey: ['lead', leadId], queryFn: () => api.leadDetail(leadId) })
   const convQ = useQuery({ queryKey: ['conv', leadId], queryFn: () => api.conversation(leadId), refetchInterval: 10_000 })
   const d = detailQ.data
 
+  const puedeReasignar = user.role === 'ADMIN' || user.role === 'SUPERVISOR'
+  const vendorsQ = useQuery({ queryKey: ['vendors'], queryFn: api.vendors, enabled: puedeReasignar })
+
   const [texto, setTexto] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [cambiandoModo, setCambiandoModo] = useState(false)
+  const [reasignando, setReasignando] = useState(false)
 
   function refrescar() {
     qc.invalidateQueries({ queryKey: ['conv', leadId] })
@@ -40,6 +44,14 @@ export default function Conversation({ leadId }: { leadId: number }) {
     finally { setCambiandoModo(false) }
   }
 
+  async function reasignar(vendorId: number) {
+    if (!vendorId || reasignando) return
+    setReasignando(true)
+    try { await api.assign(leadId, vendorId); refrescar() }
+    catch { /* TODO: toast */ }
+    finally { setReasignando(false) }
+  }
+
   const humano = d?.mode === 'HUMAN_ACTIVE'
 
   return (
@@ -61,6 +73,18 @@ export default function Conversation({ leadId }: { leadId: number }) {
         </div>
         <div className="conv-actions">
           {d?.cierreResumen && <div className="cierre" title="Estado del closer">{d.cierreResumen}</div>}
+          {puedeReasignar && (
+            <select
+              className="btn reassign-select"
+              value=""
+              disabled={reasignando}
+              onChange={e => { const v = Number(e.target.value); if (v) void reasignar(v) }}
+              title="Reasignar a otro vendedor"
+            >
+              <option value="">↗ Reasignar a…</option>
+              {vendorsQ.data?.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}
+            </select>
+          )}
           {d && (
             <button className="btn" onClick={() => void toggleModo()} disabled={cambiandoModo}>
               {humano ? '🤖 Devolver al bot' : '✋ Tomar control'}
