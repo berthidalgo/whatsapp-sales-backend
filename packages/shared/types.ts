@@ -56,9 +56,17 @@ export interface LeadDetail {
   creadoEn: string                 // ISO
 }
 
+// Referencia a una media adjunta (imagen/comprobante). El front la pide con auth a
+// `/v2/leads/:id/media/:id` (no hay URL pública → no se filtra PII del comprobante).
+export interface MediaRef {
+  id: number
+  tipo: string        // image | audio
+  mimeType: string
+}
+
 // Timeline unificado de la conversación. Discriminated union por `kind`.
 export type ConversationEvent =
-  | { kind: 'message'; origen: 'LEAD' | 'BOT' | 'VENDEDOR'; texto: string; at: string }
+  | { kind: 'message'; origen: 'LEAD' | 'BOT' | 'VENDEDOR'; texto: string; at: string; media?: MediaRef }
   | { kind: 'state'; label: string; priority: string; at: string }
 
 export interface ConversationResponse {

@@ -5,6 +5,7 @@
 // Contrato: ../../shared/types.ts (LeadListItem / LeadDetail / ConversationResponse).
 
 import { scopeWhere } from '../lib/auth-guard.js'
+import { getMedia } from '../lib/mediaStore.js'
 
 // ── Serializers (puros, exportados para test) ──────────────────────────────
 
@@ -114,13 +115,25 @@ export async function conversationV2(request, reply, prisma) {
     const lead = await prisma.lead.findFirst({ where: { ...scopeWhere(request.user), id }, select: { id: true } })
     if (!lead) return reply.code(404).send({ error: 'lead no encontrado' })
 
-    const [mensajes, notifs] = await Promise.all([
-      prisma.message.findMany({ where: { leadId: id }, orderBy: { createdAt: 'asc' }, take: 300, select: { origen: true, texto: true, createdAt: true } }),
+    const [mensajes, notifs, medias] = await Promise.all([
+      prisma.message.findMany({ where: { leadId: id }, orderBy: { createdAt: 'asc' }, take: 300, select: { id: true, origen: true, texto: true, createdAt: true } }),
       prisma.crmNotification.findMany({ where: { leadId: id }, orderBy: { createdAt: 'asc' }, select: { title: true, priority: true, createdAt: true } }),
+      prisma.mediaAsset.findMany({ where: { leadId: id }, select: { id: true, messageId: true, tipo: true, mimeType: true } }),
     ])
 
+    // Linkear cada media a su mensaje marcador (1:1 por messageId) → el front la
+    // renderiza inline. La media NO se sirve aquí (solo metadatos); el front la pide
+    // con auth al endpoint /media/:mediaId (cero URL pública del comprobante).
+    const mediaPorMsg = new Map()
+    for (const m of medias) if (m.messageId != null) mediaPorMsg.set(m.messageId, m)
+
     const eventos = [
-      ...mensajes.map(m => ({ kind: 'message', origen: m.origen, texto: m.texto, at: m.createdAt })),
+      ...mensajes.map(m => {
+        const ev = { kind: 'message', origen: m.origen, texto: m.texto, at: m.createdAt }
+        const md = mediaPorMsg.get(m.id)
+        if (md) ev.media = { id: md.id, tipo: md.tipo, mimeType: md.mimeType }
+        return ev
+      }),
       ...notifs.map(n => ({ kind: 'state', label: n.title, priority: n.priority, at: n.createdAt })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at))
 
@@ -128,5 +141,38 @@ export async function conversationV2(request, reply, prisma) {
   } catch (error) {
     console.error('[inbox] conversationV2:', error.message)
     return reply.code(500).send({ error: 'error al obtener la conversación' })
+  }
+}
+
+// GET /v2/leads/:id/media/:mediaId — sirve los bytes de una media con JWT+scope.
+// Doble guarda: el lead debe estar en el scope del usuario Y la media debe pertenecer
+// a ese lead (un vendedor no saca media de otro adivinando el mediaId). Sin URL pública
+// → la PII financiera del comprobante solo la ve el dueño/admin autenticado.
+export async function serveMediaV2(request, reply, prisma) {
+  try {
+    const leadId = Number(request.params.id)
+    const mediaId = Number(request.params.mediaId)
+    if (!Number.isInteger(leadId) || !Number.isInteger(mediaId)) {
+      return reply.code(400).send({ error: 'parámetros inválidos' })
+    }
+
+    const lead = await prisma.lead.findFirst({ where: { ...scopeWhere(request.user), id: leadId }, select: { id: true } })
+    if (!lead) return reply.code(404).send({ error: 'lead no encontrado' })
+
+    const media = await getMedia(prisma, mediaId)
+    if (!media || media.leadId !== leadId) return reply.code(404).send({ error: 'media no encontrada' })
+
+    if (media.storage === 'pg' && media.bytes) {
+      reply.header('Content-Type', media.mimeType || 'application/octet-stream')
+      reply.header('Cache-Control', 'private, max-age=3600')
+      return reply.send(Buffer.from(media.bytes))
+    }
+    if (media.storage === 'supabase' && media.url) {
+      return reply.redirect(media.url)  // futuro: signed URL de bucket privado
+    }
+    return reply.code(404).send({ error: 'media sin contenido' })
+  } catch (error) {
+    console.error('[inbox] serveMediaV2:', error.message)
+    return reply.code(500).send({ error: 'error al servir media' })
   }
 }

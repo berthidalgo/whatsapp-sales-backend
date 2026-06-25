@@ -63,4 +63,15 @@ export const api = {
     req<{ ok: true }>(`/v2/leads/${id}/assign`, { method: 'POST', body: JSON.stringify({ vendorId }) }),
   setLabel: (id: number, label: string | null) =>
     req<{ ok: true; label: string | null }>(`/v2/leads/${id}/label`, { method: 'POST', body: JSON.stringify({ label }) }),
+  // Media servida con auth (no hay URL pública): bajamos el blob y lo volvemos
+  // object URL para el <img>. Así el JWT viaja en el header, no en la URL.
+  mediaObjectUrl: async (leadId: number, mediaId: number): Promise<string> => {
+    const token = getToken()
+    const res = await fetch(`${BASE}/v2/leads/${leadId}/media/${mediaId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (res.status === 401) { clearSession(); throw new Error('sesión expirada') }
+    if (!res.ok) throw new Error(`media → ${res.status}`)
+    return URL.createObjectURL(await res.blob())
+  },
 }

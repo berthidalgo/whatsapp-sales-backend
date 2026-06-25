@@ -126,6 +126,7 @@ model Lead {
   commitments       Commitment[]
   followupQueue     FollowupQueueItem[]
   crmNotifications  CrmNotification[]
+  mediaAssets       MediaAsset[]
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -174,6 +175,32 @@ model Message {
   createdAt      DateTime      @default(now())
 
   @@map("messages")
+}
+
+// ─── Media entrante (comprobantes, fotos del lead) ────────────
+// El lead manda una imagen por WhatsApp → el cerebro la baja para que Gemini la
+// lea, y AHORA además la persistimos para mostrarla en el Inbox. `storage` es la
+// costura: hoy 'pg' (bytes en la BD, servidos por endpoint propio con JWT → cero
+// URL pública = no fuga de PII financiera del comprobante). Migrable a 'supabase'
+// (bucket privado + signed URLs) si el volumen crece. `messageId` linkea al mensaje
+// marcador del timeline. NO se relaciona a Message (tabla caliente) → Int suelto.
+model MediaAsset {
+  id          Int      @id @default(autoincrement())
+  leadId      Int      @map("lead_id")
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  messageId   Int?     @map("message_id")
+  tenantId    String?  @map("tenant_id")
+  origen      String   @default("LEAD")            // LEAD | VENDEDOR
+  tipo        String                                // image | audio
+  mimeType    String   @map("mime_type")
+  storage     String   @default("pg")              // pg | supabase
+  bytes       Bytes?                                // si storage=pg
+  url         String?                               // si storage=supabase
+  sizeBytes   Int?     @map("size_bytes")
+  createdAt   DateTime @default(now())             @map("created_at")
+
+  @@index([leadId])
+  @@map("media_assets")
 }
 
 // ─── Configuración del bot ────────────────────────────────────

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
-import type { AuthUser, ConversationEvent } from '@shared/types'
+import type { AuthUser, ConversationEvent, MediaRef } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
@@ -118,7 +118,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
 
       <div className="msgs">
         {convQ.isLoading && <div className="empty">Cargando conversación…</div>}
-        {convQ.data?.eventos.map((e, i) => <EventItem key={i} ev={e} />)}
+        {convQ.data?.eventos.map((e, i) => <EventItem key={i} ev={e} leadId={leadId} />)}
       </div>
 
       <div className="conv-input">
@@ -137,20 +137,46 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   )
 }
 
-function EventItem({ ev }: { ev: ConversationEvent }) {
+// Marcador de media que persiste el webhook ("[📷 …]" / "[🎙️ …]"): si la imagen ya
+// se renderiza, el texto es redundante → lo ocultamos (pero conservamos captions reales).
+function esMarcadorMedia(t: string): boolean {
+  return /^\[(📷|🎙️)/.test(t)
+}
+
+function EventItem({ ev, leadId }: { ev: ConversationEvent; leadId: number }) {
   if (ev.kind === 'state') {
     return <div className="state-pill">⦿ {ev.label} · {fmt(ev.at)}</div>
   }
   const cls = ev.origen === 'LEAD' ? 'in' : ev.origen === 'VENDEDOR' ? 'vendor' : 'bot'
+  const hayImagen = ev.media?.tipo === 'image'
+  const mostrarTexto = ev.texto && !(hayImagen && esMarcadorMedia(ev.texto))
   return (
     <div className={`bubble-row ${cls}`}>
       <div className={`bubble ${cls}`}>
         {ev.origen !== 'LEAD' && <div className="bub-tag">{ev.origen}</div>}
-        <div className="bub-text">{ev.texto}</div>
+        {hayImagen && <MediaImage leadId={leadId} media={ev.media as MediaRef} />}
+        {mostrarTexto && <div className="bub-text">{ev.texto}</div>}
         <div className="bub-time">{fmt(ev.at)}</div>
       </div>
     </div>
   )
+}
+
+// Baja la imagen con auth (object URL) y la revoca al desmontar (evita fugas de memoria).
+function MediaImage({ leadId, media }: { leadId: number; media: MediaRef }) {
+  const [src, setSrc] = useState<string | null>(null)
+  const [error, setError] = useState(false)
+  useEffect(() => {
+    let url: string | null = null
+    let vivo = true
+    api.mediaObjectUrl(leadId, media.id)
+      .then(u => { url = u; if (vivo) setSrc(u); else URL.revokeObjectURL(u) })
+      .catch(() => { if (vivo) setError(true) })
+    return () => { vivo = false; if (url) URL.revokeObjectURL(url) }
+  }, [leadId, media.id])
+  if (error) return <div className="media-error">no se pudo cargar la imagen</div>
+  if (!src) return <div className="media-loading">cargando imagen…</div>
+  return <img className="media-img" src={src} alt="adjunto del lead" />
 }
 
 function fmt(iso: string): string {

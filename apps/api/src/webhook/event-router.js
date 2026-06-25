@@ -45,6 +45,7 @@ import { sendToWhatsApp } from '../whatsapp/send.js'
 import { notificarEscalamiento } from './notifications.js'
 import { descargarMediaBase64 } from './media.js'
 import { leerComprobante, responderAImagen } from '../lib/vision.js'
+import { saveInboundMedia } from '../lib/mediaStore.js'
 import { transcribirAudio } from '../lib/groq.js'
 import { reportError } from '../lib/observability.js'
 
@@ -352,8 +353,12 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
 
     // Persistir el marcador como mensaje LEAD: el cerebro y el CRM deben SABER
     // que el lead mandó algo (antes este evento se perdía para siempre).
+    // Capturamos su id para linkear la media persistida (la imagen se renderiza
+    // sobre este marcador en el Inbox).
+    let marcadorMsgId = null
     try {
-      await prisma.message.create({ data: { leadId, origen: 'LEAD', texto: marcador } })
+      const marcadorMsg = await prisma.message.create({ data: { leadId, origen: 'LEAD', texto: marcador } })
+      marcadorMsgId = marcadorMsg.id
     } catch (err) {
       console.error(`[EventRouter] No se pudo persistir marcador no-texto lead ${leadId}:`, err.message)
     }
@@ -393,6 +398,9 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
       try {
         const media = await descargarMediaBase64({ instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME, messageKey })
         if (media.ok) {
+          // Persistir la imagen para el Inbox (fire-and-forget: ni bloquea ni rompe).
+          saveInboundMedia(prisma, { leadId, messageId: marcadorMsgId, tenantId: null, tipo: 'image', mimeType: media.mimeType, base64: media.base64 })
+            .catch(e => console.error(`[EventRouter] persistir imagen lead ${leadId}:`, e.message))
           const r = await responderAImagen({
             base64: media.base64, mimeType: media.mimeType,
             nombreLead: leadState?.slotsFilled?.nombre || leadInfo.nombreDetectado || null, stage
@@ -447,6 +455,10 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
         try {
           const media = await descargarMediaBase64({ instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME, messageKey })
           if (media.ok) {
+            // Persistir el comprobante para el Inbox (el vendedor lo valida visualmente).
+            // Mismos bytes que ya van a la notificación → no es exposición nueva.
+            saveInboundMedia(prisma, { leadId, messageId: marcadorMsgId, tenantId: null, tipo: 'image', mimeType: media.mimeType, base64: media.base64 })
+              .catch(e => console.error(`[EventRouter] persistir comprobante lead ${leadId}:`, e.message))
             const lectura = await leerComprobante({ base64: media.base64, mimeType: media.mimeType })
             if (lectura.ok && lectura.esComprobante) {
               const d = lectura.datos
