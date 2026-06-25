@@ -51,6 +51,7 @@ function LeadRow({ lead, active, onClick }: { lead: LeadListItem; active: boolea
     <button className={`lead-row${active ? ' active' : ''}`} onClick={onClick}>
       <div className="lr-1">
         <span className="lr-name">{lead.nombre}</span>
+        {lead.label && <span className="pill pill-label">🏷 {lead.label}</span>}
         <span className={`pill ${esHumano ? 'pill-human' : 'pill-bot'}`}>{esHumano ? '👤 humano' : '🤖 bot'}</span>
       </div>
       <div className="lr-2">{lead.ultimoMensaje || '—'}</div>

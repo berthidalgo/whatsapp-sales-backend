@@ -8,6 +8,7 @@ const leadBase = {
   vendor: { nombre: 'Cristina' },
   leadState: {
     currentStage: 'objection', currentMode: 'HUMAN_ACTIVE', returningLeadFlag: false,
+    label: 'Caliente',
     lastMessageAt: new Date('2026-06-23T09:00:00Z'),
     slotsFilled: {
       nombre: 'María', producto: 'palta', objecion: 'precio',
@@ -28,6 +29,7 @@ test('serializeLeadListItem mapea lead_state → contrato', () => {
   assert.equal(r.ultimoMensaje, 'me parece caro')
   assert.equal(r.ultimoOrigen, 'LEAD')
   assert.equal(r.vendedor, 'Cristina')
+  assert.equal(r.label, 'Caliente')        // etiqueta manual del vendedor
 })
 
 test('serializeLeadDetail expone slots SIN claves internas y resume _cierre', () => {
@@ -37,6 +39,7 @@ test('serializeLeadDetail expone slots SIN claves internas y resume _cierre', ()
   assert.equal(r.slots.producto, 'palta')
   assert.match(r.cierreResumen, /2 ofertas de llamada/)
   assert.match(r.cierreResumen, /precio/)
+  assert.equal(r.label, 'Caliente')
 })
 
 test('serializers no crashean con lead_state ausente', () => {
@@ -44,4 +47,5 @@ test('serializers no crashean con lead_state ausente', () => {
   assert.equal(r.stage, 'first_contact')
   assert.equal(r.mode, 'AUTO_CONSULTIVO')
   assert.equal(r.nombre, '519')
+  assert.equal(r.label, null)              // sin lead_state → label null, no crash
 })

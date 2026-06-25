@@ -5,6 +5,7 @@
 import { scopeWhere, ROLES_VE_TODO } from '../lib/auth-guard.js'
 import { MODES } from '../state/stage-definitions.js'
 import { sendToWhatsApp } from '../webhook/sender.js'
+import { esEtiquetaValida, normalizarEtiqueta } from '../../../../packages/shared/labels.js'
 
 // ── Helpers puros (exportados para test) ───────────────────────────────────
 
@@ -18,6 +19,10 @@ export function modoValido(mode) {
 export function puedeReasignar(user) {
   return ROLES_VE_TODO.has(user?.role)
 }
+
+// Etiquetar = cualquier vendedor sobre lo que ve (scopeWhere ya acota). La taxonomía
+// válida vive en packages/shared/labels.js (fuente única back↔front). Re-export para test.
+export { esEtiquetaValida }
 
 // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -115,5 +120,32 @@ export async function assignV2(request, reply, prisma) {
   } catch (error) {
     console.error('[inbox-actions] assignV2:', error.message)
     return reply.code(500).send({ error: 'error al reasignar' })
+  }
+}
+
+// POST /v2/leads/:id/label — etiqueta manual del vendedor (tag CRM, columna propia
+// `lead_state.label`, inmune al upsert del bot). Texto libre en BD validado contra la
+// taxonomía; label vacío/null = limpiar. Cualquier vendedor etiqueta lo que ve.
+export async function setLabelV2(request, reply, prisma) {
+  try {
+    const id = Number(request.params.id)
+    const raw = request.body?.label
+    if (!esEtiquetaValida(raw)) {
+      return reply.code(400).send({ error: 'etiqueta inválida' })
+    }
+    const label = normalizarEtiqueta(raw)
+
+    const lead = await prisma.lead.findFirst({ where: { ...scopeWhere(request.user), id }, select: { id: true } })
+    if (!lead) return reply.code(404).send({ error: 'lead no encontrado' })
+
+    await prisma.leadState.upsert({
+      where: { leadId: id },
+      update: { label },
+      create: { leadId: id, label },
+    })
+    return reply.send({ ok: true, label })
+  } catch (error) {
+    console.error('[inbox-actions] setLabelV2:', error.message)
+    return reply.code(500).send({ error: 'error al etiquetar' })
   }
 }

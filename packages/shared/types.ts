@@ -39,6 +39,7 @@ export interface LeadListItem {
   ultimoOrigen: 'LEAD' | 'BOT' | 'VENDEDOR' | null
   vendedor: string | null
   esRecurrente: boolean
+  label: string | null           // etiqueta MANUAL del vendedor (tag CRM, ver labels.js)
 }
 
 export interface LeadDetail {
@@ -51,6 +52,7 @@ export interface LeadDetail {
   cierreResumen: string | null     // resumen legible del estado del closer (_cierre)
   esRecurrente: boolean
   vendedor: string | null
+  label: string | null             // etiqueta MANUAL del vendedor (tag CRM, ver labels.js)
   creadoEn: string                 // ISO
 }
 
@@ -73,5 +75,9 @@ export interface ReplyResponse { ok: true; evento: ConversationEvent }
 export interface ModeRequest { mode: 'HUMAN_ACTIVE' | 'AUTO_CONSULTIVO' }
 
 export interface AssignRequest { vendorId: number }
+
+// Etiqueta manual del lead. `null` (o '') = limpiar. La taxonomía válida vive en
+// packages/shared/labels.js (ETIQUETAS_VALIDAS).
+export interface LabelRequest { label: string | null }
 
 export interface OkResponse { ok: true; [k: string]: unknown }

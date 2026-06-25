@@ -54,6 +54,7 @@ button { font-family: inherit; cursor: pointer; }
 .pill { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #eef1f5; color: var(--text-2); font-weight: 600; white-space: nowrap; }
 .pill-bot { background: var(--bot); color: var(--accent); }
 .pill-human { background: #fdeede; color: var(--warm); }
+.pill-label { background: #f0ecfb; color: #6b4ea8; }
 .stage { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #eef7f1; color: var(--green); font-weight: 600; }
 .obj { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #fdeaea; color: var(--hot); font-weight: 600; }
 .prod { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #f1f3f6; color: var(--text-2); }
@@ -91,6 +92,7 @@ button { font-family: inherit; cursor: pointer; }
 .btn-send { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn-send:hover:not(:disabled) { color: #fff; opacity: .92; }
 .reassign-select { cursor: pointer; max-width: 170px; }
+.label-select { cursor: pointer; max-width: 150px; }
 
 /* ── Login ── */
 .login-wrap { height: 100vh; display: grid; place-items: center; background: var(--bg); }

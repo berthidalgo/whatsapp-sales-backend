@@ -218,6 +218,11 @@ model LeadState {
   modeEnteredAt      DateTime @default(now())             @map("mode_entered_at")
   lastMessageAt      DateTime @default(now())             @map("last_message_at")
   returningLeadFlag  Boolean  @default(false)             @map("returning_lead_flag")
+
+  // Etiqueta MANUAL del vendedor (CRM), distinta de la temperatura que detecta el
+  // cerebro. Columna propia (no en slots_filled) → inmune al upsert del bot. Texto
+  // libre en la BD; la taxonomía válida la fija la capa app (inbox-actions).
+  label              String?                              @map("label")
   
   createdAt          DateTime @default(now())             @map("created_at")
   updatedAt          DateTime @default(now())             @updatedAt @map("updated_at")

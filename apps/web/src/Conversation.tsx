@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
 import type { AuthUser, ConversationEvent } from '@shared/types'
+import { ETIQUETAS_VALIDAS } from '@shared/labels'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
@@ -16,6 +17,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   const [enviando, setEnviando] = useState(false)
   const [cambiandoModo, setCambiandoModo] = useState(false)
   const [reasignando, setReasignando] = useState(false)
+  const [etiquetando, setEtiquetando] = useState(false)
 
   function refrescar() {
     qc.invalidateQueries({ queryKey: ['conv', leadId] })
@@ -52,6 +54,14 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
     finally { setReasignando(false) }
   }
 
+  async function etiquetar(label: string | null) {
+    if (etiquetando) return
+    setEtiquetando(true)
+    try { await api.setLabel(leadId, label); refrescar() }
+    catch { /* TODO: toast */ }
+    finally { setEtiquetando(false) }
+  }
+
   const humano = d?.mode === 'HUMAN_ACTIVE'
 
   return (
@@ -67,12 +77,25 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
                   {humano ? '👤 humano' : '🤖 bot'}
                 </span>
                 {d.esRecurrente && <span className="pill">↩ vuelve</span>}
+                {d.label && <span className="pill pill-label">🏷 {d.label}</span>}
               </>
             )}
           </div>
         </div>
         <div className="conv-actions">
           {d?.cierreResumen && <div className="cierre" title="Estado del closer">{d.cierreResumen}</div>}
+          {d && (
+            <select
+              className="btn label-select"
+              value={d.label ?? ''}
+              disabled={etiquetando}
+              onChange={e => void etiquetar(e.target.value || null)}
+              title="Etiquetar lead"
+            >
+              <option value="">🏷 Sin etiqueta</option>
+              {ETIQUETAS_VALIDAS.map(et => <option key={et} value={et}>{et}</option>)}
+            </select>
+          )}
           {puedeReasignar && (
             <select
               className="btn reassign-select"

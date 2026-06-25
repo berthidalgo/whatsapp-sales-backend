@@ -30,6 +30,7 @@ export function serializeLeadListItem(lead) {
     ultimoOrigen: ultimo?.origen || null,
     vendedor: lead.vendor?.nombre || null,
     esRecurrente: !!st?.returningLeadFlag,
+    label: st?.label ?? null,
   }
 }
 
@@ -46,6 +47,7 @@ export function serializeLeadDetail(lead) {
     cierreResumen: resumirCierre(slots._cierre),
     esRecurrente: !!st?.returningLeadFlag,
     vendedor: lead.vendor?.nombre || null,
+    label: st?.label ?? null,
     creadoEn: lead.createdAt,
   }
 }
@@ -78,7 +80,7 @@ export async function listLeadsV2(request, reply, prisma) {
       orderBy: { updatedAt: 'desc' },
       take: 200,
       include: {
-        leadState: { select: { currentStage: true, currentMode: true, slotsFilled: true, lastMessageAt: true, returningLeadFlag: true } },
+        leadState: { select: { currentStage: true, currentMode: true, slotsFilled: true, lastMessageAt: true, returningLeadFlag: true, label: true } },
         vendor: { select: { nombre: true } },
         mensajes: { orderBy: { createdAt: 'desc' }, take: 1, select: { texto: true, origen: true, createdAt: true } },
       },
