@@ -4,7 +4,10 @@
 
 import { scopeWhere, ROLES_VE_TODO } from '../lib/auth-guard.js'
 import { MODES } from '../state/stage-definitions.js'
-import { sendToWhatsApp } from '../webhook/sender.js'
+// Selector de proveedor (Evolution|Cloud), NO el sender de Evolution directo: así la
+// respuesta del vendedor sale por el proveedor activo (default evolution = idéntico hoy;
+// en cutover a Cloud no se queda atrás como pasaba al importar webhook/sender.js).
+import { sendToWhatsApp } from '../whatsapp/send.js'
 import { esEtiquetaValida, normalizarEtiqueta } from '../../../../packages/shared/labels.js'
 
 // ── Helpers puros (exportados para test) ───────────────────────────────────
