@@ -121,4 +121,14 @@ export interface Flow {
   source: 'materialized' | 'custom'   // materialized = derivado del cerebro; custom = editado
   nodes: FlowNode[]
   edges: FlowEdge[]
+  campaignId?: number | null          // programa al que pertenece (Hito B)
+}
+
+// Programa/campaña del tenant (selector del Flow Builder).
+export interface CampaignLite {
+  id: number
+  slug: string
+  nombre: string
+  activa: boolean
+  tieneFlow: boolean                  // si ya tiene un flujo editado guardado
 }

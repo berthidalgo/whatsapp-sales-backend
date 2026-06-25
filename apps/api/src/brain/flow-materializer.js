@@ -58,7 +58,8 @@ function legibleTrigger(trigger) {
 }
 
 // Construye el grafo Flow desde la fuente de verdad del cerebro.
-export function materializarFlujoCerebro() {
+// `nombreCampana` solo personaliza el título; la estructura es la misma del cerebro.
+export function materializarFlujoCerebro(nombreCampana = 'Mi Primera Exportación') {
   const nodes = FLOW_ORDER.map(stage => ({
     id: stage,
     stage,
@@ -85,9 +86,49 @@ export function materializarFlujoCerebro() {
 
   return {
     id: 'cerebro_default',
-    name: 'Flujo del cerebro — Mi Primera Exportación',
+    name: `Flujo del cerebro — ${nombreCampana}`,
     source: 'materialized',
     nodes,
     edges,
   }
+}
+
+// ── Overrides editables (Hito B): guardamos SOLO la guía/label por nodo, no el grafo
+// entero → si el cerebro cambia su estructura, el flujo del supervisor no queda obsoleto.
+
+// Aplica los overrides {nodeId: {guidance?, label?}} sobre la semilla. Marca source.
+export function aplicarOverrides(seed, overrides) {
+  if (!overrides || typeof overrides !== 'object' || !Object.keys(overrides).length) return seed
+  const nodes = seed.nodes.map(n => {
+    const o = overrides[n.id]
+    if (!o) return n
+    return {
+      ...n,
+      guidance: typeof o.guidance === 'string' ? o.guidance : n.guidance,
+      label: typeof o.label === 'string' && o.label.trim() ? o.label : n.label,
+    }
+  })
+  return { ...seed, nodes, source: 'custom' }
+}
+
+// Extrae los overrides de un Flow completo (lo que manda el front al guardar): solo
+// los nodos cuya guía/label DIFIERE de la semilla (compacto + a prueba de drift).
+export function extraerOverrides(flow) {
+  const seed = materializarFlujoCerebro()
+  const seedById = Object.fromEntries(seed.nodes.map(n => [n.id, n]))
+  const overrides = {}
+  for (const n of (flow?.nodes || [])) {
+    const base = seedById[n.id]
+    if (!base) continue   // ignora nodos que no son del cerebro (anti-basura)
+    const o = {}
+    if (typeof n.guidance === 'string' && n.guidance !== base.guidance) o.guidance = n.guidance.slice(0, 2000)
+    if (typeof n.label === 'string' && n.label.trim() && n.label !== base.label) o.label = n.label.slice(0, 120)
+    if (Object.keys(o).length) overrides[n.id] = o
+  }
+  return overrides
+}
+
+// Validación mínima del flow que manda el cliente (anti-basura/payload gigante).
+export function flowValido(flow) {
+  return !!flow && Array.isArray(flow.nodes) && flow.nodes.length > 0 && flow.nodes.length <= 50
 }

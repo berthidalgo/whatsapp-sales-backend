@@ -31,7 +31,21 @@ button { font-family: inherit; cursor: pointer; }
 .flow-head { padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .flow-title { font-size: 16px; font-weight: 700; }
 .flow-sub { font-size: 12px; color: var(--text-2); margin-top: 3px; max-width: 720px; }
-.flow-rf { flex: 1; min-height: 0; }
+.flow-body { flex: 1; min-height: 0; display: flex; }
+.flow-rf { flex: 1; min-height: 0; min-width: 0; }
+.flow-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.flow-actions { display: flex; gap: 8px; align-items: center; }
+.flow-edit { width: 340px; border-left: 1px solid var(--border); background: var(--panel); padding: 16px; overflow-y: auto; }
+.fe-top { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.fe-stage { font-size: 11px; color: var(--text-3); flex: 1; }
+.fe-x { border: none; background: transparent; cursor: pointer; color: var(--text-2); font-size: 14px; }
+.fe-label { display: block; font-size: 11px; font-weight: 600; color: var(--text-2); margin: 12px 0 4px; }
+.fe-input { width: 100%; padding: 7px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: 8px; box-sizing: border-box; }
+.fe-textarea { width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: 8px; box-sizing: border-box; resize: vertical; font-family: inherit; line-height: 1.4; }
+.fe-input:focus, .fe-textarea:focus { border-color: var(--accent); outline: none; }
+.fe-input:disabled, .fe-textarea:disabled { background: #f7f8fa; color: var(--text-2); }
+.fe-hint { font-size: 11px; color: var(--text-3); margin-top: 12px; line-height: 1.4; }
+.fnode-sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-lt); }
 .fnode { width: 220px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(20,30,50,.05); }
 .fnode-generative { border-left-color: var(--accent); }
 .fnode-terminal { border-left-color: var(--green); }

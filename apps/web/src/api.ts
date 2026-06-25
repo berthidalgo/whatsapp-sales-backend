@@ -1,7 +1,7 @@
 // Cliente HTTP fino del front. Adjunta el JWT en cada request y maneja la sesión.
 // Tipado contra el contrato compartido (@shared/types) = una sola fuente de verdad.
 import type {
-  LoginResponse, AuthUser, LeadListItem, LeadDetail, ConversationResponse, ConversationEvent, Flow,
+  LoginResponse, AuthUser, LeadListItem, LeadDetail, ConversationResponse, ConversationEvent, Flow, CampaignLite,
 } from '@shared/types'
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3999'
@@ -55,7 +55,10 @@ export const api = {
   login: (nombre: string, pin: string) =>
     req<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ nombre, pin }) }),
   leads: () => req<LeadListItem[]>('/v2/leads'),
-  flow: () => req<Flow>('/v2/flow'),
+  campaigns: () => req<CampaignLite[]>('/v2/campaigns'),
+  flow: (campaignId?: number) => req<Flow>(`/v2/flow${campaignId ? `?campaignId=${campaignId}` : ''}`),
+  saveFlow: (campaignId: number, flow: Flow) =>
+    req<{ ok: true; nodosEditados: number }>('/v2/flow', { method: 'PUT', body: JSON.stringify({ campaignId, flow }) }),
   leadDetail: (id: number) => req<LeadDetail>(`/v2/leads/${id}`),
   conversation: (id: number) => req<ConversationResponse>(`/v2/leads/${id}/conversation`),
   // Hito 2 — acciones de escritura

@@ -99,7 +99,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
         </button>
       </nav>
 
-      {view === 'flujos' ? <FlowBuilder /> : <>
+      {view === 'flujos' ? <FlowBuilder user={user} /> : <>
       <aside className="sidebar">
         <div className="sb-top">
           <div className="sb-title">Inbox</div>
