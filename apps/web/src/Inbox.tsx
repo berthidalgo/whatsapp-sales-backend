@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
 import type { AuthUser, LeadListItem } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
+import { loadSeen, saveSeen, isUnread } from './unread'
 import Conversation from './Conversation'
 
 // Etapas del cerebro (M1-M7 + especial) con label amigable para el filtro. El valor
@@ -25,9 +26,37 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
   const [q, setQ] = useState('')
   const [stage, setStage] = useState('')
   const [label, setLabel] = useState('')   // '' = todas · '__none__' = sin etiqueta
+  const [seen, setSeen] = useState(() => loadSeen(user.id))
   const leadsQ = useQuery({ queryKey: ['leads'], queryFn: api.leads, refetchInterval: 10_000 })
 
   const all = leadsQ.data ?? []
+
+  // Marca un lead como visto (persiste su último mensaje). Functional update para no
+  // depender del `seen` del closure; no-op si ya estaba al día (evita re-render).
+  const markSeen = useCallback((lead: LeadListItem) => {
+    if (!lead.ultimoMensajeAt) return
+    setSeen(prev => {
+      if (prev[lead.id] === lead.ultimoMensajeAt) return prev
+      const next = { ...prev, [lead.id]: lead.ultimoMensajeAt! }
+      saveSeen(user.id, next)
+      return next
+    })
+  }, [user.id])
+
+  // El lead ABIERTO siempre cuenta como leído — al abrirlo y cuando llega un mensaje
+  // nuevo mientras está abierto (el poll actualiza `all` → este efecto re-marca).
+  useEffect(() => {
+    if (selId == null) return
+    const lead = all.find(l => l.id === selId)
+    if (lead) markSeen(lead)
+  }, [selId, all, markSeen])
+
+  const noLeidos = useMemo(() => all.filter(l => isUnread(l, seen)).length, [all, seen])
+
+  // Aviso en la pestaña del navegador aunque no esté enfocada.
+  useEffect(() => {
+    document.title = noLeidos > 0 ? `(${noLeidos}) Hidata Inbox` : 'Hidata Inbox'
+  }, [noLeidos])
   // Filtrado client-side sobre la lista cargada (≤200). useMemo: no re-filtra en cada
   // render, solo cuando cambian los datos o el filtro.
   const filtered = useMemo(() => {
@@ -47,7 +76,10 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
     <div className="app">
       <nav className="rail">
         <div className="rail-logo">H</div>
-        <button className="rb on" title="Inbox">💬<span>INBOX</span></button>
+        <button className="rb on" title="Inbox">
+          💬<span>INBOX</span>
+          {noLeidos > 0 && <span className="rb-badge">{noLeidos > 99 ? '99+' : noLeidos}</span>}
+        </button>
         <button className="rb" disabled title="Próximo hito">⚡<span>FLUJOS</span></button>
         <button className="rb" disabled title="Próximo hito">🧠<span>BRAIN</span></button>
         <div className="rail-sp" />
@@ -89,7 +121,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
             <div className="empty">Ningún lead coincide con el filtro</div>
           )}
           {filtered.map(l => (
-            <LeadRow key={l.id} lead={l} active={l.id === selId} onClick={() => setSelId(l.id)} />
+            <LeadRow key={l.id} lead={l} active={l.id === selId} unread={isUnread(l, seen)} onClick={() => setSelId(l.id)} />
           ))}
         </div>
       </aside>
@@ -103,13 +135,16 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
   )
 }
 
-function LeadRow({ lead, active, onClick }: { lead: LeadListItem; active: boolean; onClick: () => void }) {
+function LeadRow({ lead, active, unread, onClick }: { lead: LeadListItem; active: boolean; unread: boolean; onClick: () => void }) {
   const esHumano = lead.mode === 'HUMAN_ACTIVE'
   return (
-    <button className={`lead-row${active ? ' active' : ''}`} onClick={onClick}>
+    <button className={`lead-row${active ? ' active' : ''}${unread ? ' unread' : ''}`} onClick={onClick}>
       <div className="lr-1">
-        <span className="lr-name">{lead.nombre}</span>
-        {lead.label && <span className="pill pill-label">🏷 {lead.label}</span>}
+        <span className="lr-name-wrap">
+          {unread && <span className="unread-dot" title="Mensaje nuevo del lead" />}
+          <span className="lr-name">{lead.nombre}</span>
+          {lead.label && <span className="pill pill-label">🏷 {lead.label}</span>}
+        </span>
         <span className={`pill ${esHumano ? 'pill-human' : 'pill-bot'}`}>{esHumano ? '👤 humano' : '🤖 bot'}</span>
       </div>
       <div className="lr-2">{lead.ultimoMensaje || '—'}</div>
