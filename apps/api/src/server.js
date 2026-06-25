@@ -57,13 +57,18 @@ const app = Fastify({ logger: false })
 // que todo); acá solo enganchamos el error handler de Fastify si está activo.
 if (process.env.SENTRY_DSN) Sentry.setupFastifyErrorHandler(app)
 
+// CORS por env var (deploy-friendly): `CORS_ORIGINS` = lista separada por comas. Al
+// desplegar el front nuevo se agrega su dominio Vercel ahí, SIN tocar código. localhost
+// solo se permite FUERA de producción (en prod un dev no debe pegarle con un token vivo).
+const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RENDER
+const corsFromEnv = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
+const corsBase = corsFromEnv.length ? corsFromEnv : [
+  'https://testing1-crm.vercel.app',
+  'https://peru-exporta-crm.vercel.app',
+]
+const corsOrigins = IS_PROD ? corsBase : [...corsBase, 'http://localhost:5173', 'http://localhost:3000']
 await app.register(cors, {
-  origin: [
-    'https://testing1-crm.vercel.app',
-    'https://peru-exporta-crm.vercel.app',
-    'http://localhost:5173',
-    'http://localhost:3000'
-  ],
+  origin: corsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 })

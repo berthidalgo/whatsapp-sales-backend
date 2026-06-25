@@ -4,6 +4,7 @@ import { api } from './api'
 import { useToast } from './Toast'
 import type { AuthUser, ConversationEvent, MediaRef } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
+import { stageLabel } from '@shared/stages'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
@@ -79,7 +80,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
           <div className="conv-meta">
             {d && (
               <>
-                <span className="stage">{d.stage}</span>
+                <span className="stage">{stageLabel(d.stage)}</span>
                 <span className={`pill ${humano ? 'pill-human' : 'pill-bot'}`}>
                   {humano ? '👤 humano' : '🤖 bot'}
                 </span>

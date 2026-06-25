@@ -4,23 +4,9 @@ import { api } from './api'
 import { useToast } from './Toast'
 import type { AuthUser, LeadListItem } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
+import { STAGE_LABELS, STAGE_ORDER, stageLabel } from '@shared/stages'
 import { loadSeen, saveSeen, isUnread } from './unread'
 import Conversation from './Conversation'
-
-// Etapas del cerebro (M1-M7 + especial) con label amigable para el filtro. El valor
-// es el `stage` real que devuelve el backend; la lista puede traer otros (string
-// abierto) y se siguen mostrando — el filtro solo ofrece las conocidas.
-const STAGE_LABELS: Record<string, string> = {
-  first_contact: 'Primer contacto',
-  discovery: 'Descubrimiento',
-  qualifying_empresa: 'Calificando',
-  presenting: 'Presentando',
-  call_scheduling: 'Agendando',
-  call_confirmed: 'Cita confirmada',
-  post_close: 'Post-cierre',
-  returning_recognition: 'Reactivado',
-}
-const STAGE_ORDER = Object.keys(STAGE_LABELS)
 
 export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const [selId, setSelId] = useState<number | null>(null)
@@ -170,7 +156,7 @@ function LeadRow({ lead, active, unread, onClick }: { lead: LeadListItem; active
       </div>
       <div className="lr-2">{lead.ultimoMensaje || '—'}</div>
       <div className="lr-3">
-        <span className="stage">{STAGE_LABELS[lead.stage] ?? lead.stage}</span>
+        <span className="stage">{stageLabel(lead.stage)}</span>
         {lead.objecion && <span className="obj">obj: {lead.objecion}</span>}
         {lead.producto && <span className="prod">{lead.producto}</span>}
       </div>
