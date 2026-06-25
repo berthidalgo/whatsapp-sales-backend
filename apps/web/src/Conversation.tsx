@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from './api'
+import { useToast } from './Toast'
 import type { AuthUser, ConversationEvent, MediaRef } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
+  const toast = useToast()
   const detailQ = useQuery({ queryKey: ['lead', leadId], queryFn: () => api.leadDetail(leadId) })
   const convQ = useQuery({ queryKey: ['conv', leadId], queryFn: () => api.conversation(leadId), refetchInterval: 10_000 })
   const d = detailQ.data
@@ -32,9 +34,9 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
     setEnviando(true)
     try {
       await api.reply(leadId, t)   // responder TOMA el control (el bot se calla)
-      setTexto('')
+      setTexto('')                 // solo se limpia si NO lanzó → en error el texto se conserva
       refrescar()
-    } catch { /* TODO: toast de error en un hito futuro */ }
+    } catch { toast('No se pudo enviar el mensaje. Tu texto sigue acá, reintenta.') }
     finally { setEnviando(false) }
   }
 
@@ -43,15 +45,19 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
     const nuevo = d.mode === 'HUMAN_ACTIVE' ? 'AUTO_CONSULTIVO' : 'HUMAN_ACTIVE'
     setCambiandoModo(true)
     try { await api.setMode(leadId, nuevo); refrescar() }
-    catch { /* TODO: toast */ }
+    catch { toast('No se pudo cambiar el control del chat.') }
     finally { setCambiandoModo(false) }
   }
 
   async function reasignar(vendorId: number) {
     if (!vendorId || reasignando) return
     setReasignando(true)
-    try { await api.assign(leadId, vendorId); refrescar() }
-    catch { /* TODO: toast */ }
+    try {
+      await api.assign(leadId, vendorId)
+      const dest = vendorsQ.data?.find(v => v.id === vendorId)
+      toast(`Lead reasignado${dest ? ` a ${dest.nombre}` : ''}.`, 'success')
+      refrescar()
+    } catch { toast('No se pudo reasignar el lead.') }
     finally { setReasignando(false) }
   }
 
@@ -59,7 +65,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
     if (etiquetando) return
     setEtiquetando(true)
     try { await api.setLabel(leadId, label); refrescar() }
-    catch { /* TODO: toast */ }
+    catch { toast('No se pudo guardar la etiqueta.') }
     finally { setEtiquetando(false) }
   }
 
@@ -119,6 +125,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
 
       <div className="msgs">
         {convQ.isLoading && <div className="empty">Cargando conversación…</div>}
+        {convQ.isError && <div className="empty">No se pudo cargar la conversación. Reintentando…</div>}
         {convQ.data?.eventos.map((e, i) => <EventItem key={i} ev={e} leadId={leadId} />)}
       </div>
 

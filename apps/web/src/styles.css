@@ -99,6 +99,14 @@ button { font-family: inherit; cursor: pointer; }
 .media-loading, .media-error { font-size: 12px; color: var(--text-2); padding: 8px 0; }
 .media-error { color: var(--hot); }
 
+/* ── Toasts (feedback de acciones) ── */
+.toast-wrap { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; max-width: 340px; }
+.toast { padding: 11px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; color: #fff; cursor: pointer; box-shadow: 0 6px 20px rgba(20,30,50,.18); animation: toast-in .18s ease-out; }
+.toast-error { background: var(--hot); }
+.toast-success { background: var(--green); }
+.toast-info { background: var(--accent); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
 /* ── Login ── */
 .login-wrap { height: 100vh; display: grid; place-items: center; background: var(--bg); }
 .login-card { width: 340px; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 32px 28px; text-align: center; box-shadow: 0 8px 30px rgba(20,30,50,.06); }
