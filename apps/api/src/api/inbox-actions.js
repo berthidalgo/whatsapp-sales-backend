@@ -8,7 +8,7 @@ import { MODES } from '../state/stage-definitions.js'
 // respuesta del vendedor sale por el proveedor activo (default evolution = idéntico hoy;
 // en cutover a Cloud no se queda atrás como pasaba al importar webhook/sender.js).
 import { sendToWhatsApp } from '../whatsapp/send.js'
-import { extraerDebrief } from '../brain/call-debrief.js'
+import { extraerDebrief, DEBRIEF_OUTCOMES } from '../brain/call-debrief.js'
 import { esEtiquetaValida, normalizarEtiqueta } from '../../../../packages/shared/labels.js'
 
 // ── Helpers puros (exportados para test) ───────────────────────────────────
@@ -175,5 +175,37 @@ export async function debriefV2(request, reply, prisma) {
   } catch (error) {
     console.error('[inbox-actions] debriefV2:', error.message)
     return reply.code(500).send({ error: 'error al procesar el debrief' })
+  }
+}
+
+// POST /v2/leads/:id/debrief/save — el vendedor CONFIRMA el debrief (posiblemente editado)
+// → se escribe un CallEvent (el registro canónico de "qué pasó en la llamada"). De paso
+// alimenta el embudo/analytics (CallEvent.outcomeTag). Cualquier vendedor sobre su lead.
+export async function saveDebriefV2(request, reply, prisma) {
+  try {
+    const id = Number(request.params.id)
+    const b = request.body || {}
+    const outcome = DEBRIEF_OUTCOMES.includes(b.outcome) ? b.outcome : 'otro'
+
+    const lead = await prisma.lead.findFirst({ where: { ...scopeWhere(request.user), id }, select: { id: true, vendorId: true } })
+    if (!lead) return reply.code(404).send({ error: 'lead no encontrado' })
+    const vendorId = request.user?.vendorId || lead.vendorId
+    if (!vendorId) return reply.code(400).send({ error: 'sin vendedor para registrar la llamada' })
+
+    const fechaProx = (typeof b.fechaISO === 'string' && !Number.isNaN(Date.parse(b.fechaISO))) ? new Date(b.fechaISO) : null
+    const notas = [b.resumen, b.proximoPaso ? `Próximo: ${b.proximoPaso}` : null].filter(Boolean).join(' · ').slice(0, 1000)
+    const objecion = (typeof b.objecion === 'string' && b.objecion.trim()) ? b.objecion.trim().slice(0, 300) : null
+
+    await prisma.callEvent.create({
+      data: {
+        leadId: id, vendorId, occurredAt: new Date(), outcomeTag: outcome,
+        vendorNotes: notas || null, condicionesEspeciales: objecion, fechaProximoEvento: fechaProx,
+      },
+    })
+    console.log(`[inbox-actions] debrief guardado: lead ${id} outcome=${outcome} por vendor ${vendorId}`)
+    return reply.send({ ok: true, outcome })
+  } catch (error) {
+    console.error('[inbox-actions] saveDebriefV2:', error.message)
+    return reply.code(500).send({ error: 'error al guardar el debrief' })
   }
 }

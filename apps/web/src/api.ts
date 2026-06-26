@@ -1,7 +1,7 @@
 // Cliente HTTP fino del front. Adjunta el JWT en cada request y maneja la sesión.
 // Tipado contra el contrato compartido (@shared/types) = una sola fuente de verdad.
 import type {
-  LoginResponse, AuthUser, LeadListItem, LeadDetail, ConversationResponse, ConversationEvent, Flow, CampaignLite, CopilotResponse,
+  LoginResponse, AuthUser, LeadListItem, LeadDetail, ConversationResponse, ConversationEvent, Flow, CampaignLite, CopilotResponse, DebriefPreview,
 } from '@shared/types'
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3999'
@@ -61,8 +61,12 @@ export const api = {
     req<{ ok: true; nodosEditados: number }>('/v2/flow', { method: 'PUT', body: JSON.stringify({ campaignId, flow }) }),
   flowCopilot: (campaignId: number, mensaje: string, historial: { rol: string; texto: string }[]) =>
     req<CopilotResponse>('/v2/flow/copilot', { method: 'POST', body: JSON.stringify({ campaignId, mensaje, historial }) }),
-  flowTranscribe: (audioBase64: string, mimeType: string) =>
-    req<{ texto: string }>('/v2/flow/transcribe', { method: 'POST', body: JSON.stringify({ audioBase64, mimeType }) }),
+  transcribe: (audioBase64: string, mimeType: string) =>
+    req<{ texto: string }>('/v2/transcribe', { method: 'POST', body: JSON.stringify({ audioBase64, mimeType }) }),
+  debrief: (id: number, nota: string) =>
+    req<DebriefPreview>(`/v2/leads/${id}/debrief`, { method: 'POST', body: JSON.stringify({ nota }) }),
+  saveDebrief: (id: number, d: DebriefPreview) =>
+    req<{ ok: true; outcome: string }>(`/v2/leads/${id}/debrief/save`, { method: 'POST', body: JSON.stringify(d) }),
   leadDetail: (id: number) => req<LeadDetail>(`/v2/leads/${id}`),
   conversation: (id: number) => req<ConversationResponse>(`/v2/leads/${id}/conversation`),
   // Hito 2 — acciones de escritura

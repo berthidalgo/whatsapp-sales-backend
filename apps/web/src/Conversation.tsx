@@ -5,6 +5,7 @@ import { useToast } from './Toast'
 import type { AuthUser, ConversationEvent, MediaRef } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import { stageLabel } from '@shared/stages'
+import LeadDebrief from './LeadDebrief'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
@@ -22,6 +23,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   const [cambiandoModo, setCambiandoModo] = useState(false)
   const [reasignando, setReasignando] = useState(false)
   const [etiquetando, setEtiquetando] = useState(false)
+  const [debriefOpen, setDebriefOpen] = useState(false)
 
   function refrescar() {
     qc.invalidateQueries({ queryKey: ['conv', leadId] })
@@ -117,12 +119,19 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
             </select>
           )}
           {d && (
+            <button className="btn" onClick={() => setDebriefOpen(true)} title="Registrar el resultado de una llamada (voz)">
+              🎤 Debrief
+            </button>
+          )}
+          {d && (
             <button className="btn" onClick={() => void toggleModo()} disabled={cambiandoModo}>
               {humano ? '🤖 Devolver al bot' : '✋ Tomar control'}
             </button>
           )}
         </div>
       </header>
+
+      {debriefOpen && <LeadDebrief leadId={leadId} onClose={() => setDebriefOpen(false)} onSaved={refrescar} />}
 
       <div className="msgs">
         {convQ.isLoading && <div className="empty">Cargando conversación…</div>}

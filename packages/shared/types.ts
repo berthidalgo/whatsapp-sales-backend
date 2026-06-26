@@ -132,6 +132,15 @@ export interface CopilotResponse {
   aviso: string | null       // advertencia si algo chocaba con los principios del cerebro
 }
 
+// Debrief post-llamada: lo que el cerebro extrae del dictado del vendedor (preview editable).
+export interface DebriefPreview {
+  outcome: string            // interesado | agendado | pensándolo | pidió_info | no_contesta | no_interesado | pagó | otro
+  objecion: string | null
+  proximoPaso: string | null
+  fechaISO: string | null
+  resumen: string
+}
+
 // Programa/campaña del tenant (selector del Flow Builder).
 export interface CampaignLite {
   id: number

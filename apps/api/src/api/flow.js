@@ -105,13 +105,12 @@ export async function copilotV2(request, reply, prisma) {
   }
 }
 
-// POST /v2/flow/transcribe — voz del supervisor → texto (Whisper/Groq). Para el micrófono
-// del copiloto. body: { audioBase64, mimeType }.
+// POST /v2/transcribe — voz → texto (Whisper/Groq). Genérico para cualquier vendedor
+// autenticado (lo usan el copiloto del supervisor Y el debrief del vendedor). Transcribir
+// tu propia voz no es sensible; lo sensible (copilot/debrief) se gatea aguas abajo.
+// body: { audioBase64, mimeType }.
 export async function transcribeV2(request, reply) {
   try {
-    if (!ROLES_VE_TODO.has(request.user?.role)) {
-      return reply.code(403).send({ error: 'solo un supervisor/admin' })
-    }
     const base64 = request.body?.audioBase64
     const mimeType = request.body?.mimeType || 'audio/webm'
     if (!base64 || typeof base64 !== 'string') return reply.code(400).send({ error: 'audioBase64 requerido' })

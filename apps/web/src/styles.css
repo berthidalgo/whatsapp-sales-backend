@@ -69,6 +69,18 @@ button { font-family: inherit; cursor: pointer; }
 .fc-mic { width: 36px; height: 36px; flex: 0 0 auto; border: 1px solid var(--border); background: var(--panel); border-radius: 50%; cursor: pointer; font-size: 15px; }
 .fc-mic.rec { background: var(--hot); border-color: var(--hot); color: #fff; animation: mic-pulse 1s infinite; }
 @keyframes mic-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(214,69,59,.4); } 50% { box-shadow: 0 0 0 6px rgba(214,69,59,0); } }
+
+/* ── Debrief de llamada (overlay) ── */
+.debrief-overlay { position: fixed; inset: 0; background: rgba(20,30,50,.35); display: grid; place-items: center; z-index: 1100; }
+.debrief-card { width: 420px; max-width: 92vw; max-height: 88vh; overflow-y: auto; background: var(--panel); border-radius: 14px; padding: 20px; box-shadow: 0 12px 40px rgba(20,30,50,.25); }
+.db-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 15px; }
+.db-sub { font-size: 12px; color: var(--text-2); margin: 4px 0 14px; line-height: 1.4; }
+.db-dictado { display: flex; gap: 8px; align-items: flex-start; }
+.db-dictado .fe-textarea { flex: 1; }
+.db-analizar { width: 100%; margin-top: 8px; }
+.db-preview { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.db-fecha { font-size: 12px; color: var(--accent); margin-top: 8px; font-weight: 600; }
+.db-guardar { width: 100%; margin-top: 14px; }
 .fnode { width: 220px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 12px; box-shadow: 0 2px 8px rgba(20,30,50,.05); }
 .fnode-generative { border-left-color: var(--accent); }
 .fnode-terminal { border-left-color: var(--green); }

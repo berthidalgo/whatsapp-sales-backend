@@ -63,7 +63,7 @@ export default function FlowCopilot({ campaignId, onAplicar }: { campaignId: num
         setEnviando(true)
         try {
           const b64 = await blobABase64(blob)
-          const { texto } = await api.flowTranscribe(b64, 'audio/webm')
+          const { texto } = await api.transcribe(b64, 'audio/webm')
           setEnviando(false)
           if (texto) await enviar(texto)
           else toast('No te escuché bien, reintenta.')
