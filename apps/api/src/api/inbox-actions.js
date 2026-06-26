@@ -8,6 +8,7 @@ import { MODES } from '../state/stage-definitions.js'
 // respuesta del vendedor sale por el proveedor activo (default evolution = idéntico hoy;
 // en cutover a Cloud no se queda atrás como pasaba al importar webhook/sender.js).
 import { sendToWhatsApp } from '../whatsapp/send.js'
+import { extraerDebrief } from '../brain/call-debrief.js'
 import { esEtiquetaValida, normalizarEtiqueta } from '../../../../packages/shared/labels.js'
 
 // ── Helpers puros (exportados para test) ───────────────────────────────────
@@ -150,5 +151,29 @@ export async function setLabelV2(request, reply, prisma) {
   } catch (error) {
     console.error('[inbox-actions] setLabelV2:', error.message)
     return reply.code(500).send({ error: 'error al etiquetar' })
+  }
+}
+
+// POST /v2/leads/:id/debrief — el vendedor DICTA cómo le fue en la llamada; el cerebro lo
+// estructura. Devuelve el PREVIEW {outcome, objecion, proximoPaso, fechaISO, resumen} para
+// que el vendedor confirme antes de escribirlo al CRM (apply = paso futuro). Cualquier
+// vendedor sobre su lead (scopeWhere).
+export async function debriefV2(request, reply, prisma) {
+  try {
+    const id = Number(request.params.id)
+    const nota = request.body?.nota
+    if (!nota || typeof nota !== 'string' || !nota.trim()) return reply.code(400).send({ error: 'nota requerida' })
+
+    const lead = await prisma.lead.findFirst({
+      where: { ...scopeWhere(request.user), id },
+      select: { id: true, nombreDetectado: true, telefono: true, leadState: { select: { currentStage: true } } },
+    })
+    if (!lead) return reply.code(404).send({ error: 'lead no encontrado' })
+
+    const d = await extraerDebrief({ nota, lead: { nombre: lead.nombreDetectado || lead.telefono, stage: lead.leadState?.currentStage } })
+    return reply.send({ outcome: d.outcome, objecion: d.objecion, proximoPaso: d.proximoPaso, fechaISO: d.fechaISO, resumen: d.resumen })
+  } catch (error) {
+    console.error('[inbox-actions] debriefV2:', error.message)
+    return reply.code(500).send({ error: 'error al procesar el debrief' })
   }
 }
