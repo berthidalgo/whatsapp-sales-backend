@@ -18,17 +18,19 @@ const MOMENTO = {
   [STAGES.POST_CLOSE]: 'M7', [STAGES.RETURNING_RECOGNITION]: '★',
 }
 
-// Guía/munición por momento: qué hace el cerebro acá. Es el texto que el supervisor
-// EDITARÁ en Hito B (acá es el valor por defecto, fiel al comportamiento actual).
+// Guía/munición por momento = LOS PASOS REALES del cerebro (fieles a `agent-brain.js`,
+// sección "EL FLUJO — 6 MOMENTOS"), NO resúmenes. Esto es lo que el supervisor edita y lo
+// que el flujo predeterminado MUESTRA → es el flujo que el cerebro corre hoy. (En el Nivel B
+// el cerebro ENSAMBLA su prompt desde acá, byte-idéntico; hoy es el reflejo fiel + editable.)
 const GUIDANCE = {
-  [STAGES.FIRST_CONTACT]: 'Saludo cálido y natural. Pide nombre y producto/qué quiere exportar.',
-  [STAGES.DISCOVERY]: 'Descubre la necesidad: una pregunta a la vez, responde con sustancia (FDA, requisitos) sin inventar.',
-  [STAGES.QUALIFYING_EMPRESA]: 'Califica: empresa o independiente, experiencia. Solo guarda lo que el LEAD declara (anti-fabricación).',
-  [STAGES.PRESENTING]: 'Presenta el programa con valor + precio. Resuelve objeciones con la mochila (grabaciones, caso de éxito). Funnel a la cita, sin rogar.',
-  [STAGES.CALL_SCHEDULING]: 'Coordina día y hora para la llamada donde el humano cierra. La META es SACAR LA CITA.',
-  [STAGES.CALL_CONFIRMED]: 'Confirma el horario acordado. No re-ofrecer; asegurar.',
-  [STAGES.POST_CLOSE]: 'Post-agendado: refuerza, recuerda la cita, mantén caliente.',
-  [STAGES.RETURNING_RECOGNITION]: 'Reconoce al lead que vuelve (memoria episódica) y retoma donde quedó.',
+  [STAGES.FIRST_CONTACT]: 'APERTURA: saludas (UNA sola vez) y preguntas el nombre y qué producto le gustaría exportar (pedir ambos juntos en la apertura es natural, NO interrogatorio). Si el lead, en vez de presentarse, te hace una PREGUNTA ("¿qué se requiere para exportar?"), respóndela con SUSTANCIA y valor real (requisitos, FDA, etiquetado, sin inventar) y en el MISMO mensaje retoma pidiendo nombre y producto. ⚠️ El NOMBRE es tu ancla: no lo sueltes hasta tenerlo.',
+  [STAGES.DISCOVERY]: 'EXPERIENCIA: cuando ya tienes nombre y/o producto, reacciona con calidez a su producto y pregunta UNA sola cosa: ¿ya tiene experiencia exportando o empieza desde cero? Ej: "¡Buenísimo, [nombre]! El [producto] tiene bastante demanda afuera 🌎 ¿ya has exportado antes o estás dando tus primeros pasos?"',
+  [STAGES.QUALIFYING_EMPRESA]: 'SITUACIÓN EMPRESARIAL (obligatorio antes de presentar): cuando ya sabes su experiencia, pregunta UNA cosa: ¿tiene empresa constituida o trabaja independiente? Ej: "¿ya tienes empresa constituida o por ahora trabajas independiente?". NUNCA pases a presentar sin tener experiencia Y empresa DECLARADAS por el lead. Una contra-pregunta NO es respuesta: respóndele y RE-PREGUNTA en el mismo mensaje.',
+  [STAGES.PRESENTING]: 'PRESENTAR EL PROGRAMA (solo con experiencia Y empresa ya conocidas): aquí DAS VALOR. Una línea cálida + los datos REALES de la ficha (precio, qué incluye, fechas, modalidad, pago) en párrafos cortos y con TUS palabras de asesor, no como folleto pegado. Cierras con "¿Qué te parece, [nombre]? ¿Te queda alguna duda?". ⛔ NUNCA inventes el nombre del programa, módulos, fechas ni cifras que no estén en la ficha. (La ficha del programa se edita aparte, en la config de la campaña.)',
+  [STAGES.CALL_SCHEDULING]: 'COORDINAR LA LLAMADA (recién aquí aparece la llamada): cuando el lead ya reaccionó al programa, propones la llamada en primera persona como micro-compromiso corto: "¿te llamo para una llamada corta de 10 min y resolvemos tus dudas? ¿Hoy o mañana? 📞". Agenda CERCA (hoy/mañana); si objeta el horario, ajusta la HORA, no el día. Si el lead elige el día, respétalo.',
+  [STAGES.CALL_CONFIRMED]: 'CIERRE CÁLIDO: cuando tienes el horario confirmado: "Perfecto [nombre] 😊 Ya tengo todo anotado. Te llamo a la hora que me dijiste para conversar sobre tu proyecto de exportar [producto]. ¡Hablamos pronto! 👋"',
+  [STAGES.POST_CLOSE]: 'POST-AGENDADO: refuerza la decisión, recuerda la cita y mantén al lead caliente hasta la llamada.',
+  [STAGES.RETURNING_RECOGNITION]: 'LEAD QUE VUELVE: reconócelo (memoria episódica) y retoma la conversación donde quedó, sin re-saludar como si fuera nuevo.',
 }
 
 // Etiqueta legible para el intent que dispara una transición (para la condición de la arista).
