@@ -8,7 +8,8 @@ import { ReactFlow, Background, Controls, Handle, Position, type Node, type Edge
 import '@xyflow/react/dist/style.css'
 import { api } from './api'
 import { useToast } from './Toast'
-import type { AuthUser, Flow, FlowNode as FNode } from '@shared/types'
+import FlowCopilot from './FlowCopilot'
+import type { AuthUser, Flow, FlowNode as FNode, FlowEditMap } from '@shared/types'
 
 function MomentNode({ data }: NodeProps) {
   const n = data as unknown as FNode & { sel?: boolean }
@@ -40,6 +41,7 @@ export default function FlowBuilder({ user }: { user: AuthUser }) {
   const [selId, setSelId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [copiloto, setCopiloto] = useState(false)
 
   const campaignsQ = useQuery({ queryKey: ['campaigns'], queryFn: api.campaigns })
   const flowQ = useQuery({ queryKey: ['flow', campaignId], queryFn: () => api.flow(campaignId ?? undefined) })
@@ -73,6 +75,24 @@ export default function FlowBuilder({ user }: { user: AuthUser }) {
 
   function descartar() {
     if (flowQ.data) { setFlow(flowQ.data); setDirty(false); setSelId(null) }
+  }
+
+  // El copiloto propone ediciones → se aplican al MISMO estado del flow (el editor visual
+  // las muestra y el botón Guardar las persiste). Marca dirty para que el supervisor revise.
+  function aplicarEdits(edits: FlowEditMap) {
+    setFlow(f => {
+      if (!f) return f
+      const nodes = f.nodes.map(n => {
+        const e = edits[n.id]
+        if (!e) return n
+        return { ...n, guidance: e.guidance ?? n.guidance, label: e.label ?? n.label }
+      })
+      return { ...f, nodes }
+    })
+    setDirty(true)
+    // resalta el primer nodo editado para que el supervisor lo vea
+    const primero = Object.keys(edits)[0]
+    if (primero) setSelId(primero)
   }
 
   const { rnodes, redges } = useMemo(() => {
@@ -110,6 +130,9 @@ export default function FlowBuilder({ user }: { user: AuthUser }) {
               ))}
             </select>
             {puedeEditar && <>
+              <button className={`btn${copiloto ? ' on' : ''}`} onClick={() => setCopiloto(c => !c)} title="Diseña el flujo conversando (texto o voz)">
+                🎙️ Copiloto
+              </button>
               <button className="btn btn-send" onClick={() => void guardar()} disabled={!dirty || saving}>
                 {saving ? '…' : 'Guardar'}
               </button>
@@ -135,7 +158,9 @@ export default function FlowBuilder({ user }: { user: AuthUser }) {
           )}
         </div>
 
-        {nodoSel && (
+        {copiloto && <FlowCopilot campaignId={campaignId} onAplicar={aplicarEdits} />}
+
+        {!copiloto && nodoSel && (
           <aside className="flow-edit">
             <div className="fe-top">
               <span className="fnode-m">{nodoSel.momento}</span>

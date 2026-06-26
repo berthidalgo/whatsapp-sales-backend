@@ -124,6 +124,14 @@ export interface Flow {
   campaignId?: number | null          // programa al que pertenece (Hito B)
 }
 
+// Copiloto de flujos (Hito D): el agente propone ediciones por nodo + un aviso de guardrail.
+export type FlowEditMap = Record<string, { guidance?: string; label?: string }>
+export interface CopilotResponse {
+  respuesta: string          // texto conversacional (para leer / hablar por voz)
+  edits: FlowEditMap         // ediciones propuestas (preview → el humano confirma)
+  aviso: string | null       // advertencia si algo chocaba con los principios del cerebro
+}
+
 // Programa/campaña del tenant (selector del Flow Builder).
 export interface CampaignLite {
   id: number
