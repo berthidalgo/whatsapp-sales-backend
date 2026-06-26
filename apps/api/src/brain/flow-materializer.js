@@ -5,6 +5,7 @@
 // cerebro: es un RETRATO de lo que el bot ya hace, no una segunda implementación.
 import { STAGES, STAGE_TRANSITIONS, REQUIRED_SLOTS_BY_STAGE, INTENT_SUGGESTS_STAGE } from '../state/stage-definitions.js'
 import { stageLabel } from '../../../../packages/shared/stages.js'
+import { MOMENTOS } from './agent-brain.js'
 
 // Orden de los momentos (M1→M7 + el especial al final).
 const FLOW_ORDER = [
@@ -23,12 +24,12 @@ const MOMENTO = {
 // que el flujo predeterminado MUESTRA → es el flujo que el cerebro corre hoy. (En el Nivel B
 // el cerebro ENSAMBLA su prompt desde acá, byte-idéntico; hoy es el reflejo fiel + editable.)
 const GUIDANCE = {
-  [STAGES.FIRST_CONTACT]: 'APERTURA: saludas (UNA sola vez) y preguntas el nombre y qué producto le gustaría exportar (pedir ambos juntos en la apertura es natural, NO interrogatorio). Si el lead, en vez de presentarse, te hace una PREGUNTA ("¿qué se requiere para exportar?"), respóndela con SUSTANCIA y valor real (requisitos, FDA, etiquetado, sin inventar) y en el MISMO mensaje retoma pidiendo nombre y producto. ⚠️ El NOMBRE es tu ancla: no lo sueltes hasta tenerlo.',
-  [STAGES.DISCOVERY]: 'EXPERIENCIA: cuando ya tienes nombre y/o producto, reacciona con calidez a su producto y pregunta UNA sola cosa: ¿ya tiene experiencia exportando o empieza desde cero? Ej: "¡Buenísimo, [nombre]! El [producto] tiene bastante demanda afuera 🌎 ¿ya has exportado antes o estás dando tus primeros pasos?"',
-  [STAGES.QUALIFYING_EMPRESA]: 'SITUACIÓN EMPRESARIAL (obligatorio antes de presentar): cuando ya sabes su experiencia, pregunta UNA cosa: ¿tiene empresa constituida o trabaja independiente? Ej: "¿ya tienes empresa constituida o por ahora trabajas independiente?". NUNCA pases a presentar sin tener experiencia Y empresa DECLARADAS por el lead. Una contra-pregunta NO es respuesta: respóndele y RE-PREGUNTA en el mismo mensaje.',
-  [STAGES.PRESENTING]: 'PRESENTAR EL PROGRAMA (solo con experiencia Y empresa ya conocidas): aquí DAS VALOR. Una línea cálida + los datos REALES de la ficha (precio, qué incluye, fechas, modalidad, pago) en párrafos cortos y con TUS palabras de asesor, no como folleto pegado. Cierras con "¿Qué te parece, [nombre]? ¿Te queda alguna duda?". ⛔ NUNCA inventes el nombre del programa, módulos, fechas ni cifras que no estén en la ficha. (La ficha del programa se edita aparte, en la config de la campaña.)',
-  [STAGES.CALL_SCHEDULING]: 'COORDINAR LA LLAMADA (recién aquí aparece la llamada): cuando el lead ya reaccionó al programa, propones la llamada en primera persona como micro-compromiso corto: "¿te llamo para una llamada corta de 10 min y resolvemos tus dudas? ¿Hoy o mañana? 📞". Agenda CERCA (hoy/mañana); si objeta el horario, ajusta la HORA, no el día. Si el lead elige el día, respétalo.',
-  [STAGES.CALL_CONFIRMED]: 'CIERRE CÁLIDO: cuando tienes el horario confirmado: "Perfecto [nombre] 😊 Ya tengo todo anotado. Te llamo a la hora que me dijiste para conversar sobre tu proyecto de exportar [producto]. ¡Hablamos pronto! 👋"',
+  [STAGES.FIRST_CONTACT]: MOMENTOS.first_contact,
+  [STAGES.DISCOVERY]: MOMENTOS.discovery,
+  [STAGES.QUALIFYING_EMPRESA]: MOMENTOS.qualifying_empresa,
+  [STAGES.PRESENTING]: MOMENTOS.presenting.replace('__FICHA__', '[la ficha del programa se edita aparte]'),
+  [STAGES.CALL_SCHEDULING]: MOMENTOS.call_scheduling,
+  [STAGES.CALL_CONFIRMED]: MOMENTOS.call_confirmed,
   [STAGES.POST_CLOSE]: 'POST-AGENDADO: refuerza la decisión, recuerda la cita y mantén al lead caliente hasta la llamada.',
   [STAGES.RETURNING_RECOGNITION]: 'LEAD QUE VUELVE: reconócelo (memoria episódica) y retoma la conversación donde quedó, sin re-saludar como si fuera nuevo.',
 }
