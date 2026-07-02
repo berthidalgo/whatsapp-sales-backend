@@ -5,7 +5,8 @@
 import { useState, useRef } from 'react'
 import { api } from './api'
 import { useToast } from './Toast'
-import type { FlowEditMap } from '@shared/types'
+
+type FlowEditMap = any
 
 type Msg = { rol: 'vendedor' | 'copiloto'; texto: string }
 
@@ -15,7 +16,7 @@ export default function FlowCopilot({ campaignId, onAplicar }: { campaignId: num
   const [input, setInput] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [grabando, setGrabando] = useState(false)
-  const [propuesta, setPropuesta] = useState<{ edits: FlowEditMap; aviso: string | null } | null>(null)
+  const [propuesta, setPropuesta] = useState<{ edits: any; aviso: string | null | undefined } | null>(null)
   const recRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
@@ -101,7 +102,7 @@ export default function FlowCopilot({ campaignId, onAplicar }: { campaignId: num
           {hayEdits && <>
             <div className="fc-prop-titulo">Cambios propuestos:</div>
             {Object.entries(propuesta.edits).map(([id, e]) => (
-              <div key={id} className="fc-prop-item"><strong>{id}</strong>: {e.guidance || e.label}</div>
+              <div key={id} className="fc-prop-item"><strong>{id}</strong>: {(e as any).guidance || (e as any).label}</div>
             ))}
             <button className="btn btn-send fc-aplicar" onClick={aplicar}>Aplicar al flujo</button>
           </>}

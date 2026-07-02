@@ -1,7 +1,7 @@
-// src/api/flow.js — Flow Builder. El flujo es POR PROGRAMA (campaña): el supervisor
-// elige cuál editar. Se guarda en `campaign.config.flow` como OVERRIDES (guía/label por
-// nodo), no el grafo entero → a prueba de drift si el cerebro cambia su estructura.
-import { materializarFlujoCerebro, aplicarOverrides, extraerOverrides, flowValido } from '../brain/flow-materializer.js'
+// src/api/flow.js — Agent Config + Copiloto Creador.
+// Gestiona la configuración de negocio del agente (factSheet + agente) y el copiloto
+// que ayuda al vendedor a configurar su bot mediante conversación.
+// import { materializarFlujoCerebro, aplicarOverrides, extraerOverrides, flowValido } from '../brain/flow-materializer.js' // LEGACY: ya no se usa
 import { copilotoFlujo } from '../brain/flow-copilot.js'
 import { transcribirAudio } from '../lib/groq.js'
 import { ROLES_VE_TODO } from '../lib/auth-guard.js'
@@ -34,53 +34,56 @@ export async function listCampaignsV2(request, reply, prisma) {
   }
 }
 
-// GET /v2/flow?campaignId= — flujo del programa: semilla del cerebro + overrides guardados.
-export async function getFlowV2(request, reply, prisma) {
+// GET /v2/agent-config?campaignId= — obtiene la configuración de negocio del agente
+export async function getAgentConfigV2(request, reply, prisma) {
   try {
     const tenantId = request.user?.tenantId
     const campaignId = request.query?.campaignId ? Number(request.query.campaignId) : null
     const campana = await resolverCampana(prisma, tenantId, campaignId)
-    const seed = materializarFlujoCerebro(campana?.nombre || undefined)
-    const overrides = (campana?.config && typeof campana.config === 'object' && campana.config.flow?.nodes) || null
-    const flow = aplicarOverrides(seed, overrides)
-    return reply.send({ ...flow, campaignId: campana?.id ?? null })
+    const config = (campana?.config && typeof campana.config === 'object') ? campana.config : {}
+    return reply.send({ 
+      campaignId: campana?.id ?? null,
+      nombrePrograma: campana?.nombre ?? '',
+      factSheet: config.factSheet || {},
+      agente: config.agente || {}
+    })
   } catch (error) {
-    console.error('[flow] getFlowV2:', error.message)
-    return reply.code(500).send({ error: 'error al obtener el flujo' })
+    console.error('[agent-config] getAgentConfigV2:', error.message)
+    return reply.code(500).send({ error: 'error al obtener la configuración' })
   }
 }
 
-// PUT /v2/flow — guarda los overrides del flujo en la campaña. SOLO ADMIN/SUPERVISOR.
-export async function saveFlowV2(request, reply, prisma) {
+// PUT /v2/agent-config — guarda el config de negocio en la campaña. SOLO ADMIN/SUPERVISOR.
+export async function saveAgentConfigV2(request, reply, prisma) {
   try {
     if (!ROLES_VE_TODO.has(request.user?.role)) {
-      return reply.code(403).send({ error: 'solo un supervisor/admin edita el flujo' })
+      return reply.code(403).send({ error: 'solo un supervisor/admin edita la configuración' })
     }
     const tenantId = request.user?.tenantId
     const campaignId = Number(request.body?.campaignId)
-    const flow = request.body?.flow
+    const factSheet = request.body?.factSheet
+    const agente = request.body?.agente
+
     if (!campaignId) return reply.code(400).send({ error: 'campaignId requerido' })
-    if (!flowValido(flow)) return reply.code(400).send({ error: 'flujo inválido' })
 
     const campana = await resolverCampana(prisma, tenantId, campaignId)
     if (!campana) return reply.code(404).send({ error: 'programa no encontrado' })
 
-    const overrides = extraerOverrides(flow)
     const configActual = (campana.config && typeof campana.config === 'object') ? campana.config : {}
-    const nuevoConfig = { ...configActual, flow: { source: 'custom', updatedAt: new Date().toISOString(), nodes: overrides } }
+    const nuevoConfig = { ...configActual, factSheet, agente, updatedAt: new Date().toISOString() }
 
     await prisma.campaign.update({ where: { id: campana.id }, data: { config: nuevoConfig } })
-    console.log(`[flow] flujo guardado en campaña ${campana.id} (${Object.keys(overrides).length} nodos editados) por user ${request.user?.vendorId}`)
-    return reply.send({ ok: true, campaignId: campana.id, nodosEditados: Object.keys(overrides).length })
+    console.log(`[agent-config] config guardado en campaña ${campana.id} por user ${request.user?.vendorId}`)
+    return reply.send({ ok: true, campaignId: campana.id })
   } catch (error) {
-    console.error('[flow] saveFlowV2:', error.message)
-    return reply.code(500).send({ error: 'error al guardar el flujo' })
+    console.error('[agent-config] saveAgentConfigV2:', error.message)
+    return reply.code(500).send({ error: 'error al guardar la configuración' })
   }
 }
 
-// POST /v2/flow/copilot — el copiloto conversacional propone ediciones del flujo.
-// SOLO ADMIN/SUPERVISOR. Devuelve { respuesta, edits, aviso } — el front muestra el
-// preview de `edits` y, si el supervisor confirma, los guarda con saveFlowV2.
+// POST /v2/flow/copilot — el copiloto conversacional propone ediciones de la configuración.
+// SOLO ADMIN/SUPERVISOR. Devuelve { respuesta, edits } — el front muestra el
+// preview de `edits` autocompletando el formulario.
 export async function copilotV2(request, reply, prisma) {
   try {
     if (!ROLES_VE_TODO.has(request.user?.role)) {
@@ -93,12 +96,10 @@ export async function copilotV2(request, reply, prisma) {
     if (!mensaje || typeof mensaje !== 'string') return reply.code(400).send({ error: 'mensaje requerido' })
 
     const campana = await resolverCampana(prisma, tenantId, campaignId)
-    const seed = materializarFlujoCerebro(campana?.nombre || undefined)
-    const overrides = (campana?.config && typeof campana.config === 'object' && campana.config.flow?.nodes) || null
-    const flow = aplicarOverrides(seed, overrides)
+    const configActual = (campana?.config && typeof campana.config === 'object') ? campana.config : {}
 
-    const r = await copilotoFlujo({ flow, campaignNombre: campana?.nombre || '', historial, mensaje })
-    return reply.send({ respuesta: r.respuesta, edits: r.edits, aviso: r.aviso })
+    const r = await copilotoFlujo({ configActual, campaignNombre: campana?.nombre || '', historial, mensaje })
+    return reply.send({ respuesta: r.respuesta, edits: r.edits, usage: r.usage })
   } catch (error) {
     console.error('[flow] copilotV2:', error.message)
     return reply.code(500).send({ error: 'error en el copiloto' })

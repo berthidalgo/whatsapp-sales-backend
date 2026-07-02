@@ -1,7 +1,7 @@
 // Cliente HTTP fino del front. Adjunta el JWT en cada request y maneja la sesión.
 // Tipado contra el contrato compartido (@shared/types) = una sola fuente de verdad.
 import type {
-  LoginResponse, AuthUser, LeadListItem, LeadDetail, ConversationResponse, ConversationEvent, Flow, CampaignLite, CopilotResponse, DebriefPreview,
+  LoginResponse, AuthUser, LeadListItem, LeadDetail, ConversationResponse, ConversationEvent, CampaignLite, CopilotResponse, DebriefPreview, AgentConfig,
 } from '@shared/types'
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3999'
@@ -56,9 +56,9 @@ export const api = {
     req<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ nombre, pin }) }),
   leads: () => req<LeadListItem[]>('/v2/leads'),
   campaigns: () => req<CampaignLite[]>('/v2/campaigns'),
-  flow: (campaignId?: number) => req<Flow>(`/v2/flow${campaignId ? `?campaignId=${campaignId}` : ''}`),
-  saveFlow: (campaignId: number, flow: Flow) =>
-    req<{ ok: true; nodosEditados: number }>('/v2/flow', { method: 'PUT', body: JSON.stringify({ campaignId, flow }) }),
+  agentConfig: (campaignId?: number) => req<AgentConfig>(`/v2/agent-config${campaignId ? `?campaignId=${campaignId}` : ''}`),
+  saveAgentConfig: (campaignId: number, factSheet: any, agente: any) =>
+    req<{ ok: true; campaignId: number }>('/v2/agent-config', { method: 'PUT', body: JSON.stringify({ campaignId, factSheet, agente }) }),
   flowCopilot: (campaignId: number, mensaje: string, historial: { rol: string; texto: string }[]) =>
     req<CopilotResponse>('/v2/flow/copilot', { method: 'POST', body: JSON.stringify({ campaignId, mensaje, historial }) }),
   transcribe: (audioBase64: string, mimeType: string) =>

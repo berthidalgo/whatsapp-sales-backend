@@ -142,6 +142,13 @@ export function flattenFactSheet(config) {
     ? fs.pildorasValor.join(' | ')
     : ''
 
+  // ─── Nuevos campos del Copiloto Creador ───
+  const publicoObjetivo = typeof fs.publicoObjetivo === 'string' ? fs.publicoObjetivo.trim() : ''
+  const propuestaValor = typeof fs.propuestaValor === 'string' ? fs.propuestaValor.trim() : ''
+  const reglasOro = Array.isArray(fs.reglasOro) && fs.reglasOro.length
+    ? fs.reglasOro.join(' | ')
+    : ''
+
   // ─── Bloque consolidado (lo que el prompt pega como "ficha comercial") ───
   // FIX Sesión 5 (jun 2026): el NOMBRE del programa nunca entraba al bloque →
   // el modelo lo inventaba en cada M4 ("Ruta Exportadora", "Exporta con Éxito").
@@ -150,6 +157,8 @@ export function flattenFactSheet(config) {
   if (nombreProducto && nombreProducto !== SAFE_FACTSHEET_VARS.nombreProducto) {
     lineas.push(`Nombre del programa: ${nombreProducto}`)
   }
+  if (publicoObjetivo) lineas.push(`Público objetivo: ${publicoObjetivo}`)
+  if (propuestaValor) lineas.push(`Propuesta de valor única: ${propuestaValor}`)
   if (precioTexto) lineas.push(`Precio: ${precioTexto}`)
   if (incluyeTexto) lineas.push(`Incluye: ${incluyeTexto}`)
   if (inicioTexto) lineas.push(`Fecha de inicio: ${inicioTexto}`)
@@ -160,6 +169,7 @@ export function flattenFactSheet(config) {
   if (casoExitoTexto) lineas.push(`Caso de éxito real (úsalo si el lead duda o pide pruebas): ${casoExitoTexto}`)
   if (faqsTexto) lineas.push(`Preguntas frecuentes con su respuesta: ${faqsTexto}`)
   if (pildorasTexto) lineas.push(`Píldoras de valor (datos útiles para REGALAR uno a la vez cuando aporte): ${pildorasTexto}`)
+  if (reglasOro) lineas.push(`REGLAS DE ORO (NUNCA romper estas reglas): ${reglasOro}`)
   const factSheetBloque = lineas.length
     ? lineas.join('\n')
     : SAFE_FACTSHEET_VARS.factSheetBloque

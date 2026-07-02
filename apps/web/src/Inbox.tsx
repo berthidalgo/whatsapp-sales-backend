@@ -7,7 +7,7 @@ import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import { STAGE_LABELS, STAGE_ORDER, stageLabel } from '@shared/stages'
 import { loadSeen, saveSeen, isUnread } from './unread'
 import Conversation from './Conversation'
-import FlowBuilder from './FlowBuilder'
+import AgentPlayground from './AgentPlayground'
 
 type View = 'inbox' | 'flujos'
 
@@ -99,7 +99,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
         </button>
       </nav>
 
-      {view === 'flujos' ? <FlowBuilder user={user} /> : <>
+      {view === 'flujos' ? <AgentPlayground user={user} /> : <>
       <aside className="sidebar">
         <div className="sb-top">
           <div className="sb-title">Inbox</div>

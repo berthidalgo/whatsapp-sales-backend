@@ -124,12 +124,26 @@ export interface Flow {
   campaignId?: number | null          // programa al que pertenece (Hito B)
 }
 
-// Copiloto de flujos (Hito D): el agente propone ediciones por nodo + un aviso de guardrail.
-export type FlowEditMap = Record<string, { guidance?: string; label?: string }>
+export interface AgentConfig {
+  campaignId: number | null
+  nombrePrograma: string
+  factSheet: Record<string, any>
+  agente: Record<string, any>
+}
+
+// Copiloto (Consultor): propone cambios a la configuración del agente
 export interface CopilotResponse {
-  respuesta: string          // texto conversacional (para leer / hablar por voz)
-  edits: FlowEditMap         // ediciones propuestas (preview → el humano confirma)
-  aviso: string | null       // advertencia si algo chocaba con los principios del cerebro
+  respuesta: string
+  edits?: {
+    factSheet?: any
+    agente?: any
+  }
+  aviso?: string
+  usage?: {
+    promptTokenCount: number
+    candidatesTokenCount: number
+    totalTokenCount: number
+  }
 }
 
 // Debrief post-llamada: lo que el cerebro extrae del dictado del vendedor (preview editable).
