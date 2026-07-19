@@ -56,7 +56,7 @@ async function main() {
   await client.connect()
 
   const leads = await client.query(
-    `SELECT id, telefono, "nombreDetectado", "campaignId"
+    `SELECT id, telefono, "nombreDetectado", "campaignId", tenant_id
      FROM leads WHERE telefono LIKE '%' || $1 || '%'`,
     [TELEFONO]
   )
@@ -90,17 +90,20 @@ async function main() {
           )).rows.map(r => r.fila)
         : []
 
+      // tenant_id viaja al archivo (FIX cross-tenant jul 2026): la memoria
+      // episódica filtra por tenant — cada negocio recuerda SOLO sus leads.
       await client.query(
         `INSERT INTO conversaciones_archivadas
            (lead_id_original, telefono, es_test, nombre_detectado, campaign_id,
-            stage_final, mode_final, slots, mensajes, turn_traces, motivo)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            stage_final, mode_final, slots, mensajes, turn_traces, motivo, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
           lead.id, lead.telefono, lead.telefono.includes(NUMERO_TEST),
           lead.nombreDetectado, lead.campaignId,
           state.current_stage || null, state.current_mode || null,
           JSON.stringify(state.slots_filled || {}),
-          JSON.stringify(mensajes), JSON.stringify(traces), MOTIVO
+          JSON.stringify(mensajes), JSON.stringify(traces), MOTIVO,
+          lead.tenant_id || 'peru_exporta'
         ]
       )
 

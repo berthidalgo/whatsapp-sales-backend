@@ -275,15 +275,19 @@ export function construirResumenMemoria(filas, ahora = Date.now()) {
   return lineas.join('\n')
 }
 
-async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual) {
+async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId) {
   if (!telefono) return null
   try {
+    // FIX cross-tenant (jul 2026, cazado al auditar la DB para BIOAYUR): la query
+    // buscaba SOLO por teléfono → un ex-lead de Perú Exporta que escribiera a
+    // BIOAYUR era "recordado" con contexto de EXPORTACIÓN (contaminación entre
+    // negocios). La memoria ahora es POR TENANT: cada negocio recuerda solo lo suyo.
     const filas = await prisma.$queryRawUnsafe(
       `SELECT nombre_detectado, slots, stage_final, archived_at
          FROM conversaciones_archivadas
-        WHERE telefono = $1 AND lead_id_original <> $2
+        WHERE telefono = $1 AND lead_id_original <> $2 AND tenant_id = $3
         ORDER BY id DESC LIMIT 3`,
-      String(telefono), Number(leadIdActual) || 0
+      String(telefono), Number(leadIdActual) || 0, String(tenantId || 'peru_exporta')
     )
     return construirResumenMemoria(filas)
   } catch (err) {
@@ -383,7 +387,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // Memoria episódica: si este contacto ya conversó antes (conversación
     // archivada), cargamos un resumen de hechos para que el cerebro lo RECONOZCA
     // (lead que vuelve). null si es nuevo → el prompt queda idéntico.
-    const memoriaEpisodica = await cargarMemoriaEpisodica(prisma, telefono, leadId)
+    const memoriaEpisodica = await cargarMemoriaEpisodica(prisma, telefono, leadId, tenantId)
     if (memoriaEpisodica) {
       console.log(`[BrainPipeline] 🧠 Memoria episódica activa para lead ${leadId} (contacto ya conocido)`)
     }
