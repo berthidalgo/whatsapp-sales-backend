@@ -12,3 +12,9 @@ CLAUDE.md
 # Temporales y logs
 *.log
 temp-*
+
+# Material comercial del cliente (repo publico - NO subir)
+BIOAYUR_CHATBOT_SISTEMA.md
+Presentacion ELIXIR.pdf
+ejemplos/
+apps/api/_*.mjs

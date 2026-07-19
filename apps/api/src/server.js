@@ -32,6 +32,8 @@ import { listCampaignsV2, getAgentConfigV2, saveAgentConfigV2, copilotV2, transc
 import { verifyJwt } from './lib/auth-guard.js'
 
 import { geminiHealthCheck } from './lib/gemini.js'
+import { callCerebras } from './lib/cerebras.js'
+import { callGroq } from './lib/groq.js'
 
 // ── Sprint 3: Cerebro unificado (banco de pruebas aislado) ──
 import { pensarYResponder, summarizeBrainResult } from './brain/agent-brain.js'
@@ -103,6 +105,92 @@ app.get('/debug/gemini-check', async (req, reply) => {
   const result = await geminiHealthCheck()
   return reply.send(result)
 })
+
+// ── Debug — Brain Health: ¿RESPONDEN los 3 seguros del cerebro? ──────────────
+// Un solo endpoint que hace PING a los tres proveedores LLM del cerebro y dice si
+// cada uno responde: PRIMARIO (Gemini vía Vertex) + los dos SEGUROS de fallback
+// (Cerebras gpt-oss-120b, Groq llama-3.3-70b). Sirve para verificar de un vistazo
+// —p.ej. tras un aviso de que un proveedor se actualiza/deprecó un modelo— si el
+// bot sigue teniendo con qué responder. Ping mínimo (temp 0, ~16 tokens) → costo casi nulo.
+//
+// GET o POST /debug/brain-health            → prueba los 3
+// ...?provider=gemini|cerebras|groq         → prueba solo uno
+//
+// overall: 'ok' = el primario responde · 'degraded' = primario caído pero hay
+// fallback vivo (el bot NO queda mudo) · 'down' = ningún proveedor responde.
+//
+// ⚠️ El ping es de TEXTO PLANO (sin modo JSON) a propósito: gpt-oss-120b de Cerebras
+// es un modelo de RAZONAMIENTO y en modo JSON (response_format) consume cientos de
+// tokens "pensando" antes de emitir contenido → con topes bajos devuelve vacío (falso
+// negativo). Este health check responde "¿el proveedor está VIVO y responde texto?",
+// NO "¿el fallback del cerebro produce el JSON perfecto?" (eso es un smoke test aparte).
+async function brainHealthHandler(req, reply) {
+  const soloProvider = String(req.query?.provider || req.body?.provider || '').toLowerCase()
+  const PING = 'Responde solo con la palabra: OK'
+  const primary = (process.env.BRAIN_PROVIDER || 'gemini').toLowerCase()
+
+  // Ping a Gemini (reusa el health check real vía Vertex).
+  async function pingGemini() {
+    try {
+      const r = await geminiHealthCheck()
+      return {
+        provider: 'gemini', role: primary === 'gemini' ? 'primario' : 'seguro',
+        configured: true, ok: r.ok === true, model: r.model || null,
+        latency_ms: r.latency_ms ?? null, sample: r.response || null, error: r.error || null,
+      }
+    } catch (e) {
+      return { provider: 'gemini', role: primary === 'gemini' ? 'primario' : 'seguro', configured: true, ok: false, error: e.message }
+    }
+  }
+
+  // Ping genérico a un proveedor OpenAI-compatible (Cerebras / Groq).
+  async function pingOpenAICompat({ provider, envKey, model, callFn }) {
+    const role = primary === provider ? 'primario' : 'seguro'
+    if (!process.env[envKey]) {
+      return { provider, role, configured: false, ok: false, model, error: `${envKey} no seteada en el entorno` }
+    }
+    const t = Date.now()
+    try {
+      // jsonMode:false + tope holgado → el ping mide "¿responde texto?" sin que el
+      // reasoning de gpt-oss (Cerebras) se coma el presupuesto y devuelva vacío.
+      const r = await callFn({ model, systemInstruction: null, contents: PING, temperature: 0, maxOutputTokens: 256, jsonMode: false })
+      const responde = !!(r && typeof r.text === 'string' && r.text.trim())
+      return {
+        provider, role, configured: true, ok: responde, model,
+        latency_ms: r?.latencyMs ?? (Date.now() - t),
+        sample: (r?.text || '').trim().slice(0, 60),
+        error: responde ? null : 'respuesta vacía',
+      }
+    } catch (e) {
+      return { provider, role, configured: true, ok: false, model, latency_ms: Date.now() - t, error: e.message }
+    }
+  }
+
+  const jobs = {
+    gemini: pingGemini,
+    cerebras: () => pingOpenAICompat({ provider: 'cerebras', envKey: 'CEREBRAS_API_KEY', model: 'gpt-oss-120b', callFn: callCerebras }),
+    groq: () => pingOpenAICompat({ provider: 'groq', envKey: 'GROQ_API_KEY', model: 'llama-3.3-70b-versatile', callFn: callGroq }),
+  }
+
+  const aCorrer = (soloProvider && jobs[soloProvider]) ? [soloProvider] : ['gemini', 'cerebras', 'groq']
+  const resultados = await Promise.all(aCorrer.map(p => jobs[p]()))
+  const byProvider = Object.fromEntries(resultados.map(r => [r.provider, r]))
+
+  // Overall: el bot vive si el primario responde; si el primario cae pero un
+  // fallback responde, está degradado pero NO mudo; si nada responde, está caído.
+  const primarioOk = byProvider[primary]?.ok === true
+  const algunoOk = resultados.some(r => r.ok === true)
+  const overall = primarioOk ? 'ok' : (algunoOk ? 'degraded' : 'down')
+
+  return reply.code(overall === 'down' ? 503 : 200).send({
+    overall,
+    primary,
+    checked_at: new Date().toISOString(),
+    providers: byProvider,
+  })
+}
+app.get('/debug/brain-health', brainHealthHandler)
+app.post('/debug/brain-health', brainHealthHandler)
 
 // ── Debug — Brain test (Sprint 3) — CEREBRO UNIFICADO AISLADO ────
 // Prueba el cerebro nuevo SIN tocar el pipeline real ni ningún lead.

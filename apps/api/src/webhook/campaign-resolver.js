@@ -25,7 +25,8 @@
 
 import prisma from '../db/prisma.js'
 
-const DEFAULT_TENANT_ID = 'peru_exporta'
+import { ACTIVE_TENANT } from '../lib/tenant.js'
+const DEFAULT_TENANT_ID = ACTIVE_TENANT   // switch de tenant (jul 2026): perilla ACTIVE_TENANT en Render
 
 // ════════════════════════════════════════════════════════
 // Normalización (IDÉNTICA a src/routes/campaigns.js para coherencia)

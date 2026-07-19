@@ -48,6 +48,7 @@ import prisma from '../db/prisma.js'
 import { STAGES, MODES } from '../state/stage-definitions.js'
 import { notificarEscalamiento } from '../webhook/notifications.js'
 import { reportError } from '../lib/observability.js'
+import { ACTIVE_TENANT } from '../lib/tenant.js'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Orden del embudo (para proteger contra retrocesos de stage).
@@ -303,7 +304,7 @@ async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual) {
  * @param {string} args.vendorNombre - nombre del agente/vendedor (la identidad del bot)
  * @returns {Promise<object>} { ok, botResponse, brainResult, stateAfter }
  */
-export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = 'peru_exporta', vendorNombre = 'Jhon' }) {
+export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = ACTIVE_TENANT, vendorNombre = 'Jhon' }) {
   const startTime = Date.now()
 
   try {

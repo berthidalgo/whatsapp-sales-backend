@@ -42,7 +42,8 @@ import {
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ════════════════════════════════════════════════════════
-const DEFAULT_TENANT_ID = 'peru_exporta'
+import { ACTIVE_TENANT } from '../lib/tenant.js'
+const DEFAULT_TENANT_ID = ACTIVE_TENANT   // switch de tenant (jul 2026): perilla ACTIVE_TENANT en Render
 const FALLBACK_VENDOR_ID = 1
 
 // Sufijos de JID que NO representan un lead individual

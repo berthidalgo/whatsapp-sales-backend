@@ -30,6 +30,7 @@ import { routeEvent, summarizeEventResult } from './event-router.js'
 import { enqueueMessage, getMessageGeneration } from './debounce.js'
 import { sendToWhatsApp } from './sender.js'
 import { procesarConCerebro } from '../brain/brain-pipeline.js'
+import { ACTIVE_TENANT } from '../lib/tenant.js'
 
 // ════════════════════════════════════════════════════════
 // ESTADO INTERNO — Lock por leadId
@@ -164,7 +165,7 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       leadId,
       telefono,
       mensajeActual: combinedText,
-      tenantId: leadInfo.tenantId || 'peru_exporta',
+      tenantId: leadInfo.tenantId || ACTIVE_TENANT,   // switch de tenant (jul 2026): la perilla vive en lib/tenant.js
       vendorNombre: leadInfo.vendorNombre || 'Jhon'  // fallback alineado al config (el nombre real lo manda config.agente.nombre)
     })
     console.log(`[Pipeline] Cerebro ${Date.now() - brainStart}ms`)

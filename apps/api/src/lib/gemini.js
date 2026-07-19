@@ -12,6 +12,7 @@
 
 import { GoogleGenAI } from '@google/genai'
 import prisma from '../db/prisma.js'
+import { ACTIVE_TENANT } from './tenant.js'
 
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN GLOBAL
@@ -31,7 +32,7 @@ const DEFAULT_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1'
 // UNA vez por tenant por proceso y se reusa. El log de auth sale 1 vez, no miles.
 const clientCache = new Map()
 
-async function getGeminiClient(tenantId = 'peru_exporta', opts = {}) {
+async function getGeminiClient(tenantId = ACTIVE_TENANT, opts = {}) {
   const { location: locationOverride = null, apiKey: apiKeyOverride = null } = opts
 
   // Llave de cache que distingue las 3 puertas, para no mezclar clientes:
@@ -79,7 +80,7 @@ async function getGeminiClient(tenantId = 'peru_exporta', opts = {}) {
 // ════════════════════════════════════════════════════════
 // HEALTH CHECK — verifica que Gemini responde via Vertex AI
 // ════════════════════════════════════════════════════════
-export async function geminiHealthCheck(tenantId = 'peru_exporta') {
+export async function geminiHealthCheck(tenantId = ACTIVE_TENANT) {
   const startTime = Date.now()
   
   try {
@@ -122,7 +123,7 @@ export async function geminiHealthCheck(tenantId = 'peru_exporta') {
 // API PRINCIPAL — la usan Perception, Policy, Response
 // ════════════════════════════════════════════════════════
 export async function callGemini({
-  tenantId = 'peru_exporta',
+  tenantId = ACTIVE_TENANT,
   model = DEFAULT_MODEL,
   systemInstruction = null,
   contents,
