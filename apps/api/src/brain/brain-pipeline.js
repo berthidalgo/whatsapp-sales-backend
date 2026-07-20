@@ -552,6 +552,9 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
         // más importaba. El silencio de los turnos SIGUIENTES lo garantiza la
         // compuerta de modo (el upsert de abajo deja el lead en HUMAN_ACTIVE).
         bot_responded: true,
+        // Vertical colágeno: si el cerebro pidió adjuntar una imagen (foto de precios
+        // en M4), el handler la envía tras el texto. null en la inmensa mayoría de turnos.
+        enviar_imagen: brainResult.enviar_imagen || null,
         generation: {
           // FIX jun 2026: la marca era 'agent_brain_v1' hardcodeada — los logs
           // decían v1 con el v4 vivo (falsa alarma del protocolo de pruebas).

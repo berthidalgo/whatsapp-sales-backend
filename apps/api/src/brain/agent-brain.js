@@ -358,6 +358,7 @@ export async function pensarYResponder({
       temperatura_lead: parsed.temperatura_lead || 'warm',
       compromiso: parsed.compromiso || null,   // motor de compromisos (Fase D): {tipo, descripcion, fecha_iso}
       cierre: parsed.cierre || null,           // closer consultivo (v5_5): {ofrecio_llamada, objecion_trabajada, palanca}
+      enviar_imagen: parsed.enviar_imagen || null,  // vertical colágeno: 'precios' → el sistema adjunta la foto en M4
       guardrail_flags: validado.flags,
       via_fallback: usoFallback,   // BLOQUE #2: true si respondió el seguro Cerebras
       audit: {

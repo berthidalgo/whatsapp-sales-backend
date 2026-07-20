@@ -28,9 +28,10 @@ import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
 import { enqueueMessage, getMessageGeneration } from './debounce.js'
-import { sendToWhatsApp } from './sender.js'
+import { sendToWhatsApp, sendMediaToWhatsApp } from './sender.js'
 import { procesarConCerebro } from '../brain/brain-pipeline.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
+import { getImagen } from '../lib/assets.js'
 
 // ════════════════════════════════════════════════════════
 // ESTADO INTERNO — Lock por leadId
@@ -224,6 +225,24 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
         await prisma.message.create({ data: { leadId, origen: 'BOT', texto: botResponse.text } })
       } catch (err) {
         console.error(`[Pipeline] No se pudo persistir mensaje BOT lead ${leadId}:`, err.message)
+      }
+
+      // ─── 5b. ADJUNTAR IMAGEN si el cerebro la pidió (vertical colágeno, foto de
+      //     precios en M4) — se envía DESPUÉS del texto y solo si el texto salió OK.
+      //     Fire-and-forget suave: un fallo del envío de imagen NO tumba el turno. ───
+      if (botResponse.enviar_imagen) {
+        const img = getImagen(botResponse.enviar_imagen)
+        if (img) {
+          const mediaRes = await sendMediaToWhatsApp({
+            telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,
+            instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
+          })
+          console.log(mediaRes.ok
+            ? `[Pipeline] 📎 Imagen "${botResponse.enviar_imagen}" enviada a ${telefono} (${mediaRes.latency_ms}ms)`
+            : `[Pipeline] ⚠️ No se pudo enviar imagen "${botResponse.enviar_imagen}": ${mediaRes.error}`)
+        } else {
+          console.warn(`[Pipeline] cerebro pidió imagen "${botResponse.enviar_imagen}" pero no existe en assets`)
+        }
       }
     } else {
       console.error(`[Pipeline] ❌ Send failed:`, sendResult.error)

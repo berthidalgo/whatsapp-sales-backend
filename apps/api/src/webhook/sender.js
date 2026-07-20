@@ -140,6 +140,38 @@ export async function sendToWhatsApp({ telefono, text, instanceName }) {
 }
 
 // ════════════════════════════════════════════════════════
+// ENVÍO DE MEDIA (imagen) — Evolution /message/sendMedia (jul 2026)
+// El bot manda la foto de precios en el Momento 4 del vertical colágeno
+// (como el rival manda su video, pero en el momento correcto del cierre).
+// media = base64 SIN el prefijo data: (Evolution lo quiere pelado).
+// ════════════════════════════════════════════════════════
+export async function sendMediaToWhatsApp({ telefono, base64, mimetype = 'image/png', fileName = 'imagen.png', caption = '', instanceName }) {
+  const startTime = Date.now()
+  if (!telefono || !base64 || !instanceName) {
+    return { ok: false, error: 'media_params_missing', latency_ms: 0 }
+  }
+  const baseUrl = process.env.EVOLUTION_API_URL
+  const apiKey = process.env.EVOLUTION_API_KEY
+  if (!baseUrl || !apiKey) return { ok: false, error: 'env_evolution_missing', latency_ms: 0 }
+
+  const url = `${baseUrl.replace(/\/$/, '')}/message/sendMedia/${instanceName}`
+  const cleanB64 = base64.replace(/^data:[^;]+;base64,/, '')
+  const body = { number: telefono, mediatype: 'image', mimetype, caption, media: cleanB64, fileName }
+
+  console.log(`[Sender] 📎 Enviando imagen a ${telefono} (${Math.round(cleanB64.length / 1024)}KB b64) via ${instanceName}`)
+  try {
+    const result = await callEvolutionWithTimeout(url, apiKey, body, 25000)  // media es más pesada → timeout mayor
+    if (result.ok) {
+      return { ok: true, sent: true, latency_ms: Date.now() - startTime, status: result.status }
+    }
+    console.error(`[Sender] ❌ Media send failed: ${result.error}`)
+    return { ok: false, error: result.error, latency_ms: Date.now() - startTime }
+  } catch (err) {
+    return { ok: false, error: `media_exception: ${err.message}`, latency_ms: Date.now() - startTime }
+  }
+}
+
+// ════════════════════════════════════════════════════════
 // HELPER — Llamada a Evolution con timeout
 // ════════════════════════════════════════════════════════
 
