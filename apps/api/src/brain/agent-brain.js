@@ -524,8 +524,10 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
       }
     } else {
       // Hay precio real: cualquier cifra que no coincida con el real es sospechosa.
+      // Validamos contra el precio regular Y la OFERTA DE HOY (descuento oficial de la
+      // ficha) — si no, los precios de la promo se marcarían como fantasma (jul 2026).
       const montoReal = fs.precioMonto ? String(fs.precioMonto) : null
-      const textoRealDigitos = fs.precioTexto.replace(/\D/g, '')
+      const textoRealDigitos = (fs.precioTexto + ' ' + (fs.ofertaHoyTexto || '')).replace(/\D/g, '')
       for (const p of preciosEnMensaje) {
         const soloDigitos = p.replace(/\D/g, '')
         if (soloDigitos && soloDigitos !== montoReal && !textoRealDigitos.includes(soloDigitos)) {

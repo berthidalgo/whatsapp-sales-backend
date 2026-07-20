@@ -73,6 +73,14 @@ async function main() {
         monto: 139,
         moneda: 'S/'
       },
+      // OFERTA DE HOY (arsenal de cierre, jul 2026 — aprendido del benchmark del rival).
+      // ⚠️ NÚMEROS PROPUESTOS (S/10 off): el dueño confirma o ajusta. Estos precios
+      // también los valida el guardrail de precio, así que deben ser reales y coherentes.
+      ofertaHoy: 'SOLO POR HOY (promo del día): 1 envase S/ 129 · 2 envases S/ 239 · 3 envases S/ 329 — ahorras S/ 10 en cualquier opción. Es el precio mínimo del día, no baja más.',
+      // TESTIMONIOS REALES (prueba social) — el dueño pega los verdaderos aquí.
+      // Formato: { texto: '...', dolor: 'piel'|'energia'|'articulaciones' }. Vacío = Jhon
+      // no usa testimonios (jamás inventa uno). Rellenar con los reales que dé el dueño.
+      testimonios: [],
       incluye: [
         'Colágeno hidrolizado 10g por porción',
         'Resveratrol 300mg',

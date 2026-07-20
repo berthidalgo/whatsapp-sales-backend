@@ -149,6 +149,15 @@ export function flattenFactSheet(config) {
     ? fs.reglasOro.join(' | ')
     : ''
 
+  // ─── Arsenal de cierre (jul 2026, aprendido del benchmark del rival) ───
+  // ofertaHoy = descuento OFICIAL "solo por hoy" (el cerebro lo usa como gatillo de
+  // cierre SIN inventar). testimonios = prueba social REAL (SOLO estos, textual).
+  const ofertaHoyTexto = typeof fs.ofertaHoy === 'string' ? fs.ofertaHoy.trim() : ''
+  const testimoniosTexto = Array.isArray(fs.testimonios) && fs.testimonios.length
+    ? fs.testimonios.map(t => typeof t === 'string' ? t : `${t.texto || ''}${t.dolor ? ` (por ${t.dolor})` : ''}`).join(' | ')
+    : ''
+  const garantiaTexto = typeof fs.garantia === 'string' ? fs.garantia.trim() : ''
+
   // ─── Bloque consolidado (lo que el prompt pega como "ficha comercial") ───
   // FIX Sesión 5 (jun 2026): el NOMBRE del programa nunca entraba al bloque →
   // el modelo lo inventaba en cada M4 ("Ruta Exportadora", "Exporta con Éxito").
@@ -169,6 +178,9 @@ export function flattenFactSheet(config) {
   if (casoExitoTexto) lineas.push(`Caso de éxito real (úsalo si el lead duda o pide pruebas): ${casoExitoTexto}`)
   if (faqsTexto) lineas.push(`Preguntas frecuentes con su respuesta: ${faqsTexto}`)
   if (pildorasTexto) lineas.push(`Píldoras de valor (datos útiles para REGALAR uno a la vez cuando aporte): ${pildorasTexto}`)
+  if (ofertaHoyTexto) lineas.push(`OFERTA DE HOY (descuento OFICIAL — úsalo como gatillo de cierre cuando la clienta dude o regatee; es real, NO inventado): ${ofertaHoyTexto}`)
+  if (testimoniosTexto) lineas.push(`Testimonios REALES de clientas (compártelos como prueba social cuando dude si funciona; usa SOLO estos, textual, JAMÁS inventes uno): ${testimoniosTexto}`)
+  if (garantiaTexto) lineas.push(`Garantía/devolución (úsala como cierre de confianza): ${garantiaTexto}`)
   if (reglasOro) lineas.push(`REGLAS DE ORO (NUNCA romper estas reglas): ${reglasOro}`)
   const factSheetBloque = lineas.length
     ? lineas.join('\n')
@@ -188,6 +200,9 @@ export function flattenFactSheet(config) {
     casoExitoTexto,
     faqsTexto,
     pildorasTexto,
+    ofertaHoyTexto,     // arsenal de cierre: descuento oficial "solo por hoy"
+    testimoniosTexto,   // prueba social real
+    garantiaTexto,
     factSheetBloque,
     tieneFactSheet: true
   }
