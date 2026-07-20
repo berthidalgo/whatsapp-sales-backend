@@ -24,6 +24,7 @@
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
 import { sendToWhatsApp, sendTemplateCloud, proveedorActivo } from '../whatsapp/send.js'
+import { ACTIVE_TENANT, verticalPorTenant } from '../lib/tenant.js'
 
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -42,11 +43,25 @@ const PISO_2H  = 2,  TECHO_2H  = 6
 const PISO_24H = 24, TECHO_24H = 48
 const INSTANCE        = process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
 
-// Plantillas editables. {{nombre}}, {{producto}}, {{curso}} se interpolan.
-const PLANTILLAS = {
-  followup_2h:  'Hola {{nombre}} 👋 Quedé pensando en lo que conversamos sobre exportar {{producto}}. Si te quedó alguna duda, aquí estoy para ayudarte 😊',
-  followup_24h: 'Hola {{nombre}}, no quiero que dejes pasar la oportunidad con {{curso}}. Si te animas, coordinamos una llamada corta y resolvemos todo. ¿Te parece? 🙌'
+// ── Plantillas POR VERTICAL (fix forense jul 2026) ──
+// El motor de followups tenía copy de EXPORTACIÓN hardcodeado → le hablaba de
+// "exportar tu producto" a leads de colágeno (bug real cazado con Gabriel). Ahora
+// las plantillas se eligen por el vertical del tenant activo. {{nombre}} = PRIMER
+// nombre (ver primerNombre); las de colágeno no dependen de slots frágiles.
+const PLANTILLAS_POR_VERTICAL = {
+  exportacion: {
+    followup_2h:  'Hola {{nombre}} 👋 Quedé pensando en lo que conversamos sobre exportar {{producto}}. Si te quedó alguna duda, aquí estoy para ayudarte 😊',
+    followup_24h: 'Hola {{nombre}}, no quiero que dejes pasar la oportunidad con {{curso}}. Si te animas, coordinamos una llamada corta y resolvemos todo. ¿Te parece? 🙌'
+  },
+  colageno: {
+    followup_2h:  'Hola {{nombre}} 👋 Quedé pensando en lo que conversábamos del ELIXIR 💜 Si te quedó alguna duda sobre la fórmula o la promo de hoy, aquí estoy para ayudarte 😊',
+    followup_24h: 'Hola {{nombre}} 😊 No quiero que se te pase la promo del ELIXIR. Si te animas, coordino tu pedido con envío a tu puerta y pagas al recibir 📦 ¿Lo vemos?'
+  }
 }
+
+// Las plantillas del tenant activo (exportacion=peru_exporta, colageno=bioayur).
+const VERTICAL_ACTIVO = verticalPorTenant(ACTIVE_TENANT)
+const PLANTILLAS = PLANTILLAS_POR_VERTICAL[VERTICAL_ACTIVO] || PLANTILLAS_POR_VERTICAL.exportacion
 
 const NOMBRE_CURSO = 'Mi Primera Exportación'
 
@@ -62,11 +77,26 @@ function enVentanaHoraria() {
   return h >= VENTANA_INICIO && h < VENTANA_FIN
 }
 
+// PRIMER nombre, capitalizado (fix forense jul 2026): antes se usaba el nombre
+// COMPLETO del perfil de WhatsApp ("Jesus Gabriel Martínez Fl") → sonaba a base de
+// datos. Ahora solo el primer token. Vacío si no hay nombre usable.
+function primerNombre(nombre) {
+  const t = (nombre && String(nombre).trim()) || ''
+  if (!t) return ''
+  const tok = t.split(/\s+/)[0]
+  if (tok.length < 2 || /\d/.test(tok)) return ''   // basura tipo "51" o iniciales sueltas → sin nombre
+  return tok.charAt(0).toUpperCase() + tok.slice(1).toLowerCase()
+}
+
 function interpolar(plantilla, { nombre, producto }) {
   return plantilla
-    .replace(/\{\{nombre\}\}/g, (nombre && String(nombre).trim()) || 'qué tal')
+    .replace(/\{\{nombre\}\}/g, primerNombre(nombre))
     .replace(/\{\{producto\}\}/g, (producto && String(producto).trim()) || 'tu producto')
     .replace(/\{\{curso\}\}/g, NOMBRE_CURSO)
+    // Si no había nombre, "Hola  👋" / "Hola , ..." quedan feos → limpiar a "¡Hola! ..."
+    .replace(/\bHola\s+([👋😊💜📦,])/g, (m, s) => s === ',' ? '¡Hola!' : `¡Hola! ${s}`)
+    .replace(/ {2,}/g, ' ')
+    .trim()
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
@@ -81,7 +111,7 @@ const SQL_CANDIDATOS = `
   SELECT
     ls.lead_id                                                   AS "leadId",
     l.telefono                                                   AS telefono,
-    COALESCE(NULLIF(l."nombreDetectado",''), ls.slots_filled->>'nombre') AS nombre,
+    COALESCE(NULLIF(ls.slots_filled->>'nombre',''), NULLIF(l."nombreDetectado",'')) AS nombre,
     ls.slots_filled->>'producto'                                 AS producto,
     EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600        AS horas_silencio,
     last_any.origen                                              AS ultimo_origen,
@@ -102,6 +132,7 @@ const SQL_CANDIDATOS = `
     ORDER BY "createdAt" DESC LIMIT 1
   ) last_any ON true
   WHERE ls.current_mode = 'AUTO_CONSULTIVO'
+    AND l.tenant_id = '${ACTIVE_TENANT}'
     AND l.archived_at IS NULL
     AND lead_msg.last_at IS NOT NULL
     AND last_any.origen <> 'LEAD'
@@ -158,7 +189,7 @@ export async function ejecutarFollowups() {
           templateName: process.env.CLOUD_TEMPLATE_FOLLOWUP_24H || 'followup_24h',
           languageCode: 'es',
           components: [{ type: 'body', parameters: [
-            { type: 'text', text: (c.nombre && String(c.nombre).trim()) || 'qué tal' },
+            { type: 'text', text: primerNombre(c.nombre) || 'qué tal' },
             { type: 'text', text: (c.producto && String(c.producto).trim()) || 'tu producto' }
           ]}]
         })
