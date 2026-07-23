@@ -431,9 +431,70 @@ model TenantSettings {
   
   // Metadata
   notas                          String?  @db.Text
-  
+
+  // Canales de WhatsApp de este tenant (su número / su instancia).
+  // Es lo que convierte a tenant_settings en el ANCLA del multitenant: un tenant
+  // ya no es solo una fila de facturación, es "quién atiende por qué número".
+  channels                       Channel[]
+
   createdAt                      DateTime @default(now()) @map("created_at")
   updatedAt                      DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@map("tenant_settings")
+}
+
+// ─── Canal de WhatsApp por tenant ─────────────────────────────
+//
+// LA PIEZA QUE MATA `ACTIVE_TENANT`.
+//
+// Hasta hoy el tenant activo era una ENV VAR global del proceso: un deploy
+// atendía a UN cliente, y sumar el segundo obligaba a levantar otro servicio o
+// a apagar el primero. El número entrante ya traía la respuesta y la tirábamos.
+//
+// Ahora el tenant se DEDUCE del canal por el que entró el mensaje:
+//
+//   webhook → externalKey (instancia Evolution / phone_number_id) → Channel → tenantId
+//
+// Con eso los 3 clientes conviven en UN solo deploy, cada uno con su número, y
+// sumar el cuarto es INSERTAR UNA FILA — no un redeploy.
+//
+// `provider` es la costura de portabilidad: hoy todo es 'evolution'; el día que
+// un cliente llegue con Bird o Cloud API se agrega su adapter y su fila, y los
+// demás siguen intactos. Ningún proveedor queda cableado en el pipeline.
+//
+// `credenciales` guarda lo específico de cada proveedor (JSON, cifrado en reposo
+// a nivel de Postgres/Supabase). NUNCA en env vars: eso es lo que impedía tener
+// dos clientes a la vez.
+//   evolution → { apiUrl, apiKey, instanceName }
+//   bird      → { workspaceId, wabaId, phoneNumberId, accessToken }
+//   cloud     → { phoneNumberId, wabaId, accessToken, appSecret }
+model Channel {
+  id             String         @id @default(uuid())
+  tenantId       String         @map("tenant_id")
+  tenant         TenantSettings @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+
+  provider       String         @default("evolution")   // evolution | bird | cloud
+
+  // Llave de routing del webhook entrante. ÚNICA GLOBAL a propósito: una misma
+  // instancia/número no puede pertenecer a dos tenants — si eso pasara, los
+  // mensajes de un cliente caerían en la bandeja de otro. El índice único lo
+  // vuelve imposible a nivel BD, no solo por disciplina de código.
+  externalKey    String         @unique @map("external_key")
+
+  numeroDisplay  String?        @map("numero_display")  // +51924104066 (informativo, para el dashboard)
+  credenciales   Json?                                   // por proveedor (ver arriba)
+
+  activo         Boolean        @default(true)
+  // Canal por defecto del tenant para ENVIAR cuando el turno no trae uno propio
+  // (p.ej. followups del cron, que nacen sin webhook entrante).
+  esDefault      Boolean        @default(false)         @map("es_default")
+
+  notas          String?        @db.Text
+
+  createdAt      DateTime       @default(now())         @map("created_at")
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at")
+
+  @@index([tenantId])
+  @@index([provider, activo])
+  @@map("channels")
 }

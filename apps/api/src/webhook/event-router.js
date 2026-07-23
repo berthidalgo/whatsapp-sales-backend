@@ -40,6 +40,7 @@ import {
   summarizeResolution
 } from './lead-resolver.js'
 import { enqueueMessage, cancelDebounce } from './debounce.js'
+import { resolveChannel, summarizeChannelResolution } from './channel-resolver.js'
 import { MODES, STAGES } from '../state/stage-definitions.js'
 import { sendToWhatsApp } from '../whatsapp/send.js'
 import { notificarEscalamiento } from './notifications.js'
@@ -163,6 +164,14 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
     console.log(`[EventRouter] 📢 CTWA ad context: ${JSON.stringify(adContext)}`)
   }
 
+  // ─── 5-ter. RESOLVER TENANT por el canal entrante (jul 2026) ───
+  // Esto es lo que reemplaza a `ACTIVE_TENANT`: la instancia que recibió el
+  // mensaje dice de QUIÉN es el número, así que el tenant se DEDUCE en vez de
+  // leerse de una env var global. Sin esto, un solo deploy no puede atender a
+  // dos clientes a la vez.
+  const channel = await resolveChannel(instanceName)
+  console.log(`[EventRouter] ${summarizeChannelResolution(channel)}`)
+
   // ─── 6. Resolver lead (identidad) ───
   const leadResolution = await resolveLead({
     remoteJid: key.remoteJid,
@@ -172,7 +181,8 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
     instanceName,
     pushName,
     adContext,
-    firstMessageText: text        // para el Campaign Resolver (solo se usa en primer contacto)
+    firstMessageText: text,       // para el Campaign Resolver (solo se usa en primer contacto)
+    tenantId: channel.tenantId    // ← el tenant del CANAL, no el global del proceso
   })
 
   if (!leadResolution.ok) {
@@ -219,6 +229,7 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
       messageKey: key,              // key completo (id, remoteJid, fromMe) para bajar media
       messageType,
       instanceName,
+      channel,                    // canal resuelto → el pipeline sabe por dónde responder
       processPipelineFn,
       startTime
     })
@@ -236,9 +247,14 @@ async function handleLeadMessage({
   messageKey,
   messageType,
   instanceName,
+  channel = null,
   processPipelineFn,
   startTime
 }) {
+  // El canal viaja DENTRO de leadInfo hasta el pipeline: así el sender sabe por
+  // qué instancia responder sin volver a consultarlo, y sin leer env vars globales
+  // (que es lo que ataba el proceso a un solo cliente).
+  if (channel) leadInfo = { ...leadInfo, channel, tenantId: channel.tenantId }
 
   // ─── BLOQUE #3: AUDIO ENTRANTE — transcribir nota de voz con Whisper (Groq) ───
   // El lead peruano manda muchas notas de voz. En vez de rechazarlas, las

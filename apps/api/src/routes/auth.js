@@ -4,6 +4,8 @@
 // manda en cada request → los endpoints v2 derivan el scope del TOKEN, no de query
 // params manipulables. Se mantiene el objeto `vendor` para compatibilidad con el CRM viejo.
 
+import { ACTIVE_TENANT } from '../lib/tenant.js'
+
 // Rate-limit en memoria: bloquea un nombre tras MAX_INTENTOS fallidos en la ventana.
 // El PIN de 4 dígitos es brute-forceable (10k combos); esto lo frena. Render = 1
 // instancia → la memoria basta (mismo criterio que el candado de followups).
@@ -36,8 +38,14 @@ export async function loginVendor(request, reply, prisma) {
       return reply.status(429).send({ error: 'demasiados intentos, espera unos minutos' })
     }
 
+    // ⚠️ FIX MULTITENANT: el login se acota al tenant del request. Sin esto, dos
+    // clientes con un vendedor homónimo y el mismo PIN de 4 dígitos colisionaban
+    // (findFirst devolvía el de OTRO tenant → sesión cruzada). El PIN es de 4
+    // dígitos: con 3+ clientes las colisiones dejan de ser hipotéticas.
+    const tenantId = resolveTenantForLogin(request)
+
     const vendor = await prisma.vendor.findFirst({
-      where: { nombre, pin: String(pin), activo: true }
+      where: { nombre, pin: String(pin), activo: true, tenantId }
     })
 
     if (!vendor) {
@@ -81,11 +89,25 @@ export async function loginVendor(request, reply, prisma) {
 }
 
 // GET /auth/vendors — lista pública de nombres para la pantalla de login
-// No devuelve PINs ni datos sensibles
+// No devuelve PINs ni datos sensibles.
+//
+// ⚠️ FIX MULTITENANT (jul 2026): este endpoint es PRE-auth (no hay JWT todavía),
+// así que no puede scopear por token. Antes devolvía los vendedores de TODOS los
+// tenants → la pantalla de login de Perú Exporta listaba al equipo de BIOAYUR
+// (fuga cross-tenant + problema comercial: un cliente ve los nombres de otro).
+//
+// Ahora el tenant se declara explícitamente:
+//   1. ?tenant=slug        → el front de cada cliente manda el suyo
+//   2. resolveTenantFromOrigin(origin) → deriva del dominio del CRM (multi-dominio)
+//   3. ACTIVE_TENANT       → fallback de compat (deploy single-tenant actual)
+// Nunca devuelve la lista completa. Un tenant inexistente → lista vacía, no error
+// (no confirmamos qué tenants existen a un curioso).
 export async function getVendorNames(request, reply, prisma) {
   try {
+    const tenantId = resolveTenantForLogin(request)
+
     const vendors = await prisma.vendor.findMany({
-      where: { activo: true },
+      where: { activo: true, tenantId },
       select: { id: true, nombre: true, role: true },
       orderBy: { id: 'asc' }
     })
@@ -101,6 +123,49 @@ export async function getVendorNames(request, reply, prisma) {
     console.error('[Auth] Error en getVendorNames:', error.message)
     return reply.status(500).send({ error: 'Error interno' })
   }
+}
+
+// ════════════════════════════════════════════════════════
+// TENANT EN EL LOGIN (pre-auth)
+// ════════════════════════════════════════════════════════
+//
+// El login es el ÚNICO punto donde no hay JWT del cual derivar el tenant, así que
+// hay que resolverlo del request. Cascada explícita, de más fuerte a más débil:
+//
+//   1. ?tenant=slug          → el front lo declara (lo que usará cada CRM por cliente)
+//   2. Origin → TENANT_POR_ORIGEN → el dominio del CRM identifica al cliente
+//   3. ACTIVE_TENANT         → compat con el deploy single-tenant de hoy
+//
+// NO es un control de seguridad (el cliente puede mandar cualquier tenant): es un
+// FILTRO DE VISIBILIDAD. Lo que realmente autentica es el PIN, y el PIN se valida
+// contra el vendor DE ESE TENANT (ver loginVendor) → declarar otro tenant no da
+// acceso a nada, solo cambia qué lista de nombres se ve.
+//
+// Mapa dominio→tenant por env var, para no tocar código al sumar un cliente:
+//   TENANT_ORIGINS='crm.peruexporta.com=peru_exporta,crm.bioayur.com=bioayur'
+function tenantPorOrigen() {
+  const raw = process.env.TENANT_ORIGINS || ''
+  const mapa = {}
+  for (const par of raw.split(',')) {
+    const [dominio, tenant] = par.split('=').map(s => s?.trim())
+    if (dominio && tenant) mapa[dominio.toLowerCase()] = tenant
+  }
+  return mapa
+}
+
+export function resolveTenantForLogin(request) {
+  const pedido = String(request?.query?.tenant || '').trim()
+  if (pedido) return pedido
+
+  const origin = String(request?.headers?.origin || '').toLowerCase()
+  if (origin) {
+    const mapa = tenantPorOrigen()
+    // Match por host (el Origin viene como https://host[:port])
+    const host = origin.replace(/^https?:\/\//, '').split(':')[0]
+    if (mapa[host]) return mapa[host]
+  }
+
+  return ACTIVE_TENANT
 }
 
 // Colores determinísticos por nombre — mismo que config.js del CRM

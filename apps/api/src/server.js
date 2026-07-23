@@ -29,7 +29,7 @@ import { loginVendor, getVendorNames } from './routes/auth.js'
 import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
 import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2 } from './api/inbox-actions.js'
 import { listCampaignsV2, getAgentConfigV2, saveAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
-import { verifyJwt } from './lib/auth-guard.js'
+import { verifyJwt, scopeWhere } from './lib/auth-guard.js'
 
 import { geminiHealthCheck } from './lib/gemini.js'
 import { callCerebras } from './lib/cerebras.js'
@@ -661,9 +661,17 @@ app.post('/campaigns/test-trigger',        async (req, reply) => testTrigger(req
 app.patch('/campaigns/:id/activar',        async (req, reply) => activarCampaign(req, reply, prisma))
 
 // ── Vendors ──────────────────────────────────────────────────
-app.get('/vendors', async (req, reply) => {
+// ⚠️ FIX MULTITENANT (jul 2026): este endpoint devolvía SIN AUTENTICACIÓN los
+// vendedores de TODOS los tenants, incluyendo `telefono` e `instanciaEvolution`
+// (el nombre de la instancia Evolution = pieza de infraestructura del cliente).
+// Cualquiera con la URL enumeraba el equipo y los números de todos los clientes.
+//
+// Ahora exige JWT y se acota al tenant del token (mismo criterio que /v2/*).
+// El CRM viejo que le pegue sin token recibirá 401 → debe migrar a /v2/vendors,
+// que ya existe y devuelve lo mismo scopeado.
+app.get('/vendors', { preHandler: verifyJwt }, async (req, reply) => {
   const vendors = await prisma.vendor.findMany({
-    where: { activo: true },
+    where: { ...scopeWhere(req.user), activo: true },
     select: { id: true, nombre: true, telefono: true, role: true, instanciaEvolution: true }
   })
   return vendors

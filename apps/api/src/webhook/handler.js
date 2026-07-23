@@ -44,6 +44,33 @@ import { getImagen } from '../lib/assets.js'
 const processingLeads = new Set()
 
 // ════════════════════════════════════════════════════════
+// INSTANCIA DE SALIDA — por qué número responde el bot
+// ════════════════════════════════════════════════════════
+//
+// Cascada (de más específico a más general):
+//   1. El canal que RECIBIÓ el mensaje  → siempre correcto en multitenant
+//   2. La instancia del vendedor dueño  → puente con los datos actuales
+//   3. EVOLUTION_INSTANCE_NAME          → compat single-tenant (deploy de hoy)
+//
+// Ya NO hay fallback a 'peru-exporta-test': un literal con el número de un cliente
+// como último recurso significa que, ante cualquier fallo de resolución, los leads
+// de OTRO cliente reciben respuesta desde el número equivocado. Prefiero que el
+// envío falle ruidosamente a que un cliente vea el número de otro.
+export function instanciaDeSalida(leadInfo) {
+  const delCanal = leadInfo?.channel?.externalKey
+  if (delCanal) return delCanal
+
+  const delVendor = leadInfo?.instanciaEvolution
+  if (delVendor) return delVendor
+
+  const delEntorno = process.env.EVOLUTION_INSTANCE_NAME
+  if (delEntorno) return delEntorno
+
+  console.error(`[Pipeline] ❌ Sin instancia de salida para lead ${leadInfo?.leadId} (tenant ${leadInfo?.tenantId}) — no se envía. Sembrá un Channel para este tenant.`)
+  return null
+}
+
+// ════════════════════════════════════════════════════════
 // API PÚBLICA — handleWebhook()
 // ════════════════════════════════════════════════════════
 
@@ -161,12 +188,15 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
     let stateResult
 
     // ═══ Cerebro unificado (única vía) ═══
+    // El tenant viene RESUELTO del canal entrante (channel-resolver), no de una env
+    // var global. ACTIVE_TENANT queda solo como red de seguridad para webhooks sin
+    // instancia identificable.
     const brainStart = Date.now()
     stateResult = await procesarConCerebro({
       leadId,
       telefono,
       mensajeActual: combinedText,
-      tenantId: leadInfo.tenantId || ACTIVE_TENANT,   // switch de tenant (jul 2026): la perilla vive en lib/tenant.js
+      tenantId: leadInfo.tenantId || ACTIVE_TENANT,
       vendorNombre: leadInfo.vendorNombre || 'Jhon'  // fallback alineado al config (el nombre real lo manda config.agente.nombre)
     })
     console.log(`[Pipeline] Cerebro ${Date.now() - brainStart}ms`)
@@ -206,12 +236,17 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       return
     }
 
-    // ─── 5. Enviar respuesta vía Evolution API ───
+    // ─── 5. Enviar respuesta por el MISMO canal que recibió el mensaje ───
+    // Antes: `process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'` — una env
+    // var global con el número de UN cliente hardcodeado como fallback. Con dos
+    // clientes activos eso respondía a los leads de BIOAYUR desde el número de Perú
+    // Exporta. Ahora se responde por la instancia que RECIBIÓ el mensaje: correcto
+    // por construcción, sin importar cuántos clientes haya.
     const sendStart = Date.now()
     const sendResult = await sendToWhatsApp({
       telefono,
       text: botResponse.text,
-      instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
+      instanceName: instanciaDeSalida(leadInfo)
     })
     const sendMs = Date.now() - sendStart
 
@@ -235,7 +270,7 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
         if (img) {
           const mediaRes = await sendMediaToWhatsApp({
             telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,
-            instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
+            instanceName: instanciaDeSalida(leadInfo)
           })
           console.log(mediaRes.ok
             ? `[Pipeline] 📎 Imagen "${botResponse.enviar_imagen}" enviada a ${telefono} (${mediaRes.latency_ms}ms)`

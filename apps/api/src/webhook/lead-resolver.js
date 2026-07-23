@@ -106,8 +106,8 @@ export async function resolveLead({
   }
 
   try {
-    // ─── 4. Resolver vendor para la instancia ───
-    const vendor = await resolveVendor(instanceName)
+    // ─── 4. Resolver vendor para la instancia (acotado al tenant del canal) ───
+    const vendor = await resolveVendor(instanceName, tenantId)
 
     // ─── 5. ¿El lead ya existe? Decide si resolvemos campaña o respetamos la suya ───
     // Regla de ownership: la campaña se asigna SOLO en el primer contacto.
@@ -188,6 +188,9 @@ export async function resolveLead({
       telefono: lead.telefono,
       vendorId: lead.vendorId,
       vendorNombre: vendor.nombre,
+      // Instancia del vendedor dueño: puente de salida cuando el turno no trae
+      // canal resuelto (ver instanciaDeSalida() en handler.js).
+      instanciaEvolution: vendor.instanciaEvolution || null,
       isNew,
       tenantId,
       isArchived: lead.archivedAt !== null,
@@ -288,69 +291,55 @@ function resolveIdentity({ remoteJid, remoteJidAlt, senderPn }) {
 // HELPER — Resolver vendor para una instancia
 // ════════════════════════════════════════════════════════
 
-async function resolveVendor(instanceName) {
+// ⚠️ FIX MULTITENANT (jul 2026): esta cascada era CIEGA AL TENANT.
+//
+//   Cascade 2 buscaba "cualquier ADMIN activo" y Cascade 3 caía a vendor_id=1,
+//   que es Joan — de peru_exporta. Con dos clientes vivos, un mensaje a BIOAYUR
+//   cuya instancia no matcheara terminaba asignado a un vendedor de Perú Exporta:
+//   el lead de un cliente aparecía en la bandeja de OTRO, con su historial.
+//
+//   Ahora todas las cascadas se acotan al tenant, y si el tenant no tiene ningún
+//   vendedor se falla RUIDOSAMENTE en vez de robarle uno al vecino. Un lead sin
+//   dueño es un problema de configuración; un lead con el dueño equivocado es una
+//   fuga de datos entre clientes.
+const SELECT_VENDOR = {
+  id: true, nombre: true, activo: true, role: true, instanciaEvolution: true, tenantId: true
+}
+
+async function resolveVendor(instanceName, tenantId) {
   try {
-    // Cascade 1: vendor con instancia coincidente
+    // Cascade 1: vendor con instancia coincidente (dentro del tenant)
     if (instanceName) {
       const vendorByInstance = await prisma.vendor.findFirst({
-        where: {
-          instanciaEvolution: instanceName,
-          activo: true
-        },
-        select: {
-          id: true,
-          nombre: true,
-          activo: true,
-          role: true,
-          instanciaEvolution: true
-        }
+        where: { instanciaEvolution: instanceName, activo: true, ...(tenantId ? { tenantId } : {}) },
+        select: SELECT_VENDOR
       })
-
-      if (vendorByInstance) {
-        return vendorByInstance
-      }
+      if (vendorByInstance) return vendorByInstance
     }
 
-    console.warn(`[LeadResolver] No vendor found for instance "${instanceName}", falling back to ADMIN`)
+    console.warn(`[LeadResolver] Sin vendor para instancia "${instanceName}" en tenant "${tenantId}" → probando ADMIN del tenant`)
 
-    // Cascade 2: vendor con role ADMIN
+    // Cascade 2: ADMIN — pero SOLO del mismo tenant
     const adminVendor = await prisma.vendor.findFirst({
-      where: {
-        role: 'ADMIN',
-        activo: true
-      },
-      select: {
-        id: true,
-        nombre: true,
-        activo: true,
-        role: true,
-        instanciaEvolution: true
-      }
+      where: { role: 'ADMIN', activo: true, ...(tenantId ? { tenantId } : {}) },
+      select: SELECT_VENDOR
     })
+    if (adminVendor) return adminVendor
 
-    if (adminVendor) {
-      return adminVendor
+    // Cascade 3: cualquier vendedor activo del tenant (antes: vendor_id=1 hardcodeado)
+    const anyVendor = await prisma.vendor.findFirst({
+      where: { activo: true, ...(tenantId ? { tenantId } : {}) },
+      orderBy: { id: 'asc' },
+      select: SELECT_VENDOR
+    })
+    if (anyVendor) {
+      console.warn(`[LeadResolver] Usando vendedor ${anyVendor.nombre} (id ${anyVendor.id}) como dueño por defecto del tenant ${tenantId}`)
+      return anyVendor
     }
 
-    console.warn('[LeadResolver] No active ADMIN vendor, falling back to vendor_id=1')
-
-    // Cascade 3: vendor por ID hardcoded (Joan) — frágil, pero último recurso
-    const fallbackVendor = await prisma.vendor.findUnique({
-      where: { id: FALLBACK_VENDOR_ID },
-      select: {
-        id: true,
-        nombre: true,
-        activo: true,
-        role: true,
-        instanciaEvolution: true
-      }
-    })
-
-    if (fallbackVendor) {
-      return fallbackVendor
-    }
-
-    throw new Error('No vendor available in database')
+    // Sin vendedores en el tenant: fallar es lo correcto. Tomar uno de otro tenant
+    // "para que no falle" es exactamente el bug que este fix elimina.
+    throw new Error(`El tenant "${tenantId}" no tiene ningún vendedor activo — configurá al menos uno antes de recibir mensajes`)
 
   } catch (err) {
     console.error('[LeadResolver] resolveVendor failed:', err.message)
