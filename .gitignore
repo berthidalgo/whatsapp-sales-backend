@@ -19,3 +19,14 @@ Presentacion ELIXIR.pdf
 ejemplos/
 apps/api/_*.mjs
 apps/api/_*.json
+
+# research de Flujos: capturas y datos NO se suben (pueden tener PII de clientes de Flujos)
+deep/flujos/capturas/
+deep/flujos/*.json
+deep/flujos/.creds
+deep/flujos/log*.txt
+
+# credenciales en raíz (NUNCA subir)
+cre.txt
+cre
+CRE.txt
