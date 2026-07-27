@@ -104,6 +104,67 @@ export function stageRank(stage) {
 // ─────────────────────────────────────────────────────────────────────────
 const HUMAN_ACTIVE_RESUME_HORAS = Number(process.env.HUMAN_ACTIVE_RESUME_HORAS ?? 6)
 
+// ─────────────────────────────────────────────────────────────────────────
+// CONTADOR DE CONSUMO POR TENANT (jul 2026)
+//
+// La unidad que se vende es el TURNO del cerebro. Este contador es lo que permite
+// facturar, detectar un cliente que consume 10x su plan, y dimensionar el costo de
+// Gemini por cliente. Sin él, el modelo de negocio (X turnos por vendedor/mes) era
+// solo una columna en la BD sin nadie que la llenara.
+//
+// RESET MENSUAL PEREZOSO: `mes_actual_inicio` marca el arranque del período. Si ya
+// pasó un mes, el contador se reinicia en la misma operación. No hace falta un cron:
+// el primer turno del mes nuevo hace el corte. Si nadie escribe, no hay nada que
+// resetear (y el dato viejo sigue siendo el del último mes con actividad).
+//
+// NO corta el servicio al superar la cuota, a propósito: un pico legítimo de campaña
+// dejaría al cliente sin bot en su mejor día. Se mide y se avisa en el log; el corte
+// es una decisión administrativa (estadoSuscripcion, ver channel-resolver).
+// ─────────────────────────────────────────────────────────────────────────
+async function contabilizarTurno(tenantId) {
+  if (!tenantId) return
+
+  const t = await prisma.tenantSettings.findUnique({
+    where: { tenantId },
+    select: {
+      turnosConsumidosMesActual: true, mesActualInicio: true,
+      turnosIncluidosPorVendedorMes: true, numVendedoresPagados: true
+    }
+  })
+  // Tenant sin fila de settings (p.ej. sembrado a mano): no rompemos el turno del
+  // lead por esto. Se loguea una vez y sigue — la fila se crea al dar de alta.
+  if (!t) {
+    console.warn(`[Quota] tenant "${tenantId}" sin fila en tenant_settings → no se contabiliza`)
+    return
+  }
+
+  const inicio = t.mesActualInicio ? new Date(t.mesActualInicio).getTime() : 0
+  const mesVencido = !inicio || (Date.now() - inicio) >= 30 * 24 * 3600 * 1000
+
+  // INCREMENTO ATÓMICO, no read-modify-write. Varios leads escriben a la vez (el bot
+  // atiende conversaciones en paralelo): si leyéramos el valor y luego guardáramos
+  // `leído + 1`, dos turnos simultáneos leerían el mismo número y uno de los dos se
+  // perdería — el contador de FACTURACIÓN quedaría corto de forma silenciosa.
+  // `increment` lo resuelve en el motor de Postgres (UPDATE ... SET x = x + 1).
+  //
+  // El reinicio de mes sí necesita fijar el valor (no incrementar): es el único caso
+  // en que se pisa el contador, y ocurre una vez al mes por tenant.
+  await prisma.tenantSettings.update({
+    where: { tenantId },
+    data: mesVencido
+      ? { turnosConsumidosMesActual: 1, mesActualInicio: new Date() }
+      : { turnosConsumidosMesActual: { increment: 1 } }
+  })
+
+  const consumidos = mesVencido ? 1 : (t.turnosConsumidosMesActual || 0) + 1
+
+  // Aviso (no corte) al pasar el plan: sirve para llamar al cliente y ampliarlo.
+  const incluidos = (t.turnosIncluidosPorVendedorMes || 0) * (t.numVendedoresPagados || 0)
+  if (incluidos > 0 && consumidos > incluidos && consumidos % 100 === 0) {
+    console.warn(`[Quota] ⚠️ tenant ${tenantId} va en ${consumidos} turnos y su plan incluye ${incluidos} — revisar facturación`)
+  }
+}
+
 export function debeAutoReanudar(leadState) {
   if (!(HUMAN_ACTIVE_RESUME_HORAS > 0)) return false  // desactivado o valor inválido
   const entered = leadState?.modeEnteredAt ? new Date(leadState.modeEnteredAt).getTime() : null
@@ -418,6 +479,15 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
 
     console.log(`[BrainPipeline] ${summarizeBrainResult(brainResult)}`)
 
+    // CONTABILIDAD (jul 2026): se cuenta AQUÍ, apenas vuelve pensarYResponder, no al
+    // final. El costo con Gemini se incurre en la LLAMADA (línea de arriba), no en que
+    // la respuesta salga bien: si el modelo respondió pero falló el parseo/guardrail,
+    // el turno IGUAL costó dinero y debe facturarse. Ponerlo tras el return de error
+    // (como estaba) subcontaba justo los turnos más caros —los que reintentan/fallan—.
+    // Idempotente y fire-and-forget: nunca rompe la conversación por la contabilidad.
+    contabilizarTurno(tenantId)
+      .catch(err => console.error(`[BrainPipeline] contador de turnos (${tenantId}):`, err.message))
+
     // Si el cerebro falló, devolvemos sin romper (el handler maneja el "no response")
     if (!brainResult.ok || !brainResult.mensaje) {
       return {
@@ -540,6 +610,9 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       persistirCompromiso(leadId, brainResult.compromiso)
         .catch(err => console.error(`[BrainPipeline] compromiso lead ${leadId}:`, err.message))
     }
+
+    // (La contabilización del turno ocurre justo tras pensarYResponder — ver arriba.
+    // Aquí ya no, porque el costo se incurre en la llamada al LLM, no en el éxito.)
 
     // ─── 8. Devolver con la forma que espera el handler ───
     return {

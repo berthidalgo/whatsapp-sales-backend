@@ -5,14 +5,31 @@
 // Fix Bug 11: doAccion cancela followup cerrando conversation
 
 import { sendToWhatsApp } from '../webhook/sender.js'
+import { scopeWhere } from '../lib/auth-guard.js'
+
+/**
+ * Verifica que el lead EXISTE y pertenece al scope del usuario autenticado.
+ * Devuelve el lead o null (el llamador responde 404).
+ *
+ * MURO MULTITENANT (auditoría pre-producción, jul 2026): estos handlers operaban
+ * por `id` a secas — `prisma.lead.update({ where: { id } })`. Con varios clientes en
+ * la misma BD, un usuario de un tenant podía leer, modificar y MANDARLE WHATSAPP a
+ * los leads de otro con solo cambiar el número en la URL (IDOR clásico).
+ *
+ * Se responde 404 y no 403 a propósito: un 403 confirmaría que ese lead existe en
+ * otro tenant. Mismo criterio que los endpoints /v2/*.
+ */
+async function leadEnScope(prisma, request, id, extra = {}) {
+  if (!Number.isInteger(id)) return null
+  return prisma.lead.findFirst({ where: { ...scopeWhere(request.user), id }, ...extra })
+}
 
 export async function getLeads(request, reply, prisma) {
   try {
-    const { vendorId, role } = request.query
-    const where = {}
-    if (vendorId && role !== 'ADMIN') {
-      where.vendorId = Number(vendorId)
-    }
+    // El scope sale del JWT (tenant + vendedor), NUNCA de la query string: antes
+    // se leía `?vendorId=&role=` — parámetros que ponía el propio cliente, así que
+    // bastaba mandar `?role=ADMIN` para listar los leads de TODOS los tenants.
+    const where = scopeWhere(request.user)
 
     const leads = await prisma.lead.findMany({
       where,
@@ -84,6 +101,10 @@ export async function updateLead(request, reply, prisma) {
     }
 
     const nuevoEstado = estadoInverso[estado] || 'NUEVO'
+
+    if (!await leadEnScope(prisma, request, id, { select: { id: true } })) {
+      return reply.status(404).send({ error: 'Lead no encontrado' })
+    }
     await prisma.lead.update({ where: { id }, data: { estado: nuevoEstado, updatedAt: new Date() } })
 
     // Sincronizar conversation.state
@@ -108,10 +129,9 @@ export async function sendMensaje(request, reply, prisma) {
     const { contenido } = request.body
     if (!contenido) return reply.status(400).send({ error: 'contenido requerido' })
 
-    const lead = await prisma.lead.findUnique({
-      where: { id },
-      include: { vendor: true }
-    })
+    // Doble guarda: existe Y es de este tenant/vendedor. Sin esto, cualquiera con
+    // un token válido mandaba WhatsApp a los leads de otro cliente cambiando el id.
+    const lead = await leadEnScope(prisma, request, id, { include: { vendor: true } })
     if (!lead) return reply.status(404).send({ error: 'Lead no encontrado' })
 
     const conv = await prisma.conversation.findFirst({
@@ -158,6 +178,10 @@ export async function doAccion(request, reply, prisma) {
     }
 
     const nuevoEstado = estadoMap[accion] || 'EN_FLUJO'
+
+    if (!await leadEnScope(prisma, request, id, { select: { id: true } })) {
+      return reply.status(404).send({ error: 'Lead no encontrado' })
+    }
     await prisma.lead.update({ where: { id }, data: { estado: nuevoEstado, updatedAt: new Date() } })
 
     // Sincronizar conversation
@@ -182,9 +206,9 @@ export async function doAccion(request, reply, prisma) {
 
 export async function getReportes(request, reply, prisma) {
   try {
-    const { vendorId, role } = request.query
-    const where = {}
-    if (vendorId && role !== 'ADMIN') where.vendorId = Number(vendorId)
+    // Mismo criterio que getLeads: el scope viene del JWT, no de la query string
+    // (antes `?role=ADMIN` daba los números de negocio de TODOS los clientes).
+    const where = scopeWhere(request.user)
 
     const [total, cerrados, enFlujo, nuevos, notificados] = await Promise.all([
       prisma.lead.count({ where }),
@@ -206,6 +230,14 @@ export async function getReportes(request, reply, prisma) {
 export async function getMensajes(request, reply, prisma) {
   try {
     const leadId = Number(request.params.id)
+
+    // Esto devuelve la CONVERSACIÓN COMPLETA de una persona real. Sin la guarda,
+    // un token de cualquier tenant leía los chats de los leads de otro cliente
+    // iterando ids. Es el dato más sensible del sistema después del comprobante.
+    if (!await leadEnScope(prisma, request, leadId, { select: { id: true } })) {
+      return reply.status(404).send({ error: 'Lead no encontrado' })
+    }
+
     const mensajes = await prisma.message.findMany({
       where: { leadId },
       orderBy: { createdAt: 'asc' },

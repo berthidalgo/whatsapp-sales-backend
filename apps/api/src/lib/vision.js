@@ -37,7 +37,7 @@ const VISION_SCHEMA = {
  * @param {string} args.mimeType  - ej "image/jpeg", "image/png"
  * @returns {Promise<{ ok, esComprobante, datos, resumen, error? }>}
  */
-export async function leerComprobante({ base64, mimeType = 'image/jpeg' }) {
+export async function leerComprobante({ base64, mimeType = 'image/jpeg', tenantId = null }) {
   if (!base64 || typeof base64 !== 'string') {
     return { ok: false, esComprobante: false, resumen: '(sin imagen)', error: 'base64_vacio' }
   }
@@ -63,7 +63,10 @@ export async function leerComprobante({ base64, mimeType = 'image/jpeg' }) {
       temperature: 0.1,            // determinista: extracción, no creatividad
       maxOutputTokens: 1200,
       responseSchema: VISION_SCHEMA,
-      tenantId: 'peru_exporta'
+      // `|| undefined` a propósito: en JS el default de un parámetro solo aplica con
+      // undefined, NO con null. Pasar null haría que callGemini consulte
+      // tenantSettings con tenantId=null y cachee el cliente bajo la llave "null".
+      tenantId: tenantId || undefined
     })
 
     if (!result?.text) {
@@ -101,39 +104,57 @@ export async function leerComprobante({ base64, mimeType = 'image/jpeg' }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// IMAGEN GENERAL (no-comprobante) — el lead manda una foto cualquiera en
-// cualquier etapa: su producto, una captura, un meme, lo que sea. El código puro
-// no puede entender píxeles → Gemini la mira, la clasifica y genera la respuesta
-// natural de Jhon (reconduce a calificar). Una sola llamada hace todo.
+// IMAGEN GENERAL (no-comprobante) — DESCRIBIR, NO RESPONDER (jul 2026)
+//
+// POR QUÉ CAMBIÓ (incidente 2026-07-23, forense):
+//   Antes esto se llamaba `responderAImagen` y GENERABA la respuesta al lead con
+//   la persona "Jhon de Perú Exporta TV" HARDCODEADA. Cuando entró BIOAYUR, una
+//   clienta de colágeno mandó fotos y el bot le contestó "para ayudarte con lo de
+//   la EXPORTACIÓN" — el único camino del pipeline que nunca se migró a multitenant.
+//
+//   La causa de fondo era arquitectónica, no un literal suelto: este módulo estaba
+//   REDACTANDO mensajes de venta. Eso es trabajo del CEREBRO, que ya sabe el
+//   vertical, la campaña, el historial y el momento del funnel.
+//
+// AHORA: esto solo DESCRIBE lo que se ve — factual y sin marca. La descripción se
+// inyecta como texto del lead y fluye por el debounce → cerebro, exactamente igual
+// que la transcripción de un audio (mismo patrón, ver event-router). Así el manual
+// de venta correcto lo pone el vertical del tenant, y es IMPOSIBLE que un cliente
+// reciba el discurso de otro: aquí ya no hay ningún discurso.
 // ════════════════════════════════════════════════════════════════════════
 const IMAGEN_SCHEMA = {
   type: 'object',
   properties: {
     categoria: {
       type: 'string',
-      enum: ['producto_exportable', 'documento', 'captura_pantalla', 'persona', 'meme_troll', 'otro'],
-      description: 'Qué es la imagen. "producto_exportable" si muestra un producto que el lead podría exportar (palta, café, textil, artesanía, etc.).'
+      enum: ['producto', 'documento', 'captura_pantalla', 'persona', 'meme_troll', 'otro'],
+      description: 'Qué tipo de imagen es, en términos genéricos.'
     },
-    descripcion: { type: 'string', description: 'Descripción factual breve de la imagen, para registro interno. Ej: "foto de paltas en una caja". NO inventes.' },
-    respuesta: { type: 'string', description: 'La respuesta de Jhon al lead, en WhatsApp peruano cálido, CORTA (1-3 líneas). Si es su producto, reacciona con entusiasmo genuino y reconduce a conocerlo (¿ya exporta? ¿qué producto?). Si es algo no relacionado o troll, reconduce con cordialidad al tema de exportar. NO uses ** (negrita markdown). NO inventes datos del programa.' }
+    descripcion: {
+      type: 'string',
+      description: 'Descripción FACTUAL y BREVE (máx 15 palabras) de lo que se ve, en español neutro. Ej: "una captura de un horario semanal", "un frasco de suplemento", "una foto de paltas en una caja", "un meme". Describe SOLO lo visible. NO interpretes intenciones, NO saludes, NO hagas preguntas, NO vendas nada.'
+    }
   },
-  required: ['categoria', 'descripcion', 'respuesta']
+  required: ['categoria', 'descripcion']
 }
 
 /**
- * Lee una imagen NO-comprobante y genera la respuesta natural de Jhon.
- * @returns {Promise<{ ok, categoria, descripcion, respuesta, error? }>}
+ * Describe una imagen NO-comprobante en lenguaje neutro, para que el CEREBRO la
+ * interprete dentro del vertical del tenant. NO genera respuesta al lead.
+ * @returns {Promise<{ ok, categoria, descripcion, error? }>}
  */
-export async function responderAImagen({ base64, mimeType = 'image/jpeg', nombreLead = null, stage = null }) {
+export async function describirImagen({ base64, mimeType = 'image/jpeg', tenantId = null }) {
   if (!base64) return { ok: false, error: 'base64_vacio' }
 
-  const nombreTxt = nombreLead ? ` El lead se llama ${nombreLead}.` : ''
-  const systemInstruction = `Eres Jhon, asesor humano de Perú Exporta TV (cursos de exportación para peruanos). Un lead te mandó una IMAGEN por WhatsApp (ya verificamos que NO es un comprobante de pago).${nombreTxt} Tu trabajo: mírala, clasifícala y responde como Jhon — cálido, humano, peruano, mensajes cortos. Si es su producto (palta, café, textil, artesanía...), reacciona con entusiasmo GENUINO y reconduce a conocerlo para exportar. Si es una captura, un meme o algo no relacionado, reconduce con cordialidad al tema de exportar, sin sonar robótico. NUNCA inventes datos del programa (precio, fechas) — eso va en su momento. NUNCA uses negrita markdown (**).`
+  // Sin marca, sin persona, sin vertical: sirve igual a colágeno, exportación y a
+  // cualquier cliente futuro. Es la razón por la que este módulo ya no puede
+  // contaminar a un tenant con el discurso de otro.
+  const systemInstruction = `Eres un descriptor de imágenes. Te dan una foto que alguien envió por WhatsApp y devuelves una descripción objetiva y breve de lo que se ve. NO eres un asistente de ventas, NO saludas, NO haces preguntas, NO ofreces nada. Solo describes lo visible, en español neutro. Si no se distingue bien, dilo ("una imagen borrosa").`
 
   const contents = [{
     role: 'user',
     parts: [
-      { text: 'Mira esta imagen que mandó el lead. Clasifícala y responde como Jhon. Devuelve el JSON.' },
+      { text: 'Describe objetivamente esta imagen. Devuelve el JSON.' },
       { inlineData: { mimeType, data: base64 } }
     ]
   }]
@@ -145,10 +166,10 @@ export async function responderAImagen({ base64, mimeType = 'image/jpeg', nombre
       thinkingLevel: process.env.BRAIN_THINKING_LEVEL || null,
       systemInstruction,
       contents,
-      temperature: 0.6,
-      maxOutputTokens: 1200,
+      temperature: 0.1,            // determinista: describir, no crear
+      maxOutputTokens: 300,
       responseSchema: IMAGEN_SCHEMA,
-      tenantId: 'peru_exporta'
+      tenantId: tenantId || undefined   // ver nota en leerComprobante: null ≠ undefined
     })
     if (!result?.text) return { ok: false, error: 'sin_texto' }
     let parsed
@@ -156,12 +177,10 @@ export async function responderAImagen({ base64, mimeType = 'image/jpeg', nombre
     try { parsed = JSON.parse(limpio) } catch (e) {
       const m = limpio.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]) } catch (_) {} }
     }
-    if (!parsed?.respuesta) return { ok: false, error: 'json_invalido' }
-    // Guardrail de formato (mismo criterio que el cerebro): ** → * y sin #
-    const respuesta = String(parsed.respuesta).replace(/\*\*+/g, '*').replace(/^#{1,6}\s*/gm, '')
-    return { ok: true, categoria: parsed.categoria || 'otro', descripcion: parsed.descripcion || '', respuesta }
+    if (!parsed?.descripcion) return { ok: false, error: 'json_invalido' }
+    return { ok: true, categoria: parsed.categoria || 'otro', descripcion: String(parsed.descripcion).trim() }
   } catch (err) {
-    console.error('[Vision] Error respondiendo a imagen:', err.message)
+    console.error('[Vision] Error describiendo imagen:', err.message)
     return { ok: false, error: err.message }
   }
 }

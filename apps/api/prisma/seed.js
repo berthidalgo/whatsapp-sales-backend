@@ -1,33 +1,40 @@
 const { PrismaClient } = require('@prisma/client')
 const prisma = new PrismaClient()
 
+// El seed de Perú Exporta. Actualizado (jul 2026) al schema multitenant endurecido:
+// tenantId EXPLÍCITO en cada create (ya no hay @default) y upserts por la llave
+// compuesta [tenantId, telefono] / [tenantId, slug]. Es la referencia gemela de
+// seed-bioayur.js: así se da de alta cualquier tenant.
+const TENANT = 'peru_exporta'
+
 async function main() {
   console.log('🌱 Seeding Hidata Sprint 2...')
 
   // ─── Vendors ──────────────────────────────────────────────
   const joan = await prisma.vendor.upsert({
-    where: { telefono: '51924104066' },
+    where: { tenantId_telefono: { tenantId: TENANT, telefono: '51924104066' } },
     update: {},
-    create: { nombre: 'Joan', telefono: '51924104066', role: 'ADMIN' }
+    create: { tenantId: TENANT, nombre: 'Joan', telefono: '51924104066', role: 'ADMIN' }
   })
 
   const cristina = await prisma.vendor.upsert({
-    where: { telefono: '51900000002' },
+    where: { tenantId_telefono: { tenantId: TENANT, telefono: '51900000002' } },
     update: {},
-    create: { nombre: 'Cristina', telefono: '51900000002', role: 'VENDOR' }
+    create: { tenantId: TENANT, nombre: 'Cristina', telefono: '51900000002', role: 'VENDOR' }
   })
 
   const francisco = await prisma.vendor.upsert({
-    where: { telefono: '51900000003' },
+    where: { tenantId_telefono: { tenantId: TENANT, telefono: '51900000003' } },
     update: {},
-    create: { nombre: 'Francisco', telefono: '51900000003', role: 'VENDOR' }
+    create: { tenantId: TENANT, nombre: 'Francisco', telefono: '51900000003', role: 'VENDOR' }
   })
 
   // ─── Campaña MPX — flujo real de Cristina ─────────────────
   const mpx = await prisma.campaign.upsert({
-    where: { slug: 'MPX' },
+    where: { tenantId_slug: { tenantId: TENANT, slug: 'MPX' } },
     update: {},
     create: {
+      tenantId: TENANT,
       slug: 'MPX',
       nombre: 'Mi Primera Exportación',
       activa: true,
@@ -76,9 +83,10 @@ async function main() {
 
   // ─── Campaña E1K ──────────────────────────────────────────
   const e1k = await prisma.campaign.upsert({
-    where: { slug: 'E1K' },
+    where: { tenantId_slug: { tenantId: TENANT, slug: 'E1K' } },
     update: {},
     create: {
+      tenantId: TENANT,
       slug: 'E1K',
       nombre: 'Exporta 1K',
       activa: true,
@@ -115,9 +123,10 @@ async function main() {
 
   // ─── Campaña CCI ──────────────────────────────────────────
   const cci = await prisma.campaign.upsert({
-    where: { slug: 'CCI' },
+    where: { tenantId_slug: { tenantId: TENANT, slug: 'CCI' } },
     update: {},
     create: {
+      tenantId: TENANT,
       slug: 'CCI',
       nombre: 'Comercio Internacional',
       activa: false,

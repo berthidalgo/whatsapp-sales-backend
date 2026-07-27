@@ -5,7 +5,7 @@
 // cerebro: es un RETRATO de lo que el bot ya hace, no una segunda implementación.
 import { STAGES, STAGE_TRANSITIONS, REQUIRED_SLOTS_BY_STAGE, INTENT_SUGGESTS_STAGE } from '../state/stage-definitions.js'
 import { stageLabel } from '../../../../packages/shared/stages.js'
-import { MOMENTOS } from './agent-brain.js'
+import { getVertical } from './verticals/index.js'
 
 // Orden de los momentos (M1→M7 + el especial al final).
 const FLOW_ORDER = [
@@ -19,19 +19,30 @@ const MOMENTO = {
   [STAGES.POST_CLOSE]: 'M7', [STAGES.RETURNING_RECOGNITION]: '★',
 }
 
-// Guía/munición por momento = LOS PASOS REALES del cerebro (fieles a `agent-brain.js`,
-// sección "EL FLUJO — 6 MOMENTOS"), NO resúmenes. Esto es lo que el supervisor edita y lo
-// que el flujo predeterminado MUESTRA → es el flujo que el cerebro corre hoy. (En el Nivel B
-// el cerebro ENSAMBLA su prompt desde acá, byte-idéntico; hoy es el reflejo fiel + editable.)
-const GUIDANCE = {
-  [STAGES.FIRST_CONTACT]: MOMENTOS.first_contact,
-  [STAGES.DISCOVERY]: MOMENTOS.discovery,
-  [STAGES.QUALIFYING_EMPRESA]: MOMENTOS.qualifying_empresa,
-  [STAGES.PRESENTING]: MOMENTOS.presenting.replace('__FICHA__', '[la ficha del programa se edita aparte]'),
-  [STAGES.CALL_SCHEDULING]: MOMENTOS.call_scheduling,
-  [STAGES.CALL_CONFIRMED]: MOMENTOS.call_confirmed,
-  [STAGES.POST_CLOSE]: 'POST-AGENDADO: refuerza la decisión, recuerda la cita y mantén al lead caliente hasta la llamada.',
+// Guía/munición por momento = LOS PASOS REALES del cerebro, NO resúmenes. Esto es lo
+// que el supervisor edita y lo que el flujo predeterminado MUESTRA → es el flujo que el
+// cerebro corre hoy. (En el Nivel B el cerebro ENSAMBLA su prompt desde acá,
+// byte-idéntico; hoy es el reflejo fiel + editable.)
+//
+// ⚠️ DESACOPLADO DEL VERTICAL (jul 2026) — bloqueante del Nivel B resuelto:
+//   Antes esto hacía `import { MOMENTOS } from './agent-brain.js'`, que re-exporta los
+//   momentos de EXPORTACIÓN. Es decir: el editor de flujos mostraba el flujo de Perú
+//   Exporta a CUALQUIER cliente, y en el Nivel B (donde el cerebro ensambla su prompt
+//   desde aquí) le habría dado a un cliente de colágeno el guion de exportación —
+//   exactamente el bug que se corrigió en vision.js el mismo día.
+//   Ahora los momentos salen del vertical del TENANT que abre el editor.
+function guidanceDe(vertical) {
+  const M = vertical.MOMENTOS || {}
+  return {
+  [STAGES.FIRST_CONTACT]: M.first_contact,
+  [STAGES.DISCOVERY]: M.discovery,
+  [STAGES.QUALIFYING_EMPRESA]: M.qualifying_empresa,
+  [STAGES.PRESENTING]: (M.presenting || '').replace('__FICHA__', '[la ficha del programa se edita aparte]'),
+  [STAGES.CALL_SCHEDULING]: M.call_scheduling,
+  [STAGES.CALL_CONFIRMED]: M.call_confirmed,
+  [STAGES.POST_CLOSE]: 'POST-CIERRE: refuerza la decisión, recuerda lo acordado y mantén al lead caliente.',
   [STAGES.RETURNING_RECOGNITION]: 'LEAD QUE VUELVE: reconócelo (memoria episódica) y retoma la conversación donde quedó, sin re-saludar como si fuera nuevo.',
+  }
 }
 
 // Etiqueta legible para el intent que dispara una transición (para la condición de la arista).
@@ -62,7 +73,12 @@ function legibleTrigger(trigger) {
 
 // Construye el grafo Flow desde la fuente de verdad del cerebro.
 // `nombreCampana` solo personaliza el título; la estructura es la misma del cerebro.
-export function materializarFlujoCerebro(nombreCampana = 'Mi Primera Exportación') {
+// `tenantId` decide DE QUÉ VERTICAL salen los momentos: sin él cae al default
+// histórico (exportación), que es lo que hacía siempre — cero regresión.
+export function materializarFlujoCerebro(nombreCampana = 'Mi Primera Exportación', tenantId = null) {
+  const vertical = getVertical(null, tenantId)
+  const GUIDANCE = guidanceDe(vertical)
+
   const nodes = FLOW_ORDER.map(stage => ({
     id: stage,
     stage,

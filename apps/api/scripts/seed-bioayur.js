@@ -36,12 +36,12 @@ async function main() {
   console.log(`  ✅ TenantSettings: ${tenant.tenantId} (${tenant.displayName})`)
 
   // ─── 2. Vendor Jhon (el asesor de BIOAYUR) ───
-  // El teléfono es UNIQUE global y 51924104066 ya pertenece al vendor histórico
-  // "Joan" (peru_exporta) → usamos un placeholder único para el registro del CRM.
-  // Las notificaciones de escalamiento salen por NUMERO_JOAN (env) = el número
-  // real del dueño, así que operativamente los pedidos le llegan igual.
+  // El teléfono ahora es único POR TENANT (jul 2026), así que BIOAYUR ya PODRÍA usar
+  // su número real aunque coincidiera con el de un vendedor de otro cliente. Se mantiene
+  // el placeholder porque las notificaciones salen por NUMERO_JOAN (env) = el número real
+  // del dueño; cambiarlo por el real es seguro cuando el dueño lo confirme.
   const jhon = await prisma.vendor.upsert({
-    where: { telefono: '51999000001' },
+    where: { tenantId_telefono: { tenantId: 'bioayur', telefono: '51999000001' } },
     update: {},
     create: {
       tenantId: 'bioayur',
@@ -119,7 +119,7 @@ async function main() {
   }
 
   const campana = await prisma.campaign.upsert({
-    where: { slug: 'BIOAYUR-ELIXIR' },
+    where: { tenantId_slug: { tenantId: 'bioayur', slug: 'BIOAYUR-ELIXIR' } },
     update: { config },   // el config SÍ se actualiza al re-correr (fuente de verdad = este seed hasta que exista dashboard)
     create: {
       tenantId: 'bioayur',

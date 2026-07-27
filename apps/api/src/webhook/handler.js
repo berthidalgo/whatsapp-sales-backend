@@ -266,7 +266,10 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       //     precios en M4) — se envía DESPUÉS del texto y solo si el texto salió OK.
       //     Fire-and-forget suave: un fallo del envío de imagen NO tumba el turno. ───
       if (botResponse.enviar_imagen) {
-        const img = getImagen(botResponse.enviar_imagen)
+        // El tenant DEBE viajar: la misma clave ("precios") apunta a un archivo
+        // distinto en cada cliente. Sin él, getImagen devuelve null y no se manda
+        // nada — antes devolvía la foto de BIOAYUR a cualquiera que la pidiera.
+        const img = getImagen(botResponse.enviar_imagen, leadInfo.tenantId || ACTIVE_TENANT)
         if (img) {
           const mediaRes = await sendMediaToWhatsApp({
             telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,

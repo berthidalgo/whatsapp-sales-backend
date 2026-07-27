@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
 import { sendToWhatsApp, sendTemplateCloud, proveedorActivo } from '../whatsapp/send.js'
 import { ACTIVE_TENANT, verticalPorTenant } from '../lib/tenant.js'
+import { defaultChannelForTenant } from '../webhook/channel-resolver.js'
 
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -41,7 +42,6 @@ const PAUSA_ENTRE_MS  = 1500      // cadencia humana entre envíos (anti-baneo s
 // se dejan para una campaña de reactivación aparte, no para el followup automático.
 const PISO_2H  = 2,  TECHO_2H  = 6
 const PISO_24H = 24, TECHO_24H = 48
-const INSTANCE        = process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
 
 // ── Plantillas POR VERTICAL (fix forense jul 2026) ──
 // El motor de followups tenía copy de EXPORTACIÓN hardcodeado → le hablaba de
@@ -59,11 +59,43 @@ const PLANTILLAS_POR_VERTICAL = {
   }
 }
 
-// Las plantillas del tenant activo (exportacion=peru_exporta, colageno=bioayur).
-const VERTICAL_ACTIVO = verticalPorTenant(ACTIVE_TENANT)
-const PLANTILLAS = PLANTILLAS_POR_VERTICAL[VERTICAL_ACTIVO] || PLANTILLAS_POR_VERTICAL.exportacion
+// ── Plantillas POR TENANT, resueltas EN CADA LEAD (fix forense jul 2026) ──
+//
+// ANTES esto se resolvía UNA VEZ al cargar el módulo, con `ACTIVE_TENANT`:
+//     const VERTICAL_ACTIVO = verticalPorTenant(ACTIVE_TENANT)
+//     const PLANTILLAS = PLANTILLAS_POR_VERTICAL[VERTICAL_ACTIVO]
+// Es decir: TODOS los followups de TODOS los clientes salían con la plantilla del
+// tenant de una env var global. Con ACTIVE_TENANT=bioayur, un lead de Perú Exporta
+// habría recibido el copy del colágeno. Mismo defecto que arrastraba vision.js: el
+// multitenant se implementó en el webhook y no en los motores de fondo.
+//
+// Ahora el vertical se deduce del TENANT DEL LEAD, en cada envío.
+function plantillasDe(tenantId) {
+  const vertical = verticalPorTenant(tenantId)
+  return PLANTILLAS_POR_VERTICAL[vertical] || PLANTILLAS_POR_VERTICAL.exportacion
+}
 
 const NOMBRE_CURSO = 'Mi Primera Exportación'
+
+// ── Instancia de salida POR TENANT, con caché por ciclo ──
+// Un followup no nace de un webhook entrante, así que no hay instancia que heredar:
+// se busca el canal por defecto del tenant (para eso existe defaultChannelForTenant).
+// El fallback a EVOLUTION_INSTANCE_NAME se conserva para el deploy single-tenant de
+// hoy, pero ya NO hay literal 'peru-exporta-test': mandar el followup de un cliente
+// por el número de otro es peor que no mandarlo.
+async function instanciaDeTenant(tenantId, cache) {
+  if (cache.has(tenantId)) return cache.get(tenantId)
+  let instancia = null
+  try {
+    const ch = await defaultChannelForTenant(tenantId)
+    instancia = ch?.externalKey || null
+  } catch (err) {
+    console.warn(`[Followup] no se pudo resolver canal de ${tenantId}: ${err.message}`)
+  }
+  if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
+  cache.set(tenantId, instancia)
+  return instancia
+}
 
 // ════════════════════════════════════════════════════════
 // HELPERS
@@ -111,6 +143,7 @@ const SQL_CANDIDATOS = `
   SELECT
     ls.lead_id                                                   AS "leadId",
     l.telefono                                                   AS telefono,
+    l.tenant_id                                                  AS "tenantId",
     COALESCE(NULLIF(ls.slots_filled->>'nombre',''), NULLIF(l."nombreDetectado",'')) AS nombre,
     ls.slots_filled->>'producto'                                 AS producto,
     EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600        AS horas_silencio,
@@ -132,7 +165,10 @@ const SQL_CANDIDATOS = `
     ORDER BY "createdAt" DESC LIMIT 1
   ) last_any ON true
   WHERE ls.current_mode = 'AUTO_CONSULTIVO'
-    AND l.tenant_id = '${ACTIVE_TENANT}'
+    -- SIN filtro de tenant (fix jul 2026): antes decía l.tenant_id = '<ACTIVE_TENANT>',
+    -- así que el cron solo atendía al cliente de la env var y los demás NO recibían
+    -- followups en absoluto. El tenant viaja en el SELECT y decide plantilla + canal
+    -- de salida en cada lead, que es lo correcto en multitenant.
     AND l.archived_at IS NULL
     AND lead_msg.last_at IS NOT NULL
     AND last_any.origen <> 'LEAD'
@@ -162,6 +198,7 @@ export async function ejecutarFollowups() {
 
   let enviados = 0, errores = 0, omitidos = 0
   const detalle = []
+  const canalPorTenant = new Map()   // caché por ciclo: 1 query por tenant, no por lead
 
   for (const c of candidatos) {
     const horas = Number(c.horas_silencio)
@@ -176,7 +213,18 @@ export async function ejecutarFollowups() {
 
     if (!tipo) { omitidos++; continue }
 
-    const texto = interpolar(PLANTILLAS[tipo], { nombre: c.nombre, producto: c.producto })
+    // Plantilla del vertical de ESTE lead (no del tenant de una env var global).
+    const tenantId = c.tenantId || ACTIVE_TENANT
+    const texto = interpolar(plantillasDe(tenantId)[tipo], { nombre: c.nombre, producto: c.producto })
+
+    // Y por el número de ESTE cliente. Sin canal resoluble no se envía: prefiero
+    // perder un followup a que el lead de un cliente reciba un WhatsApp de otro.
+    const instancia = await instanciaDeTenant(tenantId, canalPorTenant)
+    if (!instancia && proveedorActivo() !== 'cloud') {
+      omitidos++
+      console.warn(`[Followup] ⏭️ lead ${c.leadId} (${tenantId}) sin canal de salida → omitido. Sembrá un Channel para este tenant.`)
+      continue
+    }
 
     try {
       // En Cloud API el followup_24h cae FUERA de la ventana de servicio de 24h →
@@ -194,7 +242,7 @@ export async function ejecutarFollowups() {
           ]}]
         })
       } else {
-        r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: INSTANCE })
+        r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: instancia })
       }
       if (!r.ok) { errores++; detalle.push({ leadId: c.leadId, tipo, error: r.error }); continue }
 
@@ -238,6 +286,7 @@ const PLANTILLA_COMPROMISO =
 
 const SQL_COMPROMISOS_VENCIDOS = `
   SELECT c.id AS commitment_id, c.lead_id AS "leadId", l.telefono,
+         l.tenant_id AS "tenantId",
          COALESCE(NULLIF(l."nombreDetectado",''), ls.slots_filled->>'nombre') AS nombre
   FROM commitments c
   JOIN leads l ON l.id = c.lead_id
@@ -268,13 +317,21 @@ export async function ejecutarRecordatoriosCompromiso() {
   }
 
   let enviados = 0, errores = 0
+  const canalPorTenant = new Map()
   for (const c of vencidos) {
     const texto = interpolar(PLANTILLA_COMPROMISO, { nombre: c.nombre })
+    // El copy de compromiso es NEUTRO (no nombra producto ni vertical), así que sirve
+    // a cualquier tenant. Lo que sí debe ser del tenant es el NÚMERO por el que sale.
+    const instancia = await instanciaDeTenant(c.tenantId || ACTIVE_TENANT, canalPorTenant)
+    if (!instancia) {
+      console.warn(`[Compromiso] ⏭️ lead ${c.leadId} (${c.tenantId}) sin canal de salida → omitido.`)
+      continue
+    }
     try {
       // Nota Cloud API (futuro): un compromiso vencido suele caer FUERA de la ventana de
       // servicio de 24h → allá requerirá template aprobado (igual que followup_24h). Con
       // Evolution va como texto normal. Por ahora (Evolution) se envía texto.
-      const r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: INSTANCE })
+      const r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: instancia })
       if (!r.ok) { errores++; continue }
 
       // Marcar PRIMERO el recordatorio como enviado (idempotencia: si el insert del mensaje
@@ -298,4 +355,80 @@ export async function ejecutarRecordatoriosCompromiso() {
   return resumen
 }
 
-export const FOLLOWUP_ENGINE_VERSION = 'v5_cerebro_v20_followups_+_compromisos'
+// ════════════════════════════════════════════════════════
+// RESCATE DE ESCALADOS HUÉRFANOS (fix forense jul 2026)
+//
+// EL AGUJERO NEGRO QUE CERRAMOS:
+//   Cuando el cerebro escala a HUMAN_ACTIVE (pedido a provincia, lead vulnerable,
+//   comprobante...), el bot se calla para no pisar al vendedor. Correcto. Pero si
+//   NADIE atiende, el lead quedaba muerto para siempre:
+//     · la compuerta de modo lo silencia en cada turno,
+//     · el followup lo excluye (solo mira AUTO_CONSULTIVO),
+//     · y el auto-resume de brain-pipeline es EVENT-DRIVEN: solo despierta si el
+//       lead vuelve a escribir. Si se cansó y no escribió más, no despierta nunca.
+//
+//   El peritaje del 23-jul-2026 encontró 9 leads así en producción — uno de 383h
+//   (16 días) y varios en `call_scheduling`, o sea con el pedido casi cerrado. Un
+//   lead de Puno con su pack ya elegido murió a los 30 segundos de escalar.
+//
+// QUÉ HACE: barre los HUMAN_ACTIVE que llevan más de UMBRAL horas SIN que ningún
+// humano los tocara y los devuelve a AUTO_CONSULTIVO. No manda nada por sí mismo:
+// solo los vuelve elegibles para el followup normal, que ya tiene todas las guardas
+// (ventana horaria, cadencia, plantilla por vertical, canal del tenant).
+//
+// SEGURO POR DISEÑO: `modeEnteredAt` se refresca en CADA mensaje del vendedor
+// (event-router) y en cada escalada. Si el humano está atendiendo, el reloj nunca
+// vence → cero interrupción. Solo revive conversaciones ABANDONADAS.
+// PAUSED jamás se toca: es terminal (rechazo/cierre).
+// Mismo umbral que el auto-resume para que ambos caminos sean coherentes.
+// ════════════════════════════════════════════════════════
+const RESCATE_HORAS = Number(process.env.HUMAN_ACTIVE_RESUME_HORAS ?? 6)
+
+export async function rescatarEscaladosHuerfanos() {
+  // isFinite además de >0: el valor se interpola en el SQL (`interval 'N hours'`). No hay
+  // inyección —es una env var numérica, no input de usuario— pero un env mal tecleado que
+  // diera Infinity pasaría `>0` y rompería la query. isFinite bloquea NaN e Infinity.
+  if (!(Number.isFinite(RESCATE_HORAS) && RESCATE_HORAS > 0)) {
+    return { ok: true, skipped: 'rescate_desactivado', rescatados: 0 }
+  }
+
+  try {
+    // Un humano "tocó" la conversación si hay algún mensaje VENDEDOR posterior a la
+    // escalada. Si no lo hay y venció el reloj, nadie lo atendió.
+    const huerfanos = await prisma.$queryRawUnsafe(`
+      SELECT ls.lead_id AS "leadId", l.tenant_id AS "tenantId", ls.current_stage AS "stage",
+             EXTRACT(EPOCH FROM (now() - ls.mode_entered_at)) / 3600 AS horas
+      FROM lead_state ls
+      JOIN leads l ON l.id = ls.lead_id
+      WHERE ls.current_mode = 'HUMAN_ACTIVE'
+        AND l.archived_at IS NULL
+        AND ls.mode_entered_at IS NOT NULL
+        AND now() - ls.mode_entered_at >= interval '${RESCATE_HORAS} hours'
+        AND NOT EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m."leadId" = ls.lead_id
+            AND m.origen = 'VENDEDOR'
+            AND m."createdAt" >= ls.mode_entered_at
+        )
+      LIMIT 50
+    `)
+
+    if (!huerfanos.length) return { ok: true, rescatados: 0 }
+
+    const ids = huerfanos.map(h => h.leadId)
+    await prisma.leadState.updateMany({
+      where: { leadId: { in: ids } },
+      data: { currentMode: 'AUTO_CONSULTIVO', modeEnteredAt: new Date() }
+    })
+
+    for (const h of huerfanos) {
+      console.log(`[Rescate] ▶️ lead ${h.leadId} (${h.tenantId}, ${h.stage}) llevaba ${Number(h.horas).toFixed(1)}h escalado sin atención humana → vuelve al bot`)
+    }
+    return { ok: true, rescatados: ids.length, leads: ids }
+  } catch (err) {
+    console.error('[Rescate] Error rescatando escalados huérfanos:', err.message)
+    return { ok: false, error: err.message, rescatados: 0 }
+  }
+}
+
+export const FOLLOWUP_ENGINE_VERSION = 'v6_multitenant_+_rescate_huerfanos'

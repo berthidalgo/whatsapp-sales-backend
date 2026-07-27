@@ -12,8 +12,57 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { instanciaDeSalida } from '../src/webhook/handler.js'
-import { summarizeChannelResolution } from '../src/webhook/channel-resolver.js'
+import { summarizeChannelResolution, tenantAtiende } from '../src/webhook/channel-resolver.js'
 import { resolveTenantForLogin } from '../src/routes/auth.js'
+
+// ════════════════════════════════════════════════════════
+// CORTE DE SERVICIO — que un cliente de baja deje de consumir
+// ════════════════════════════════════════════════════════
+// `estadoSuscripcion` se consultaba en el resolver y se DESCARTABA: un cliente que
+// dejaba de pagar seguía atendido y quemando tokens de Gemini indefinidamente.
+//
+// La invariante de negocio va en DOS direcciones y ambas importan:
+//   · se corta a quien está explícitamente de baja (deja de costarnos dinero)
+//   · JAMÁS se corta por defecto, por dato faltante ni por estado desconocido
+//     (dejar mudo al bot de quien SÍ paga es mucho más caro que atender de más)
+
+test('servicio: tenant sin estado (dato faltante) SÍ se atiende', () => {
+  assert.equal(tenantAtiende({ tenantId: 'x' }).atiende, true)
+  assert.equal(tenantAtiende({ tenantId: 'x', estadoSuscripcion: null }).atiende, true)
+  assert.equal(tenantAtiende(null).atiende, true, 'ni siquiera un canal nulo debe dejar mudo al bot')
+})
+
+test('servicio: trial y activo se atienden', () => {
+  for (const estado of ['trial', 'activo', 'active', 'pagado']) {
+    assert.equal(tenantAtiende({ estadoSuscripcion: estado }).atiende, true, `"${estado}" debe atenderse`)
+  }
+})
+
+test('servicio: cancelado / vencido / suspendido / moroso NO se atienden', () => {
+  for (const estado of ['cancelado', 'vencido', 'suspendido', 'moroso']) {
+    const r = tenantAtiende({ estadoSuscripcion: estado })
+    assert.equal(r.atiende, false, `"${estado}" no debe atenderse`)
+    assert.match(r.motivo, /suscripción/, 'el motivo debe quedar en el log para soporte')
+  }
+})
+
+test('servicio: el estado tolera mayúsculas y espacios (dato escrito a mano)', () => {
+  // Estos estados los teclea una persona en la BD; no pueden fallar por formato.
+  assert.equal(tenantAtiende({ estadoSuscripcion: '  CANCELADO ' }).atiende, false)
+  assert.equal(tenantAtiende({ estadoSuscripcion: 'Vencido' }).atiende, false)
+})
+
+test('servicio: un estado DESCONOCIDO se atiende (fail-open deliberado)', () => {
+  // Si alguien escribe "en_revision" o "pausa_temporal", el bot sigue trabajando.
+  // Preferimos revisar una factura a explicarle a un cliente por qué su bot murió.
+  assert.equal(tenantAtiende({ estadoSuscripcion: 'en_revision' }).atiende, true)
+})
+
+test('servicio: canal dado de baja (activo=false) no se atiende', () => {
+  const r = tenantAtiende({ estadoSuscripcion: 'activo', activo: false })
+  assert.equal(r.atiende, false)
+  assert.match(r.motivo, /canal inactivo/)
+})
 
 // ════════════════════════════════════════════════════════
 // INSTANCIA DE SALIDA — por dónde responde el bot

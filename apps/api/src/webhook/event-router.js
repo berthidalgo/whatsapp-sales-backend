@@ -40,14 +40,15 @@ import {
   summarizeResolution
 } from './lead-resolver.js'
 import { enqueueMessage, cancelDebounce } from './debounce.js'
-import { resolveChannel, summarizeChannelResolution } from './channel-resolver.js'
+import { resolveChannel, summarizeChannelResolution, tenantAtiende } from './channel-resolver.js'
 import { MODES, STAGES } from '../state/stage-definitions.js'
 import { sendToWhatsApp } from '../whatsapp/send.js'
 import { notificarEscalamiento } from './notifications.js'
 import { descargarMediaBase64 } from './media.js'
-import { leerComprobante, responderAImagen } from '../lib/vision.js'
+import { leerComprobante, describirImagen } from '../lib/vision.js'
 import { saveInboundMedia } from '../lib/mediaStore.js'
 import { transcribirAudio } from '../lib/groq.js'
+import { verticalPorTenant } from '../lib/tenant.js'
 import { reportError } from '../lib/observability.js'
 
 // ════════════════════════════════════════════════════════
@@ -172,6 +173,21 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
   const channel = await resolveChannel(instanceName)
   console.log(`[EventRouter] ${summarizeChannelResolution(channel)}`)
 
+  // ─── 5-quater. CORTE DE SERVICIO (jul 2026) ───
+  // Si el tenant está dado de baja (suscripción cancelada/vencida o canal inactivo),
+  // el bot NO responde y NO llama al LLM. Antes `estadoSuscripcion` se consultaba en
+  // el resolver y se descartaba: un cliente que dejaba de pagar seguía atendido y
+  // quemando tokens. Se corta ANTES de resolver el lead para no gastar ni una query.
+  // Solo corta con un estado negativo EXPLÍCITO (ver tenantAtiende) — ante la duda,
+  // atiende: dejar mudo a quien sí paga es peor.
+  const servicio = tenantAtiende(channel)
+  if (!servicio.atiende) {
+    console.warn(`[EventRouter] ⛔ tenant ${channel.tenantId} no se atiende (${servicio.motivo}) — mensaje ignorado`)
+    return buildResponse('tenant_sin_servicio', startTime, {
+      tenantId: channel.tenantId, motivo: servicio.motivo
+    })
+  }
+
   // ─── 6. Resolver lead (identidad) ───
   const leadResolution = await resolveLead({
     remoteJid: key.remoteJid,
@@ -269,7 +285,12 @@ async function handleLeadMessage({
         messageKey
       })
       if (media.ok) {
-        const tr = await transcribirAudio({ base64: media.base64, mimeType: media.mimeType, language: 'es' })
+        // El vocabulario de Whisper sale del vertical del tenant: una nota de voz de
+        // colágeno no debe transcribirse con la jerga de exportación (ver groq.js).
+        const tr = await transcribirAudio({
+          base64: media.base64, mimeType: media.mimeType, language: 'es',
+          vertical: verticalPorTenant(leadInfo.tenantId)
+        })
         if (tr.ok && tr.texto) {
           // Seguridad/privacidad: NO logueamos el contenido del lead (la transcripción
           // puede traer PII). El texto vive SOLO en Supabase (control de acceso). Logs = metadata.
@@ -287,13 +308,68 @@ async function handleLeadMessage({
     }
   }
 
-  // ─── Mensaje SIN texto (imagen/audio sin pie de foto) ───
-  // Si hay TEXTO (conversación O pie de foto/caption de una imagen), cae al flujo
-  // normal del cerebro — el caption es el mensaje del lead (lo lee el código, gratis).
-  // Solo lo SIN texto (imagen sin caption, audio que NO se pudo transcribir) va al
-  // handler especial, que:
-  //   - imagen en etapa de pago → la LEE con Gemini (comprobante) + escala
-  //   - otra imagen → la LEE con Gemini y responde natural (producto/troll)
+  // ─── IMAGEN ENTRANTE — describirla y tratarla como texto (jul 2026) ───
+  //
+  // FIX del incidente 2026-07-23 (dos bugs con la MISMA causa: un camino paralelo
+  // que se saltaba el pipeline):
+  //   1. Una clienta mandó 10 fotos en 3s y recibió 15 respuestas. Las imágenes NO
+  //      pasaban por el debounce, ni por el kill-stale, ni por el lock: cada webhook
+  //      respondía por su cuenta, en paralelo.
+  //   2. Esas respuestas hablaban de "exportación" a una clienta de COLÁGENO, porque
+  //      el handler de no-texto redactaba con la persona de Perú Exporta hardcodeada.
+  //
+  // El arreglo es el MISMO patrón que ya usaba el audio 20 líneas más arriba:
+  // convertir el medio en TEXTO y dejar que fluya por el camino único. Una imagen
+  // descrita es un mensaje del lead como cualquier otro → hereda GRATIS el debounce
+  // (10 fotos = 1 sola respuesta), el kill-stale, el lock, la compuerta de modo, la
+  // memoria y —lo crítico— el VERTICAL DEL TENANT.
+  //
+  // El comprobante de pago es la única excepción y sigue por su camino: no es
+  // conversación, es un evento operativo que escala a un humano (ver más abajo).
+  if (messageType === 'image' && !text && !leadInfo.isArchived) {
+    const esComprobante = await esPosibleComprobante(leadInfo.leadId)
+    if (!esComprobante) {
+      try {
+        const media = await descargarMediaBase64({
+          instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME,
+          messageKey
+        })
+        if (media.ok) {
+          // Persistir para el Inbox (fire-and-forget). tenantId REAL: antes iba null
+          // y la media quedaba sin dueño en una tabla compartida entre clientes.
+          saveInboundMedia(prisma, {
+            leadId: leadInfo.leadId, messageId: null, tenantId: leadInfo.tenantId || null,
+            tipo: 'image', mimeType: media.mimeType, base64: media.base64
+          }).catch(e => console.error(`[EventRouter] persistir imagen lead ${leadInfo.leadId}:`, e.message))
+
+          const d = await describirImagen({
+            base64: media.base64, mimeType: media.mimeType, tenantId: leadInfo.tenantId || null
+          })
+          if (d.ok) {
+            // Marcador explícito: el cerebro SABE que fue una foto (no texto escrito)
+            // y decide qué hacer según su vertical y el momento del funnel.
+            text = `[el lead envió una foto: ${d.descripcion}]`
+            console.log(`[EventRouter] 📷→📝 Imagen de lead ${leadInfo.leadId} descrita (${d.categoria}) → al cerebro`)
+          } else {
+            console.warn(`[EventRouter] No se pudo describir imagen de lead ${leadInfo.leadId}: ${d.error}`)
+          }
+        } else {
+          console.warn(`[EventRouter] No se pudo descargar imagen de lead ${leadInfo.leadId}: ${media.error}`)
+        }
+      } catch (err) {
+        console.error(`[EventRouter] Error describiendo imagen de lead ${leadInfo.leadId}:`, err.message)
+        reportError(err, { module: 'event-router:imagen', leadId: leadInfo?.leadId })
+      }
+      // Si la descarga o la descripción fallaron, `text` sigue vacío → cae al handler
+      // de no-texto (redirect cortés). Nunca queda mudo.
+    }
+  }
+
+  // ─── Mensaje SIN texto (comprobante, audio no transcrito, sticker...) ───
+  // Si hay TEXTO (conversación, pie de foto, audio transcrito o imagen descrita),
+  // cae al flujo normal del cerebro. Solo llega aquí lo que NO se pudo convertir:
+  //   - imagen en etapa de pago → la LEE con Gemini (comprobante) + escala a humano
+  //   - imagen que no se pudo descargar/describir → redirect cortés
   //   - audio sin transcripción (descarga/Whisper falló) → redirect cortés
   if (!text) {
     return await manejarNoTextoDelLead({ leadInfo, messageType, instanceName, messageKey, startTime })
@@ -349,6 +425,43 @@ const STAGES_ESPERANDO_COMPROBANTE = new Set([
   STAGES.POST_CLOSE
 ])
 
+/**
+ * ¿Esta imagen es probablemente el COMPROBANTE de pago?
+ *
+ * Se exigen AMBAS condiciones (criterio original, jun 2026):
+ *   a) la etapa es de pago (call_scheduling en adelante), Y
+ *   b) el BOT pidió el comprobante hace poco (sus últimos 3 mensajes lo mencionan).
+ *
+ * Sin (b), CUALQUIER imagen en esas etapas (un pantallazo, un meme) escalaría a
+ * HUMAN_ACTIVE y dejaría al lead muerto para el bot. Forense > entusiasmo.
+ *
+ * Extraída a función propia (jul 2026) porque ahora la consultan DOS caminos: el
+ * de conversación (para decidir si la foto se describe y va al cerebro) y el de
+ * no-texto (para el escalamiento). La regla vive en UN solo sitio.
+ */
+async function esPosibleComprobante(leadId, leadState = undefined) {
+  try {
+    const st = leadState === undefined
+      ? await prisma.leadState.findUnique({ where: { leadId } })
+      : leadState
+    const stage = st?.currentStage || STAGES.FIRST_CONTACT
+    if (!STAGES_ESPERANDO_COMPROBANTE.has(stage)) return false
+
+    const ultimosBot = await prisma.message.findMany({
+      where: { leadId, origen: 'BOT' },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+      select: { texto: true }
+    })
+    return ultimosBot.some(m => /comprobante|captura|voucher|yape|constancia de pago/i.test(m.texto || ''))
+  } catch (err) {
+    // Ante la duda, NO es comprobante: la foto va al cerebro (camino seguro) en vez
+    // de escalar por error y dejar al lead sin bot.
+    console.error(`[EventRouter] esPosibleComprobante(${leadId}) falló:`, err.message)
+    return false
+  }
+}
+
 async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, messageKey, startTime }) {
   const leadId = leadInfo.leadId
   console.log(`[EventRouter] Non-text message from lead ${leadId}: ${messageType}`)
@@ -384,61 +497,39 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
       return buildResponse('non_text_human_active_skipped', startTime, { leadId, messageType })
     }
 
-    // Decidir la respuesta determinística (NO pasa por el cerebro).
-    // Una imagen es "posible comprobante" SOLO si se cumplen AMBAS:
-    //   a) la etapa es de pago (call_scheduling en adelante), Y
-    //   b) el BOT pidió el comprobante hace poco (sus últimos mensajes lo mencionan).
-    // Sin la condición (b), CUALQUIER imagen en esas etapas (un pantallazo, un meme)
-    // escalaría a HUMAN_ACTIVE — y como no hay auto-resume ni notificación (B.1),
-    // ese falso positivo dejaría al lead MUERTO para el bot. Forense > entusiasmo.
+    // A este handler solo llega lo que NO se pudo convertir en texto (ver
+    // handleLeadMessage): el comprobante de pago, o un medio que falló al
+    // descargarse/describirse. Las imágenes conversables ya se fueron al cerebro.
     const stage = leadState?.currentStage || STAGES.FIRST_CONTACT
-    let esPosibleComprobante = false
-    if (messageType === 'image' && STAGES_ESPERANDO_COMPROBANTE.has(stage)) {
-      const ultimosBot = await prisma.message.findMany({
-        where: { leadId, origen: 'BOT' },
-        orderBy: { createdAt: 'desc' },
-        take: 3,
-        select: { texto: true }
-      })
-      esPosibleComprobante = ultimosBot.some(m => /comprobante|captura|voucher|yape|constancia de pago/i.test(m.texto || ''))
-    }
+    const comprobante = messageType === 'image' && await esPosibleComprobante(leadId, leadState)
 
+    // Respuestas NEUTRAS a propósito: son acuses de recibo genéricos, no discurso de
+    // venta. Todo lo que suene a un negocio concreto lo redacta el CEREBRO con el
+    // vertical del tenant. Aquí nunca más puede filtrarse la marca de otro cliente.
     let respuesta
-    if (esPosibleComprobante) {
+    if (comprobante) {
       respuesta = '¡Recibido! 🙌 Dame un momento para revisarlo y te confirmo, ¿ya? Gracias por la espera 🙏'
     } else if (messageType === 'image') {
-      // Imagen NO-comprobante (producto, captura, troll...) en cualquier etapa.
-      // El código puro no puede entender una foto → Gemini la lee y genera la
-      // respuesta natural de Jhon. Fallback al redirect cortés si falla la descarga.
       respuesta = 'Vi tu imagen 🙌 Para ayudarte mejor por aquí, ¿me cuentas por escrito qué necesitas? 😊'
-      try {
-        const media = await descargarMediaBase64({ instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME, messageKey })
-        if (media.ok) {
-          // Persistir la imagen para el Inbox (fire-and-forget: ni bloquea ni rompe).
-          saveInboundMedia(prisma, { leadId, messageId: marcadorMsgId, tenantId: null, tipo: 'image', mimeType: media.mimeType, base64: media.base64 })
-            .catch(e => console.error(`[EventRouter] persistir imagen lead ${leadId}:`, e.message))
-          const r = await responderAImagen({
-            base64: media.base64, mimeType: media.mimeType,
-            nombreLead: leadState?.slotsFilled?.nombre || leadInfo.nombreDetectado || null, stage
-          })
-          if (r.ok && r.respuesta) {
-            respuesta = r.respuesta
-            console.log(`[EventRouter] 📷 Imagen leída lead ${leadId} (categoria: ${r.categoria})`)
-          }
-        } else {
-          console.warn(`[EventRouter] No se pudo descargar imagen no-comprobante lead ${leadId}: ${media.error}`)
-        }
-      } catch (err) {
-        console.error(`[EventRouter] Error leyendo imagen no-comprobante lead ${leadId}:`, err.message)
-      }
     } else {
       respuesta = 'Disculpa, por aquí solo puedo leer mensajes 😊 ¿Me escribes lo que necesitas?'
+    }
+
+    // Se responde SIEMPRE por la instancia que RECIBIÓ el mensaje. Se eliminó el
+    // fallback literal 'peru-exporta-test' (el número de UN cliente): con varios
+    // tenants activos, ante cualquier fallo de resolución le contestaba a los leads
+    // de un cliente desde el número de otro. Mismo criterio que instanciaDeSalida()
+    // en handler.js — prefiero que el envío falle ruidosamente a que se cruce.
+    const instanciaSalida = instanceName || leadInfo.channel?.externalKey || process.env.EVOLUTION_INSTANCE_NAME
+    if (!instanciaSalida) {
+      console.error(`[EventRouter] ❌ Sin instancia de salida para lead ${leadId} (tenant ${leadInfo.tenantId}) — no se envía acuse de no-texto.`)
+      return buildResponse('non_text_sin_instancia', startTime, { leadId, messageType })
     }
 
     const sendResult = await sendToWhatsApp({
       telefono: leadInfo.telefono,
       text: respuesta,
-      instanceName: instanceName || process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
+      instanceName: instanciaSalida
     })
 
     if (sendResult.ok) {
@@ -451,7 +542,7 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
 
     // Si era el (posible) comprobante: ESCALAR — un humano debe validar el pago.
     // El bot ya respondió cálido; los turnos siguientes los silencia la compuerta.
-    if (esPosibleComprobante) {
+    if (comprobante) {
       await prisma.leadState.updateMany({
         where: { leadId },
         data: { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() }
@@ -473,9 +564,9 @@ async function manejarNoTextoDelLead({ leadInfo, messageType, instanceName, mess
           if (media.ok) {
             // Persistir el comprobante para el Inbox (el vendedor lo valida visualmente).
             // Mismos bytes que ya van a la notificación → no es exposición nueva.
-            saveInboundMedia(prisma, { leadId, messageId: marcadorMsgId, tenantId: null, tipo: 'image', mimeType: media.mimeType, base64: media.base64 })
+            saveInboundMedia(prisma, { leadId, messageId: marcadorMsgId, tenantId: leadInfo.tenantId || null, tipo: 'image', mimeType: media.mimeType, base64: media.base64 })
               .catch(e => console.error(`[EventRouter] persistir comprobante lead ${leadId}:`, e.message))
-            const lectura = await leerComprobante({ base64: media.base64, mimeType: media.mimeType })
+            const lectura = await leerComprobante({ base64: media.base64, mimeType: media.mimeType, tenantId: leadInfo.tenantId || null })
             if (lectura.ok && lectura.esComprobante) {
               const d = lectura.datos
               const partes = [d.metodo, d.monto, d.nombreDestino ? `a ${d.nombreDestino}` : '', d.numeroOperacion ? `op ${d.numeroOperacion}` : '', d.fecha].filter(Boolean)

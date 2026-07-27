@@ -12,6 +12,52 @@ import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
 import { sendToWhatsApp } from '../whatsapp/send.js'
 import { reportError } from '../lib/observability.js'
+import { defaultChannelForTenant } from './channel-resolver.js'
+
+/**
+ * A QUIÉN y POR DÓNDE se avisa (fix forense jul 2026).
+ *
+ * ANTES era global para todos los clientes:
+ *   destino  = process.env.NUMERO_JOAN
+ *   instancia= process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
+ *
+ * O sea: si el bot de BIOAYUR escalaba un lead, el aviso salía por el número de
+ * Perú Exporta hacia el dueño de Perú Exporta. El dueño de BIOAYUR NUNCA se
+ * enteraba. Eso convirtió el escalamiento en un agujero negro: el peritaje del
+ * 23-jul-2026 halló 9 leads escalados sin atender, uno de 16 días, y un pedido de
+ * colágeno ya cerrado (Puno) que murió 30 segundos después de escalar.
+ *
+ * Ahora el aviso viaja por el CANAL DEL TENANT hacia el VENDEDOR del lead. Las env
+ * vars quedan solo como red de compatibilidad para el deploy single-tenant.
+ */
+async function destinoDeNotificacion(vendorId) {
+  let vendor = null
+  try {
+    if (vendorId) {
+      vendor = await prisma.vendor.findUnique({
+        where: { id: vendorId },
+        select: { telefono: true, tenantId: true, nombre: true }
+      })
+    }
+  } catch (err) {
+    console.warn(`[Notif] no se pudo leer el vendor ${vendorId}: ${err.message}`)
+  }
+
+  const destino = vendor?.telefono || process.env.NUMERO_JOAN || null
+
+  let instancia = null
+  if (vendor?.tenantId) {
+    try {
+      const ch = await defaultChannelForTenant(vendor.tenantId)
+      instancia = ch?.externalKey || null
+    } catch (err) {
+      console.warn(`[Notif] no se pudo resolver canal de ${vendor.tenantId}: ${err.message}`)
+    }
+  }
+  if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
+
+  return { destino, instancia, tenantId: vendor?.tenantId || null, vendorNombre: vendor?.nombre || null }
+}
 
 /**
  * Notifica al vendedor que un lead necesita atención humana.
@@ -75,24 +121,26 @@ export async function notificarEscalamiento({
   lineas.push(DIV)
   const briefing = lineas.join('\n')
 
-  // ─── 1. WhatsApp al vendedor ───
+  // ─── 1. WhatsApp al vendedor DEL TENANT, por el canal DEL TENANT ───
   let sent = false
-  const destino = process.env.NUMERO_JOAN
-  if (destino) {
+  const { destino, instancia, tenantId, vendorNombre } = await destinoDeNotificacion(vendorId)
+
+  if (destino && instancia) {
     try {
-      const r = await sendToWhatsApp({
-        telefono: destino,
-        text: briefing,
-        instanceName: process.env.EVOLUTION_INSTANCE_NAME || 'peru-exporta-test'
-      })
+      const r = await sendToWhatsApp({ telefono: destino, text: briefing, instanceName: instancia })
       sent = !!r.ok
-      if (!sent) console.error(`[Notif] WhatsApp al vendedor falló (lead ${leadId}): ${r.error}`)
+      if (sent) {
+        console.log(`[Notif] 🔔 Escalamiento del lead ${leadId} avisado a ${vendorNombre || 'vendedor'} (${tenantId || 'tenant?'}) vía ${instancia}`)
+      } else {
+        console.error(`[Notif] WhatsApp al vendedor falló (lead ${leadId}): ${r.error}`)
+      }
     } catch (err) {
       console.error(`[Notif] Excepción enviando WhatsApp al vendedor (lead ${leadId}):`, err.message)
       reportError(err, { module: 'notifications:whatsapp', leadId })
     }
   } else {
-    console.warn('[Notif] NUMERO_JOAN no seteado → no se envía ping de WhatsApp al vendedor')
+    // Ruidoso a propósito: un escalamiento que nadie recibe es un lead que se muere.
+    console.error(`[Notif] ❌ Lead ${leadId} escaló pero NO hay a quién avisar (destino=${destino ? 'ok' : 'FALTA'}, instancia=${instancia ? 'ok' : 'FALTA'}, tenant=${tenantId}). Revisá el teléfono del vendor y el Channel del tenant.`)
   }
 
   // ─── 2. Fila en crm_notifications (best-effort) ───

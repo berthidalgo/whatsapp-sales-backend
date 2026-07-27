@@ -42,11 +42,12 @@ import { BRAIN_EVALS, BRAIN_EVALS_VERSION } from './brain/brain-evals-dataset.js
 import { flattenFactSheet } from './response/factsheet-loader.js'
 
 // ── Fase D: motor de followups (disparado por cron externo) ──
-import { ejecutarFollowups, ejecutarRecordatoriosCompromiso, FOLLOWUP_ENGINE_VERSION } from './motor/followupEngine.js'
+import { ejecutarFollowups, ejecutarRecordatoriosCompromiso, rescatarEscaladosHuerfanos, FOLLOWUP_ENGINE_VERSION } from './motor/followupEngine.js'
 
 // ── WhatsApp Cloud API (Meta): recepción. Apagado por default (WHATSAPP_PROVIDER=evolution) ──
 import { procesarWebhookCloud } from './whatsapp/cloud/router.js'
 import { verifyWebhookChallenge, verifySignature } from './whatsapp/cloud/webhook.js'
+import { isCloudProvider } from './whatsapp/cloud/config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -76,7 +77,10 @@ await app.register(cors, {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
 })
 
-// ── Auth JWT (Hito 1) — los endpoints v2 lo exigen; los viejos siguen abiertos por compat ──
+// ── Auth JWT — TODOS los endpoints de datos lo exigen (auditoría pre-producción jul 2026) ──
+// Ya no hay "abiertos por compat": las rutas legacy y las /debug/* también piden token.
+// Público a propósito: /health (UptimeRobot), /auth/login, /webhook (Evolution),
+// /webhook/cloud (Meta) y /cron/followup (protegido por CRON_SECRET).
 // FAIL-CLOSED: en producción (Render) JWT_SECRET es OBLIGATORIO. Sin él abortamos el boot, en
 // vez de arrancar con un secreto de DEV que está en el repo PÚBLICO (cualquiera forjaría tokens
 // de ADMIN). En local sí cae a un secreto de dev para no frenar el desarrollo.
@@ -100,8 +104,20 @@ app.get('/health', async () => ({
   timestamp: new Date().toISOString()
 }))
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ENDPOINTS /debug/* — CERRADOS CON JWT (auditoría pre-producción, jul 2026)
+// ═══════════════════════════════════════════════════════════════════════════
+// Estaban ABIERTOS y todos gastan dinero real: /debug/brain-test hace una llamada
+// al LLM por request, y /debug/brain-evals corre el DATASET COMPLETO (decenas de
+// llamadas + el juez). Cualquiera con la URL podía vaciar el presupuesto de Gemini
+// del dueño en un bucle, o usar el backend como proxy gratuito de LLM.
+// Además /debug/brain-replay lee conversaciones reales de la BD.
+//
+// /health queda público a propósito (lo usa UptimeRobot para mantener vivo Render).
+// ═══════════════════════════════════════════════════════════════════════════
+
 // ── Debug — Gemini connection ────────────────────────────────
-app.get('/debug/gemini-check', async (req, reply) => {
+app.get('/debug/gemini-check', { preHandler: verifyJwt }, async (req, reply) => {
   const result = await geminiHealthCheck()
   return reply.send(result)
 })
@@ -189,8 +205,8 @@ async function brainHealthHandler(req, reply) {
     providers: byProvider,
   })
 }
-app.get('/debug/brain-health', brainHealthHandler)
-app.post('/debug/brain-health', brainHealthHandler)
+app.get('/debug/brain-health', { preHandler: verifyJwt }, brainHealthHandler)
+app.post('/debug/brain-health', { preHandler: verifyJwt }, brainHealthHandler)
 
 // ── Debug — Brain test (Sprint 3) — CEREBRO UNIFICADO AISLADO ────
 // Prueba el cerebro nuevo SIN tocar el pipeline real ni ningún lead.
@@ -204,7 +220,7 @@ app.post('/debug/brain-health', brainHealthHandler)
 //     "campaignSlug": "MPX"   (carga el factSheet de esa campaña desde la BD)
 //   }
 // ════════════════════════════════════════════════════════════════
-app.post('/debug/brain-test', async (req, reply) => {
+app.post('/debug/brain-test', { preHandler: verifyJwt }, async (req, reply) => {
   const startTime = Date.now()
   try {
     const {
@@ -291,7 +307,7 @@ app.post('/debug/brain-test', async (req, reply) => {
 // Body (opcional): { "campaignSlug": "MPX", "idFilter": ["C001","C006"] }
 // Sin body corre los 26. Tarda ~1-2 min (chunks de 3).
 // ════════════════════════════════════════════════════════════════
-app.post('/debug/brain-evals', async (req, reply) => {
+app.post('/debug/brain-evals', { preHandler: verifyJwt }, async (req, reply) => {
   const startTime = Date.now()
   const {
     campaignSlug = 'MPX',
@@ -433,7 +449,7 @@ async function correrUnCasoEval(caso, campaignConfig, banco = {}) {
 // Body: { overrides?, convFilter?:[ids], maxTurns?:int, chunkSize?, pauseMs? }
 //   overrides: { model?, useDevApi?, thinkingLevel?, location?, sinSchema? }
 // ════════════════════════════════════════════════════════════════
-app.post('/debug/brain-replay', async (req, reply) => {
+app.post('/debug/brain-replay', { preHandler: verifyJwt }, async (req, reply) => {
   const startTime = Date.now()
   const { overrides = null, convFilter = null, maxTurns = 6, chunkSize = 2, pauseMs = 1500, campaignSlug = 'MPX' } = req.body || {}
 
@@ -601,9 +617,14 @@ async function handleCronFollowup(req, reply) {
     // Dos motores en el mismo tick (UptimeRobot llama /cron/followup cada 5 min):
     // followups por SILENCIO + recordatorios de COMPROMISOS fechados. SECUENCIAL (no
     // paralelo) para no mandar dos WhatsApp a la vez = cadencia anti-baneo respetada.
+    // PRIMERO el rescate: devuelve al bot los leads que escalaron a humano y nadie
+    // atendió (ver rescatarEscaladosHuerfanos). Va antes que los followups a propósito,
+    // así el lead rescatado ya entra como candidato en ESTE mismo ciclo en vez de
+    // esperar al siguiente. No envía nada por sí mismo: solo cambia el modo.
+    const rescate = await rescatarEscaladosHuerfanos()
     const followups = await ejecutarFollowups()
     const compromisos = await ejecutarRecordatoriosCompromiso()
-    return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, followups, compromisos })
+    return reply.send({ engine: FOLLOWUP_ENGINE_VERSION, rescate, followups, compromisos })
   } finally {
     cronEjecutandose = false  // se libera pase lo que pase (éxito o excepción)
   }
@@ -620,45 +641,87 @@ app.get('/webhook/cloud', async (req, reply) => {
   return reply.code(403).send('forbidden')
 })
 app.post('/webhook/cloud', async (req, reply) => {
-  // Firma best-effort: si hay rawBody + CLOUD_APP_SECRET, se valida. La firma ESTRICTA
-  // se activa al enchufar el número (agregando el content-type parser que guarda rawBody).
-  const sig = req.headers['x-hub-signature-256']
-  if (req.rawBody && process.env.CLOUD_APP_SECRET) {
-    const v = verifySignature(req.rawBody, sig)
-    if (!v.ok) { console.warn(`[CloudWebhook] firma inválida: ${v.reason}`); return reply.code(401).send('invalid signature') }
+  // ⚠️ ENDPOINT DE INYECCIÓN CERRADO (auditoría pre-producción, jul 2026)
+  //
+  // LO QUE SE ENCONTRÓ: este POST procesaba CUALQUIER cuerpo sin autenticar. La firma
+  // era "best-effort" (solo se validaba si existía req.rawBody, que HOY no se captura),
+  // y no se comprobaba que Cloud estuviera activo. Resultado: un atacante que POSTeara
+  // un payload falso de Meta lograba que procesarWebhookCloud → resolveLead CREARA un
+  // lead en la BD y procesarConCerebro LLAMARA AL LLM (gasto real de Gemini). Un bucle
+  // te llenaba la BD de basura y te vaciaba el presupuesto, con Cloud "apagado".
+  //
+  // Ahora, defensa en profundidad y FAIL-CLOSED:
+  //   1. Si Cloud NO es el proveedor activo → 200 y NO se procesa (Meta no reintenta;
+  //      no hay tráfico legítimo aquí mientras el proveedor sea Evolution).
+  //   2. Si Cloud SÍ está activo → la firma es OBLIGATORIA, no opcional. Sin app secret
+  //      o sin poder validar (falta rawBody) se RECHAZA: preferimos no procesar a
+  //      procesar algo no verificado. Enchufar Cloud EXIGE capturar rawBody (parser).
+  if (!isCloudProvider()) {
+    // Responder 200 para no generar reintentos si alguien registró el webhook por error.
+    return reply.code(200).send('EVENT_RECEIVED')
   }
+
+  const sig = req.headers['x-hub-signature-256']
+  const v = verifySignature(req.rawBody, sig)   // rawBody undefined → reason: no_app_secret/…
+  if (!v.ok) {
+    console.warn(`[CloudWebhook] 🚫 POST rechazado (Cloud activo, firma no válida): ${v.reason}`)
+    return reply.code(401).send('invalid signature')
+  }
+
   // Meta espera respuesta <5s o reintenta → responder ya y procesar en segundo plano.
   reply.code(200).send('EVENT_RECEIVED')
   procesarWebhookCloud(req.body).catch(e => console.error('[CloudWebhook] error:', e.message))
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RUTAS LEGACY (pre-v2) — CERRADAS CON JWT (auditoría pre-producción, jul 2026)
+// ═══════════════════════════════════════════════════════════════════════════
+// LO QUE SE ENCONTRÓ: estas rutas quedaron abiertas al mundo cuando el CRM migró
+// a /v2/*. Sin token y sin scoping de tenant, cualquiera con la URL del backend
+// podía:
+//   · GET  /leads              → nombre + TELÉFONO + estado de TODOS los leads de
+//                                TODOS los clientes (el "auth" era `?role=ADMIN`
+//                                en la query — lo pone el atacante, ver leads.js)
+//   · GET  /leads/:id/mensajes → la conversación completa de cualquier lead
+//   · POST /leads/:id/mensaje  → ENVIAR WhatsApp desde el número de un cliente
+//   · /config/*, /campaigns/*  → leer y MODIFICAR la config del bot y las campañas
+//
+// Son datos personales de leads reales (Ley 29733) y control del canal de un
+// cliente que paga. El frontend oficial ya NO las usa: apps/web/src/api.ts llama
+// exclusivamente a /v2/* con Bearer. Así que cerrarlas no rompe el producto.
+//
+// Mismo criterio que /vendors (abajo): quien les pegue sin token recibe 401 y debe
+// migrar a su equivalente /v2/*. Preferimos un 401 visible a una fuga silenciosa.
+// El scoping por tenant DENTRO de cada handler sigue siendo responsabilidad suya
+// (ver scopeWhere) — el JWT es la primera puerta, no la única.
+
 // ── Leads ────────────────────────────────────────────────────
-app.get('/leads',                async (req, reply) => getLeads(req, reply, prisma))
-app.put('/leads/:id',            async (req, reply) => updateLead(req, reply, prisma))
-app.post('/leads/:id/mensaje',   async (req, reply) => sendMensaje(req, reply, prisma))
-app.post('/leads/:id/accion',    async (req, reply) => doAccion(req, reply, prisma))
-app.get('/leads/:id/mensajes',   async (req, reply) => getMensajes(req, reply, prisma)) 
-app.get('/reportes',             async (req, reply) => getReportes(req, reply, prisma))
+app.get('/leads',                { preHandler: verifyJwt }, async (req, reply) => getLeads(req, reply, prisma))
+app.put('/leads/:id',            { preHandler: verifyJwt }, async (req, reply) => updateLead(req, reply, prisma))
+app.post('/leads/:id/mensaje',   { preHandler: verifyJwt }, async (req, reply) => sendMensaje(req, reply, prisma))
+app.post('/leads/:id/accion',    { preHandler: verifyJwt }, async (req, reply) => doAccion(req, reply, prisma))
+app.get('/leads/:id/mensajes',   { preHandler: verifyJwt }, async (req, reply) => getMensajes(req, reply, prisma))
+app.get('/reportes',             { preHandler: verifyJwt }, async (req, reply) => getReportes(req, reply, prisma))
 
 // ── Config ───────────────────────────────────────────────────
-app.get('/config/bot',  async (req, reply) => getBotConfig(req, reply, prisma))
-app.put('/config/bot',  async (req, reply) => updateBotConfig(req, reply, prisma))
-app.get('/config/vendedores',                async (req, reply) => getVendedores(req, reply, prisma))
-app.post('/config/vendedores',               async (req, reply) => createVendedor(req, reply, prisma))
-app.put('/config/vendedores/:id',            async (req, reply) => updateVendedor(req, reply, prisma))
-app.put('/config/vendedores/:id/desactivar', async (req, reply) => desactivarVendedor(req, reply, prisma))
+app.get('/config/bot',  { preHandler: verifyJwt }, async (req, reply) => getBotConfig(req, reply, prisma))
+app.put('/config/bot',  { preHandler: verifyJwt }, async (req, reply) => updateBotConfig(req, reply, prisma))
+app.get('/config/vendedores',                { preHandler: verifyJwt }, async (req, reply) => getVendedores(req, reply, prisma))
+app.post('/config/vendedores',               { preHandler: verifyJwt }, async (req, reply) => createVendedor(req, reply, prisma))
+app.put('/config/vendedores/:id',            { preHandler: verifyJwt }, async (req, reply) => updateVendedor(req, reply, prisma))
+app.put('/config/vendedores/:id/desactivar', { preHandler: verifyJwt }, async (req, reply) => desactivarVendedor(req, reply, prisma))
 
 // ── Campaigns ────────────────────────────────────────────────
-app.get('/campaigns',                      async (req, reply) => getCampaigns(req, reply, prisma))
-app.get('/campaigns/:id',                  async (req, reply) => getCampaign(req, reply, prisma))
-app.post('/campaigns',                     async (req, reply) => createCampaign(req, reply, prisma))
-app.put('/campaigns/:id',                  async (req, reply) => updateCampaign(req, reply, prisma))
-app.delete('/campaigns/:id',               async (req, reply) => deleteCampaign(req, reply, prisma))
-app.put('/campaigns/:id/steps',            async (req, reply) => saveSteps(req, reply, prisma))
-app.post('/campaigns/:id/triggers',        async (req, reply) => addTrigger(req, reply, prisma))
-app.delete('/campaigns/:id/triggers/:tid', async (req, reply) => deleteTrigger(req, reply, prisma))
-app.post('/campaigns/test-trigger',        async (req, reply) => testTrigger(req, reply, prisma))
-app.patch('/campaigns/:id/activar',        async (req, reply) => activarCampaign(req, reply, prisma))
+app.get('/campaigns',                      { preHandler: verifyJwt }, async (req, reply) => getCampaigns(req, reply, prisma))
+app.get('/campaigns/:id',                  { preHandler: verifyJwt }, async (req, reply) => getCampaign(req, reply, prisma))
+app.post('/campaigns',                     { preHandler: verifyJwt }, async (req, reply) => createCampaign(req, reply, prisma))
+app.put('/campaigns/:id',                  { preHandler: verifyJwt }, async (req, reply) => updateCampaign(req, reply, prisma))
+app.delete('/campaigns/:id',               { preHandler: verifyJwt }, async (req, reply) => deleteCampaign(req, reply, prisma))
+app.put('/campaigns/:id/steps',            { preHandler: verifyJwt }, async (req, reply) => saveSteps(req, reply, prisma))
+app.post('/campaigns/:id/triggers',        { preHandler: verifyJwt }, async (req, reply) => addTrigger(req, reply, prisma))
+app.delete('/campaigns/:id/triggers/:tid', { preHandler: verifyJwt }, async (req, reply) => deleteTrigger(req, reply, prisma))
+app.post('/campaigns/test-trigger',        { preHandler: verifyJwt }, async (req, reply) => testTrigger(req, reply, prisma))
+app.patch('/campaigns/:id/activar',        { preHandler: verifyJwt }, async (req, reply) => activarCampaign(req, reply, prisma))
 
 // ── Vendors ──────────────────────────────────────────────────
 // ⚠️ FIX MULTITENANT (jul 2026): este endpoint devolvía SIN AUTENTICACIÓN los

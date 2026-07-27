@@ -513,8 +513,21 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
   if (r4.limpiado) { mensaje = r4.mensaje; flags.push('re_saludo_limpiado') }
 
   // ── Guardrail 1: precio fantasma ──
-  // Busca cifras tipo S/XXXX o $XXX en el mensaje y verifica contra el factSheet.
-  const preciosEnMensaje = mensaje.match(/(?:S\/\.?\s?|\$\s?)\s?[\d,]+/gi) || []
+  // Busca cifras de dinero en el mensaje y las verifica contra el factSheet.
+  //
+  // AMPLIADO (auditoría pre-producción jul 2026): antes solo se detectaba el SÍMBOLO
+  // delante ("S/ 1500", "$300"). Pero el modelo escribe dinero de varias formas, y en
+  // cuanto el bot de un cliente nuevo dijera "cuesta 2500 soles" —sin símbolo— el
+  // guardrail no veía NADA y una cifra inventada llegaba al lead sin marcar. Ahora
+  // se cubren las tres formas reales:
+  //   · símbolo delante: "S/ 1,500", "$300"
+  //   · moneda detrás:   "1500 soles", "300 dólares", "2500 PEN"
+  //   · símbolo pegado:  "S/1500"
+  // Deliberadamente NO se marcan números sueltos ("12 sesiones", "1,300 alumnos"):
+  // eso llenaría de falsos positivos y, sin factSheet, NEUTRALIZARÍA mensajes sanos.
+  // Solo cuenta como dinero lo que trae símbolo o palabra de moneda pegada.
+  const RX_DINERO = /(?:S\/\.?\s?\d[\d,\.]*)|(?:\$\s?\d[\d,\.]*)|(?:\d[\d,\.]*\s?(?:soles|sol|dólares|dolares|usd|pen|euros?|eur)\b)/gi
+  const preciosEnMensaje = mensaje.match(RX_DINERO) || []
   if (preciosEnMensaje.length > 0) {
     if (!fs.precioTexto) {
       // CASO MÁS PELIGROSO: la campaña no tiene precio en su factSheet, pero el

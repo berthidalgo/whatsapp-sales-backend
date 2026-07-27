@@ -139,7 +139,7 @@ export async function conversationV2(request, reply, prisma) {
     const [mensajes, notifs, medias] = await Promise.all([
       prisma.message.findMany({ where: { leadId: id }, orderBy: { createdAt: 'asc' }, take: 300, select: { id: true, origen: true, texto: true, createdAt: true } }),
       prisma.crmNotification.findMany({ where: { leadId: id }, orderBy: { createdAt: 'asc' }, select: { title: true, priority: true, createdAt: true } }),
-      prisma.mediaAsset.findMany({ where: { leadId: id }, select: { id: true, messageId: true, tipo: true, mimeType: true } }),
+      prisma.mediaAsset.findMany({ where: { leadId: id }, select: { id: true, messageId: true, tipo: true, mimeType: true, createdAt: true } }),
     ])
 
     // Linkear cada media a su mensaje marcador (1:1 por messageId) → el front la
@@ -148,6 +148,14 @@ export async function conversationV2(request, reply, prisma) {
     const mediaPorMsg = new Map()
     for (const m of medias) if (m.messageId != null) mediaPorMsg.set(m.messageId, m)
 
+    // MEDIA HUÉRFANA (fix jul 2026): una media sin messageId NO se perdía... se
+    // volvía INVISIBLE para el vendedor, que es peor (la foto está en la BD pero el
+    // Inbox no la muestra). Pasa desde que las imágenes van al cerebro: el texto lo
+    // persiste el pipeline después, así que al guardar los bytes todavía no hay
+    // mensaje al que colgarlos. También pasaba antes si fallaba el insert del
+    // marcador. Se emiten como evento propio, ubicadas por su createdAt.
+    const huerfanas = medias.filter(m => m.messageId == null)
+
     const eventos = [
       ...mensajes.map(m => {
         const ev = { kind: 'message', origen: m.origen, texto: m.texto, at: m.createdAt }
@@ -155,6 +163,10 @@ export async function conversationV2(request, reply, prisma) {
         if (md) ev.media = { id: md.id, tipo: md.tipo, mimeType: md.mimeType }
         return ev
       }),
+      ...huerfanas.map(md => ({
+        kind: 'message', origen: 'LEAD', texto: null, at: md.createdAt,
+        media: { id: md.id, tipo: md.tipo, mimeType: md.mimeType }
+      })),
       ...notifs.map(n => ({ kind: 'state', label: n.title, priority: n.priority, at: n.createdAt })),
     ].sort((a, b) => new Date(a.at) - new Date(b.at))
 

@@ -14,13 +14,20 @@ datasource db {
 // ─── Vendedores ───────────────────────────────────────────────
 model Vendor {
   id                 Int                @id @default(autoincrement())
-  tenantId           String             @default("peru_exporta") @map("tenant_id")
+  // tenantId SIN default (jul 2026): el @default("peru_exporta") era una mina — cualquier
+  // insert que olvidara el tenant aterrizaba silenciosamente en Perú Exporta (fue la causa
+  // raíz de la contaminación entre clientes). Ahora es obligatorio: un insert sin tenant
+  // FALLA en vez de contaminar. Todos los call sites lo setean explícito (verificado).
+  tenantId           String             @map("tenant_id")
   nombre             String
-  telefono           String             @unique
+  // telefono y whatsappNumber: únicos POR TENANT, no globales. El unique global impedía
+  // dar de alta un cliente cuyo vendedor compartiera número con el de otro (pasó con
+  // BIOAYUR: hubo que usar un placeholder). Con el compuesto, cada cliente usa su número real.
+  telefono           String
   role               String             @default("VENDOR")
   activo             Boolean            @default(true)
   instanciaEvolution String?
-  whatsappNumber     String?            @unique
+  whatsappNumber     String?
   pin                String?            @default("0000")
   campaigns          Campaign[]
   leads              Lead[]
@@ -32,6 +39,8 @@ model Vendor {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
+  @@unique([tenantId, telefono])
+  @@unique([tenantId, whatsappNumber])
   @@index([tenantId])
   @@map("vendors")
 }
@@ -39,8 +48,11 @@ model Vendor {
 // ─── Campañas ─────────────────────────────────────────────────
 model Campaign {
   id            Int            @id @default(autoincrement())
-  tenantId      String         @default("peru_exporta") @map("tenant_id")
-  slug          String         @unique
+  // tenantId sin default (ver Vendor): forgotten-tenant falla en vez de contaminar.
+  tenantId      String         @map("tenant_id")
+  // slug único POR TENANT: el unique global hacía que el 2º cliente que quisiera una
+  // campaña "PROMO" fallara con error de constraint. Cada tenant tiene su espacio de slugs.
+  slug          String
   nombre        String
   activa        Boolean        @default(true)
   vendorId      Int
@@ -62,6 +74,7 @@ model Campaign {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
+  @@unique([tenantId, slug])
   @@index([tenantId])
   @@map("campaigns")
 }
@@ -93,7 +106,10 @@ model FlowStep {
 // ─── Leads ────────────────────────────────────────────────────
 model Lead {
   id                Int                 @id @default(autoincrement())
-  tenantId          String              @default("peru_exporta") @map("tenant_id")
+  // tenantId sin default (ver Vendor): el lead es el dato más caliente y de mayor volumen;
+  // un lead que cayera en el tenant equivocado por un default olvidado es lo peor que
+  // puede pasar. Obligatorio y explícito en el único upsert (lead-resolver, verificado).
+  tenantId          String              @map("tenant_id")
   telefono          String
   campaignId        Int?
   campaign          Campaign?           @relation(fields: [campaignId], references: [id])
@@ -206,7 +222,10 @@ model MediaAsset {
 // ─── Configuración del bot ────────────────────────────────────
 model BotConfig {
   id              String   @id
-  tenantId        String   @default("hidata")
+  // Sin default (jul 2026): tenía @default("hidata") —un tercer valor de tenant, distinto
+  // de los reales— y cualquier config sin tenant caía ahí. El único create (config.js)
+  // ya pasa el tenant del admin explícito. Obligatorio para que un olvido falle, no mezcle.
+  tenantId        String
   activo          Boolean  @default(true)
   nombre          String?
   msgBienvenida   String?  @db.Text

@@ -36,6 +36,12 @@
 import prisma from '../db/prisma.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 
+// TTL de 60s: el objeto cacheado incluye `estadoSuscripcion`, así que cuando
+// administración reactiva a un cliente que pagó, el bot vuelve a atenderlo en ≤60s
+// (o al instante si el dashboard llama invalidateChannelCache al cambiar el estado).
+// 60s de desfase para un cambio de facturación es tolerable; lo contrario —consultar
+// tenant_settings en CADA mensaje— añadiría una query por turno a algo que casi nunca
+// cambia. Al dar de BAJA, el mismo desfase juega a favor del cliente (60s de gracia).
 const CACHE_TTL_MS = 60_000
 const cache = new Map()   // externalKey -> { value, expiresAt }
 
@@ -107,6 +113,13 @@ export async function resolveChannel(externalKey) {
         externalKey: key,
         numeroDisplay: ch.numeroDisplay || null,
         activo: ch.activo,
+        // ── Estado comercial del cliente (fix pre-producción jul 2026) ──
+        // Este dato ya se CONSULTABA aquí y se tiraba: nadie lo leía. Es decir, un
+        // cliente que dejaba de pagar seguía siendo atendido —y quemando tokens de
+        // Gemini— indefinidamente, porque el bot no tenía forma de saberlo.
+        // Ahora viaja con el canal y `tenantAtiende()` decide.
+        estadoSuscripcion: ch.tenant?.estadoSuscripcion || null,
+        displayName: ch.tenant?.displayName || null,
         resolvedBy: 'channel'
       }
       cacheSet(key, resolved)
@@ -181,6 +194,36 @@ export async function defaultChannelForTenant(tenantId) {
     console.warn(`[ChannelResolver] defaultChannelForTenant(${tenantId}) falló: ${err.message}`)
     return null
   }
+}
+
+// ════════════════════════════════════════════════════════
+// ¿ESTE TENANT DEBE SER ATENDIDO? (corte de servicio, jul 2026)
+// ════════════════════════════════════════════════════════
+//
+// Criterio DELIBERADAMENTE CONSERVADOR: solo se corta con un estado explícitamente
+// negativo puesto a mano por administración. Todo lo demás —incluido `null`, un
+// estado desconocido, o que la tabla no responda— ATIENDE.
+//
+// El motivo es de negocio, no técnico: dejar mudo al bot de un cliente que SÍ paga
+// es mucho más caro que atender de más a uno que no. El corte por consumo excedido
+// NO se hace aquí a propósito (un pico legítimo de campaña dejaría al cliente sin
+// bot en su mejor día); el consumo se MIDE y se revisa, no se corta solo.
+const ESTADOS_QUE_NO_ATIENDEN = new Set(['cancelado', 'suspendido', 'vencido', 'moroso'])
+
+/**
+ * @param {object} channel - lo que devuelve resolveChannel()
+ * @returns {{ atiende: boolean, motivo: string|null }}
+ */
+export function tenantAtiende(channel) {
+  const estado = String(channel?.estadoSuscripcion || '').trim().toLowerCase()
+  if (estado && ESTADOS_QUE_NO_ATIENDEN.has(estado)) {
+    return { atiende: false, motivo: `suscripción ${estado}` }
+  }
+  // Canal dado de baja explícitamente (activo=false): tampoco se atiende.
+  if (channel && channel.activo === false) {
+    return { atiende: false, motivo: 'canal inactivo' }
+  }
+  return { atiende: true, motivo: null }
 }
 
 export function summarizeChannelResolution(r) {

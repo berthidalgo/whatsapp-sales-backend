@@ -74,8 +74,26 @@ export async function callGroq({
 const GROQ_TRANSCRIBE_URL = 'https://api.groq.com/openai/v1/audio/transcriptions'
 const WHISPER_MODEL = 'whisper-large-v3-turbo'
 // Pista de dominio: Whisper la usa como contexto/ortografía → mejora términos
-// peruanos y de exportación (Yape, RUC, palta, ESCEX) y nombres propios.
-const WHISPER_PROMPT_ES = 'Conversacion de WhatsApp en espanol peruano sobre exportacion. Terminos comunes: exportar, exportacion, palta, arandanos, cafe, maca, RUC, Yape, Plin, ESCEX, Peru Exporta.'
+// peruanos y nombres propios.
+//
+// POR VERTICAL (fix forense jul 2026): antes esta pista era UNA sola, con vocabulario
+// de exportación ("palta, arandanos, ESCEX, Peru Exporta"), y se aplicaba a TODOS los
+// clientes. Una nota de voz de una clienta de colágeno se transcribía sesgada hacia
+// exportación — el mismo defecto que hizo que el bot le hablara de exportar. La pista
+// ahora sale del vertical del tenant; la base peruana (Yape, Plin, distritos) es común.
+const WHISPER_BASE_ES = 'Conversacion de WhatsApp en espanol peruano. Terminos comunes: Yape, Plin, RUC, DNI, soles, contraentrega, delivery.'
+
+const WHISPER_PROMPT_POR_VERTICAL = {
+  exportacion: `${WHISPER_BASE_ES} Tema: exportacion. Terminos: exportar, exportacion, palta, arandanos, cafe, maca, quinua, ESCEX, partida arancelaria, FOB, contenedor.`,
+  // Vocabulario de DOMINIO, no de marca: el nombre comercial del producto se queda
+  // en el vertical (ver el guardián anti-contaminación). Whisper solo necesita el
+  // campo semántico para no oír "exportar" donde dijeron "colágeno".
+  colageno:    `${WHISPER_BASE_ES} Tema: suplementos de colageno y belleza. Terminos: colageno, frasco, envase, piel, arrugas, articulaciones, cabello, unas, vitamina C, acido hialuronico.`
+}
+
+export function whisperPromptDe(vertical) {
+  return WHISPER_PROMPT_POR_VERTICAL[vertical] || WHISPER_BASE_ES
+}
 
 /**
  * Transcribe un audio (base64) a texto con Groq Whisper.
@@ -83,9 +101,11 @@ const WHISPER_PROMPT_ES = 'Conversacion de WhatsApp en espanol peruano sobre exp
  * @param {string} args.base64    - audio en base64 (sin prefijo data:)
  * @param {string} args.mimeType  - ej. 'audio/ogg; codecs=opus' (nota de voz de WhatsApp)
  * @param {string} args.language  - hint de idioma ('es')
+ * @param {string?} args.vertical - vertical del tenant ('exportacion'|'colageno'), para
+ *                                  la pista de vocabulario. Sin él usa la base peruana.
  * @returns {Promise<{ ok, texto?, latencyMs?, error? }>}
  */
-export async function transcribirAudio({ base64, mimeType = 'audio/ogg', language = 'es' }) {
+export async function transcribirAudio({ base64, mimeType = 'audio/ogg', language = 'es', vertical = null }) {
   const apiKey = process.env.GROQ_API_KEY
   if (!apiKey) return { ok: false, error: 'GROQ_API_KEY no seteada' }
   if (!base64) return { ok: false, error: 'sin_base64' }
@@ -104,7 +124,7 @@ export async function transcribirAudio({ base64, mimeType = 'audio/ogg', languag
     form.append('file', new Blob([buffer], { type: mimeType }), `audio.${ext}`)
     form.append('model', WHISPER_MODEL)
     if (language) form.append('language', language)
-    if (WHISPER_PROMPT_ES) form.append('prompt', WHISPER_PROMPT_ES)
+    form.append('prompt', whisperPromptDe(vertical))
     form.append('response_format', 'json')
     // NO seteamos Content-Type: fetch lo pone con el boundary correcto del multipart.
     const res = await fetch(GROQ_TRANSCRIBE_URL, {
