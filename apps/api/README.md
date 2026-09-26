@@ -8,7 +8,7 @@ Backend multitenant de un vendedor por WhatsApp. Un agente conversacional ("el c
 
 | Capa | Tecnología |
 |---|---|
-| API | Node 20+ · Fastify 4 · Prisma 5 |
+| API | Node 20+ · Fastify 5 · Prisma 5 |
 | Base de datos | PostgreSQL (Supabase). Esquema aplicado con **SQL quirúrgico**, nunca `prisma db push` (ver abajo) |
 | Transporte WhatsApp | Evolution API v2 (Baileys) por defecto · adaptador de WhatsApp Cloud API listo (apagado) |
 | Cerebro | Cadena de proveedores LLM configurable: Gemini (Vertex) → Gemini Developer API → Groq → Cerebras |
