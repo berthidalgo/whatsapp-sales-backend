@@ -13,6 +13,34 @@ import prisma from '../db/prisma.js'
 import { sendToWhatsApp } from '../whatsapp/send.js'
 import { reportError } from '../lib/observability.js'
 import { defaultChannelForTenant } from './channel-resolver.js'
+import { getVertical } from '../brain/verticals/index.js'
+
+// ── ¿El destino es un humano de verdad? (fix sep 2026) ──
+// El peritaje encontró que los avisos de BIOAYUR iban a un teléfono de RELLENO
+// (51999000001, el placeholder del seed) — y el fallback NUMERO_JOAN era el número
+// del PROPIO bot. En ambos casos el WhatsApp "salía" y nadie lo leía: 5 escalamientos
+// sin atender, uno de ellos un pedido. Mejor fallar ruidosamente que avisar al vacío.
+const RX_PLACEHOLDER = /^51(9{3}0{3}\d{3}|9{9}|0{9}|900000\d{3})$/
+export function destinoInvalido(destino, { numerosDelBot = [] } = {}) {
+  const d = String(destino || '').replace(/\D/g, '')
+  if (!d || d.length < 9) return 'sin teléfono'
+  if (RX_PLACEHOLDER.test(d)) return 'teléfono de relleno (placeholder del seed)'
+  if (numerosDelBot.map(n => String(n || '').replace(/\D/g, '')).filter(Boolean).includes(d)) {
+    return 'es el número del propio bot (el aviso se lo manda a sí mismo)'
+  }
+  return null
+}
+
+// Líneas de perfil del briefing según el vertical (ver CAMPOS_BRIEFING en cada uno).
+export function lineasPerfil(slots = {}, campos = []) {
+  const out = []
+  for (const [emoji, clave, siFalta] of campos) {
+    const v = slots?.[clave]
+    if (v != null && String(v).trim()) out.push(`${emoji}  ${String(v).trim()}`)
+    else if (siFalta) out.push(`${emoji}  ${siFalta}`)
+  }
+  return out
+}
 
 /**
  * A QUIÉN y POR DÓNDE se avisa (fix forense jul 2026).
@@ -36,27 +64,34 @@ async function destinoDeNotificacion(vendorId) {
     if (vendorId) {
       vendor = await prisma.vendor.findUnique({
         where: { id: vendorId },
-        select: { telefono: true, tenantId: true, nombre: true }
+        select: { telefono: true, whatsappNumber: true, tenantId: true, nombre: true }
       })
     }
   } catch (err) {
     console.warn(`[Notif] no se pudo leer el vendor ${vendorId}: ${err.message}`)
   }
 
-  const destino = vendor?.telefono || process.env.NUMERO_JOAN || null
+  // whatsappNumber = el WhatsApp personal del vendedor (si lo cargó); si no, su teléfono.
+  const destino = vendor?.whatsappNumber || vendor?.telefono || process.env.NUMERO_JOAN || null
 
   let instancia = null
+  let numeroCanal = null
   if (vendor?.tenantId) {
     try {
       const ch = await defaultChannelForTenant(vendor.tenantId)
       instancia = ch?.externalKey || null
+      numeroCanal = ch?.numeroDisplay || null
     } catch (err) {
       console.warn(`[Notif] no se pudo resolver canal de ${vendor.tenantId}: ${err.message}`)
     }
   }
   if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
 
-  return { destino, instancia, tenantId: vendor?.tenantId || null, vendorNombre: vendor?.nombre || null }
+  const motivoInvalido = destinoInvalido(destino, {
+    numerosDelBot: [numeroCanal, process.env.NUMERO_BOT]
+  })
+
+  return { destino, instancia, motivoInvalido, tenantId: vendor?.tenantId || null, vendorNombre: vendor?.nombre || null }
 }
 
 /**
@@ -77,24 +112,26 @@ async function destinoDeNotificacion(vendorId) {
 export async function notificarEscalamiento({
   leadId, telefono, nombre = null, slots = {}, vendorId = 1,
   motivo, ultimoMensajeLead = null, respuestaBot = null, stage = null, dataExtra = null,
-  nombrePrograma = 'Mi Primera Exportación'
+  nombrePrograma = '', verticalId = null, tenantId = null
 }) {
+  // El vendedor se resuelve ANTES de armar el texto: su tenant define el vertical
+  // (y con él qué datos le sirven al humano para cerrar o despachar).
+  const { destino, instancia, motivoInvalido, tenantId: tenantVendor, vendorNombre } = await destinoDeNotificacion(vendorId)
+  const vertical = getVertical(verticalId ? { vertical: verticalId } : null, tenantId || tenantVendor)
+
   // Formato RICO (recuperado del sistema viejo): perfil del lead + sus palabras +
   // motivo + data del comprobante si aplica. Solo se muestran las líneas con dato.
   const DIV = '━━━━━━━━━━━━━━━━━━━━━━━━━━'
   const nom = nombre || slots.nombre || null
   const lineas = [
     DIV,
-    `🟡 *LEAD PARA ATENDER* · ${nombrePrograma}`,
+    `🟡 *LEAD PARA ATENDER*${nombrePrograma ? ` · ${nombrePrograma}` : ''}`,
     DIV,
     `https://wa.me/${String(telefono).replace(/\D/g, '')}`,
     DIV,
     `👤  ${nom || '(nombre por confirmar)'}`,
-    `📦  ${slots.producto || '(producto por confirmar)'}`,
-    `🏢  ${slots.empresa || '(situación por confirmar)'}`,
-    `🌱  ${slots.experiencia || '(experiencia por confirmar)'}`
+    ...lineasPerfil(slots, vertical.CAMPOS_BRIEFING || [])
   ]
-  if (slots.pais_destino) lineas.push(`🌍  ${slots.pais_destino}`)
   lineas.push(DIV)
   lineas.push(`📌  ${motivo}`)
   if (dataExtra?.briefingLinea) lineas.push(`    ${dataExtra.briefingLinea}`)
@@ -123,14 +160,16 @@ export async function notificarEscalamiento({
 
   // ─── 1. WhatsApp al vendedor DEL TENANT, por el canal DEL TENANT ───
   let sent = false
-  const { destino, instancia, tenantId, vendorNombre } = await destinoDeNotificacion(vendorId)
+  const tenantAviso = tenantId || tenantVendor
 
-  if (destino && instancia) {
+  if (motivoInvalido) {
+    console.error(`[Notif] ❌ Lead ${leadId} escaló pero el aviso NO sale: el destino del vendedor ${vendorNombre || vendorId} (${tenantAviso}) es inválido — ${motivoInvalido}. Carga su WhatsApp personal (vendors.whatsappNumber) o el aviso nunca llega.`)
+  } else if (destino && instancia) {
     try {
       const r = await sendToWhatsApp({ telefono: destino, text: briefing, instanceName: instancia })
       sent = !!r.ok
       if (sent) {
-        console.log(`[Notif] 🔔 Escalamiento del lead ${leadId} avisado a ${vendorNombre || 'vendedor'} (${tenantId || 'tenant?'}) vía ${instancia}`)
+        console.log(`[Notif] 🔔 Escalamiento del lead ${leadId} avisado a ${vendorNombre || 'vendedor'} (${tenantAviso || 'tenant?'}) vía ${instancia}`)
       } else {
         console.error(`[Notif] WhatsApp al vendedor falló (lead ${leadId}): ${r.error}`)
       }
@@ -140,7 +179,7 @@ export async function notificarEscalamiento({
     }
   } else {
     // Ruidoso a propósito: un escalamiento que nadie recibe es un lead que se muere.
-    console.error(`[Notif] ❌ Lead ${leadId} escaló pero NO hay a quién avisar (destino=${destino ? 'ok' : 'FALTA'}, instancia=${instancia ? 'ok' : 'FALTA'}, tenant=${tenantId}). Revisá el teléfono del vendor y el Channel del tenant.`)
+    console.error(`[Notif] ❌ Lead ${leadId} escaló pero NO hay a quién avisar (destino=${destino ? 'ok' : 'FALTA'}, instancia=${instancia ? 'ok' : 'FALTA'}, tenant=${tenantAviso}). Revisá el teléfono del vendor y el Channel del tenant.`)
   }
 
   // ─── 2. Fila en crm_notifications (best-effort) ───

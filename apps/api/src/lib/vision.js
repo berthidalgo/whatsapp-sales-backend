@@ -11,6 +11,21 @@
 // Usa el MISMO modelo/location del cerebro (BRAIN_* env) → en prod es 3.5 global.
 
 import { callGemini } from './gemini.js'
+import { pasoVision } from './llm-cadena.js'
+
+// Modelo, location y thinking del primer Gemini de la cadena del cerebro (sep 2026).
+// Antes se leían BRAIN_MODEL/BRAIN_LOCATION a mano: al pasar a Gemini 3 sin fijar
+// BRAIN_LOCATION=global, la visión habría pegado a una región donde el modelo no existe.
+function configVision() {
+  const p = pasoVision()
+  return {
+    model: p.model,
+    location: p.location,
+    thinkingLevel: p.thinkingLevel,
+    thinkingBudget: p.thinkingBudget,
+    apiKey: p.provider === 'devapi' ? (process.env.GEMINI_DEV_API_KEY || null) : null
+  }
+}
 
 const VISION_SCHEMA = {
   type: 'object',
@@ -55,13 +70,11 @@ export async function leerComprobante({ base64, mimeType = 'image/jpeg', tenantI
 
   try {
     const result = await callGemini({
-      model: process.env.BRAIN_MODEL || 'gemini-2.5-flash',
-      location: process.env.BRAIN_LOCATION || null,
-      thinkingLevel: process.env.BRAIN_THINKING_LEVEL || null,
+      ...configVision(),
       systemInstruction,
       contents,
       temperature: 0.1,            // determinista: extracción, no creatividad
-      maxOutputTokens: 1200,
+      maxOutputTokens: 4000,       // incluye el thinking del modelo (ver configVision)
       responseSchema: VISION_SCHEMA,
       // `|| undefined` a propósito: en JS el default de un parámetro solo aplica con
       // undefined, NO con null. Pasar null haría que callGemini consulte
@@ -161,13 +174,11 @@ export async function describirImagen({ base64, mimeType = 'image/jpeg', tenantI
 
   try {
     const result = await callGemini({
-      model: process.env.BRAIN_MODEL || 'gemini-2.5-flash',
-      location: process.env.BRAIN_LOCATION || null,
-      thinkingLevel: process.env.BRAIN_THINKING_LEVEL || null,
+      ...configVision(),
       systemInstruction,
       contents,
       temperature: 0.1,            // determinista: describir, no crear
-      maxOutputTokens: 300,
+      maxOutputTokens: 3000,       // con 300, el thinking de 2.5-pro se comía todo → respuesta vacía
       responseSchema: IMAGEN_SCHEMA,
       tenantId: tenantId || undefined   // ver nota en leerComprobante: null ≠ undefined
     })

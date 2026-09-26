@@ -173,6 +173,18 @@ async function handleMessagesUpsert(payload, processPipelineFn, startTime) {
   const channel = await resolveChannel(instanceName)
   console.log(`[EventRouter] ${summarizeChannelResolution(channel)}`)
 
+  // ─── 5-ter-bis. INSTANCIA DESCONOCIDA = NO SE ATIENDE (fix sep 2026) ───
+  // Antes, un mensaje de una instancia que no está en channels ni en vendors caía al
+  // tenant de ACTIVE_TENANT y se procesaba igual: un payload forjado (o una instancia
+  // nueva mal configurada) terminaba creando leads y hablando con el manual de venta
+  // de OTRO cliente. Una instancia que no conocemos es un error de configuración: se
+  // registra fuerte y no se toca nada. ALLOW_TENANT_FALLBACK=true restaura el
+  // comportamiento viejo (solo para un deploy single-tenant sin channels sembrados).
+  if (channel.resolvedBy === 'active_tenant_fallback' && process.env.ALLOW_TENANT_FALLBACK !== 'true') {
+    console.error(`[EventRouter] ⛔ instancia "${instanceName || '(sin instancia)'}" desconocida → mensaje ignorado. Si es una instancia legítima, registrala en la tabla channels.`)
+    return buildResponse('instancia_desconocida_ignorada', startTime, { instance: instanceName || null })
+  }
+
   // ─── 5-quater. CORTE DE SERVICIO (jul 2026) ───
   // Si el tenant está dado de baja (suscripción cancelada/vencida o canal inactivo),
   // el bot NO responde y NO llama al LLM. Antes `estadoSuscripcion` se consultaba en

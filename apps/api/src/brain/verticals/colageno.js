@@ -357,4 +357,44 @@ export function validarMensajeExtra(mensaje) {
   return { mensaje: out, flags }
 }
 
+// ════════════════════════════════════════════════════════
+// PIEZAS DEL NEGOCIO QUE EL MOTOR CONSUME (sep 2026)
+// ════════════════════════════════════════════════════════
+
+// Si la campaña no tiene ficha y el modelo escribe un precio, se neutraliza la
+// oración con esto. Aquí no hay llamada: el cierre es por chat.
+export const FRASE_PRECIO_SIN_FICHA = ' El precio exacto de los packs te lo confirmo en un momento 😊'
+
+// Briefing al vendedor: lo que necesita para DESPACHAR, no para calificar.
+export const CAMPOS_BRIEFING = [
+  ['💜', 'dolor', '(objetivo por confirmar)'],
+  ['📝', 'detalle_dolor', null],
+  ['🧪', 'experiencia_colageno', null],
+  ['📦', 'pack', '(pack por confirmar)'],
+  ['📍', 'distrito', '(distrito por confirmar)'],
+  ['🏠', 'direccion', null]
+]
+
+/**
+ * ¿Este turno CERRÓ una venta? En colágeno el bot toma el pedido y lo escala con
+ * razon_escalamiento="PEDIDO: ..." (Momento 6). Marcarlo importa porque, sin marca,
+ * el motor de fondo trataba al lead como uno más: a las 6 h sin mensaje humano lo
+ * "rescataba" al bot y le mandaba el followup "no se te pase la promo" a alguien que
+ * YA compró.
+ *
+ * @returns {object|null} el pedido ({ pack, distrito, direccion, nombre }) o null
+ */
+export function detectarVentaCerrada({ debeEscalar, razonEscalamiento, slots = {} }) {
+  if (!debeEscalar) return null
+  const dijoPedido = /^\s*pedido\b/i.test(String(razonEscalamiento || ''))
+  const datosCompletos = !!(slots.pack && slots.distrito && slots.nombre)
+  if (!dijoPedido && !datosCompletos) return null
+  return {
+    pack: slots.pack || null,
+    distrito: slots.distrito || null,
+    direccion: slots.direccion || null,
+    nombre: slots.nombre || null
+  }
+}
+
 export const COLAGENO_VERTICAL_VERSION = 'v1_bioayur_pas_contraentrega'

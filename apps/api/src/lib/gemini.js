@@ -234,7 +234,9 @@ export function calculateCost(model, usageOrInput, outputTokens) {
   const pricing = PRICING_PER_1M_TOKENS[model]
   
   if (!pricing) {
-    console.warn(`[Gemini] No pricing defined for model: ${model}`)
+    // Solo avisa por modelos Gemini sin precio (olvido real). Los seguros Groq/Cerebras
+    // no están en esta tabla a propósito: sin esto, cada turno de un seguro ensuciaba el log.
+    if (/^gemini/.test(String(model))) console.warn(`[Gemini] No pricing defined for model: ${model}`)
     return null
   }
   

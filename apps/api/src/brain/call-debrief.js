@@ -2,10 +2,9 @@
 // MAYOR ROI: los vendedores odian escribir notas). El vendedor DICTA cómo le fue en la
 // llamada y este agente ESTRUCTURA el resultado para actualizar el CRM. Es 100% backend
 // (la inteligencia); el front solo captura la voz y muestra el preview para confirmar.
-// Usa Cerebras (gpt-oss-120b) → verificable local con CEREBRAS_API_KEY.
-import { callCerebras } from '../lib/cerebras.js'
-
-const DEBRIEF_MODEL = process.env.DEBRIEF_MODEL || 'gpt-oss-120b'
+// Usa la cadena de proveedores del cerebro (lib/llm-cadena.js) — antes llamaba a
+// Cerebras directo, sin seguro, y Cerebras pasó a exigir pago (402).
+import { completarJsonConCadena } from '../lib/llm-cadena.js'
 
 // Outcomes canónicos (el front los muestra como chips; el agente elige uno).
 export const DEBRIEF_OUTCOMES = ['interesado', 'agendado', 'pensándolo', 'pidió_info', 'no_contesta', 'no_interesado', 'pagó', 'otro']
@@ -49,11 +48,10 @@ export async function extraerDebrief({ nota, lead = {} }) {
   if (!nota || typeof nota !== 'string' || !nota.trim()) {
     return { outcome: 'otro', objecion: null, proximoPaso: null, fechaISO: null, resumen: '' }
   }
-  const r = await callCerebras({
-    model: DEBRIEF_MODEL, systemInstruction: construirPrompt(lead), contents: nota.trim(),
-    temperature: 0.2, maxOutputTokens: 600, jsonMode: true,
+  const r = await completarJsonConCadena({
+    systemInstruction: construirPrompt(lead), userPrompt: nota.trim(), temperature: 0.2
   })
   return { ...parsearDebrief(r.text), latencyMs: r.latencyMs }
 }
 
-export const CALL_DEBRIEF_VERSION = 'v1_cerebras_estructura'
+export const CALL_DEBRIEF_VERSION = 'v2_cadena_llm'

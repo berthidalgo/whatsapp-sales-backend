@@ -1,0 +1,42 @@
+# CI — corre en cada push y PR. Render despliega `main` automáticamente: esto es lo
+# único que se interpone entre un commit roto y producción.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  api:
+    name: Backend (tests + guardianes)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      # El cliente de Prisma se genera desde el schema; no necesita base de datos.
+      - run: npx prisma generate
+      - run: npm test
+
+  web:
+    name: Frontend (tipos + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run build

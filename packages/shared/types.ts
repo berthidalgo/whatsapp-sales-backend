@@ -54,6 +54,16 @@ export interface LeadDetail {
   vendedor: string | null
   label: string | null             // etiqueta MANUAL del vendedor (tag CRM, ver labels.js)
   creadoEn: string                 // ISO
+  pedido?: PedidoCerrado | null    // venta cerrada por el bot (marca _pedido), si la hay
+}
+
+// Venta que el cerebro cerró por chat (hoy: vertical colágeno, contraentrega).
+export interface PedidoCerrado {
+  pack: string | null
+  distrito: string | null
+  direccion: string | null
+  nombre: string | null
+  at: string                       // ISO — cuándo se cerró
 }
 
 // Referencia a una media adjunta (imagen/comprobante). El front la pide con auth a

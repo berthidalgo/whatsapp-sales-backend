@@ -24,6 +24,7 @@
 // API:
 //   handleWebhook(req, reply, prisma) → Fastify handler
 
+import { timingSafeEqual } from 'node:crypto'
 import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
@@ -71,6 +72,36 @@ export function instanciaDeSalida(leadInfo) {
 }
 
 // ════════════════════════════════════════════════════════
+// AUTENTICACIÓN DEL WEBHOOK (fix sep 2026)
+// ════════════════════════════════════════════════════════
+//
+// POST /webhook no validaba NADA. Cualquiera con la URL (es pública, está en el repo)
+// podía POSTear un "messages.upsert" falso y:
+//   · crear leads basura y gastar LLM en cada uno,
+//   · hacer que el bot le escribiera a CUALQUIER número desde la línea del cliente
+//     (riesgo directo de baneo del número),
+//   · mandar fromMe:true y SILENCIAR al bot en la conversación de un lead real.
+//
+// Ahora: si WEBHOOK_SECRET está configurado, el POST debe traerlo — en el header
+// x-webhook-secret (recomendado; Evolution v2 lo manda con webhook.headers), como
+// Authorization: Bearer, o como ?secret= en la URL (para versiones de Evolution que no
+// soportan headers). Comparación en tiempo constante. Sin la env var, se acepta todo
+// y se avisa en el log (compatibilidad mientras se reconfigura la instancia).
+export function secretoWebhookValido(req, secreto = process.env.WEBHOOK_SECRET) {
+  if (!secreto) return true
+  const h = req?.headers || {}
+  const bearer = String(h.authorization || '').replace(/^Bearer\s+/i, '')
+  const candidatos = [h['x-webhook-secret'], bearer, req?.query?.secret].filter(Boolean).map(String)
+  const esperado = Buffer.from(String(secreto))
+  return candidatos.some(c => {
+    const b = Buffer.from(c)
+    return b.length === esperado.length && timingSafeEqual(b, esperado)
+  })
+}
+
+let avisoSinSecreto = false
+
+// ════════════════════════════════════════════════════════
 // API PÚBLICA — handleWebhook()
 // ════════════════════════════════════════════════════════
 
@@ -83,6 +114,15 @@ export function instanciaDeSalida(leadInfo) {
 export async function handleWebhook(req, reply, prisma) {
   const payload = req.body
   const startTime = Date.now()
+
+  if (!process.env.WEBHOOK_SECRET && !avisoSinSecreto) {
+    avisoSinSecreto = true
+    console.warn('[Webhook] ⚠️ WEBHOOK_SECRET no configurado: /webhook acepta POST de cualquiera. Configúralo y ponlo en el webhook de la instancia de Evolution.')
+  }
+  if (!secretoWebhookValido(req)) {
+    console.warn(`[Webhook] 🚫 POST rechazado: secreto ausente o inválido (event=${payload?.event || '?'})`)
+    return reply.code(401).send({ ok: false, error: 'unauthorized' })
+  }
 
   // ─── Respond INMEDIATO ───
   reply.send({

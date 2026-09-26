@@ -84,3 +84,14 @@ test('precio: el guardrail sigue cableado en validarSalida', () => {
   assert.match(fuente, /precio_inventado_sin_factsheet/,
     'debe seguir marcando el caso más peligroso: cifra sin ficha que la respalde')
 })
+
+test('precio: el NEUTRALIZADOR usa la misma definición de dinero que el DETECTOR', () => {
+  // Bug sep 2026: se detectaba "cuesta 2500 soles" pero se neutralizaba con un regex solo
+  // de símbolo → la cifra inventada llegaba intacta al lead, marcada como "neutralizada".
+  assert.match(fuente, /const RX_PRECIO_UNA = new RegExp\(RX_DINERO\.source/,
+    'la oración con precio inventado debe ubicarse con RX_DINERO, no con un regex propio')
+  const neutralizador = new RegExp(RX_DINERO.source, 'i')
+  assert.ok(neutralizador.test('Te cuesta 2500 soles y lo pagas en cuotas.'), 'moneda detrás también se neutraliza')
+  assert.match(fuente, /vertical\?\.FRASE_PRECIO_SIN_FICHA/,
+    'la frase de reemplazo sale del vertical (colágeno no cierra por llamada)')
+})

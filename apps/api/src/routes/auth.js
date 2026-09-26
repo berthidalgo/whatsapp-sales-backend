@@ -5,25 +5,41 @@
 // params manipulables. Se mantiene el objeto `vendor` para compatibilidad con el CRM viejo.
 
 import { ACTIVE_TENANT } from '../lib/tenant.js'
+import { verificarPin, hashPin, esHash, validarPinNuevo, esPinDeFabrica } from '../lib/pin.js'
 
-// Rate-limit en memoria: bloquea un nombre tras MAX_INTENTOS fallidos en la ventana.
+// Rate-limit en memoria: bloquea tras MAX_INTENTOS fallidos en la ventana.
 // El PIN de 4 dígitos es brute-forceable (10k combos); esto lo frena. Render = 1
 // instancia → la memoria basta (mismo criterio que el candado de followups).
-const intentosFallidos = new Map() // nombre -> { count, until }
+//
+// FIX sep 2026: la llave era SOLO el nombre → cualquiera podía bloquear al admin de un
+// cliente mandando 5 PINs malos con su nombre (el nombre es público: lo lista
+// /auth/vendors). Ahora la llave es IP + tenant + nombre: quien bloquea es el que
+// prueba, no la víctima. Y el mapa tiene tope (antes crecía sin límite con nombres
+// inventados).
+const intentosFallidos = new Map() // llave -> { count, until }
 const MAX_INTENTOS = 5
 const BLOQUEO_MS = 10 * 60 * 1000  // 10 min
+const MAX_LLAVES = 5000
 
-function estaBloqueado(nombre) {
-  const e = intentosFallidos.get(nombre)
+export function llaveIntento(request, tenantId, nombre) {
+  return `${request?.ip || 'sin-ip'}|${tenantId}|${String(nombre).toLowerCase()}`
+}
+function estaBloqueado(llave) {
+  const e = intentosFallidos.get(llave)
   if (!e) return false
-  if (Date.now() > e.until) { intentosFallidos.delete(nombre); return false }
+  if (Date.now() > e.until) { intentosFallidos.delete(llave); return false }
   return e.count >= MAX_INTENTOS
 }
-function registrarFallo(nombre) {
-  const e = intentosFallidos.get(nombre) || { count: 0, until: 0 }
+function registrarFallo(llave) {
+  if (intentosFallidos.size >= MAX_LLAVES) {
+    const ahora = Date.now()
+    for (const [k, v] of intentosFallidos) if (ahora > v.until) intentosFallidos.delete(k)
+    if (intentosFallidos.size >= MAX_LLAVES) intentosFallidos.delete(intentosFallidos.keys().next().value)
+  }
+  const e = intentosFallidos.get(llave) || { count: 0, until: 0 }
   e.count += 1
   e.until = Date.now() + BLOQUEO_MS
-  intentosFallidos.set(nombre, e)
+  intentosFallidos.set(llave, e)
 }
 
 export async function loginVendor(request, reply, prisma) {
@@ -34,26 +50,37 @@ export async function loginVendor(request, reply, prisma) {
       return reply.status(400).send({ error: 'nombre y pin son requeridos' })
     }
 
-    if (estaBloqueado(nombre)) {
-      return reply.status(429).send({ error: 'demasiados intentos, espera unos minutos' })
-    }
-
     // ⚠️ FIX MULTITENANT: el login se acota al tenant del request. Sin esto, dos
     // clientes con un vendedor homónimo y el mismo PIN de 4 dígitos colisionaban
     // (findFirst devolvía el de OTRO tenant → sesión cruzada). El PIN es de 4
     // dígitos: con 3+ clientes las colisiones dejan de ser hipotéticas.
     const tenantId = resolveTenantForLogin(request)
+    const llave = llaveIntento(request, tenantId, nombre)
 
-    const vendor = await prisma.vendor.findFirst({
-      where: { nombre, pin: String(pin), activo: true, tenantId }
+    if (estaBloqueado(llave)) {
+      return reply.status(429).send({ error: 'demasiados intentos, espera unos minutos' })
+    }
+
+    // El PIN ya no se busca en la query (con hash no se puede): se traen los vendedores
+    // activos con ese nombre en el tenant y se verifica cada uno en tiempo constante.
+    const candidatos = await prisma.vendor.findMany({
+      where: { nombre, activo: true, tenantId }
     })
+    const vendor = candidatos.find(v => verificarPin(pin, v.pin)) || null
 
     if (!vendor) {
-      registrarFallo(nombre)
+      registrarFallo(llave)
       return reply.status(401).send({ error: 'PIN incorrecto o vendedor no encontrado' })
     }
 
-    intentosFallidos.delete(nombre) // login OK → limpia el contador
+    intentosFallidos.delete(llave) // login OK → limpia el contador
+
+    // Migración silenciosa: el PIN heredado en texto plano se guarda hasheado ya.
+    const debeCambiarPin = esPinDeFabrica(pin)
+    if (!esHash(vendor.pin)) {
+      prisma.vendor.update({ where: { id: vendor.id }, data: { pin: hashPin(pin) } })
+        .catch(err => console.error(`[Auth] no se pudo hashear el PIN del vendor ${vendor.id}:`, err.message))
+    }
 
     // JWT firmado: claims que el cliente NO puede alterar. @fastify/jwt expone reply.jwtSign.
     const token = await reply.jwtSign({
@@ -68,6 +95,7 @@ export async function loginVendor(request, reply, prisma) {
     return reply.send({
       ok: true,
       token,
+      debeCambiarPin,             // true si entró con el PIN de fábrica (0000)
       vendor: {
         ...vendorSafe,
         // Campos compatibles con el CRM existente
@@ -84,6 +112,35 @@ export async function loginVendor(request, reply, prisma) {
     })
   } catch (error) {
     console.error('[Auth] Error en login:', error.message)
+    return reply.status(500).send({ error: 'Error interno' })
+  }
+}
+
+// POST /v2/me/pin — el vendedor autenticado cambia SU PIN (sep 2026).
+// Antes no había forma: todo vendedor creado desde el CRM se quedaba con "0000" para
+// siempre. Pide el PIN actual (un token robado no basta para cambiarlo).
+export async function cambiarPin(request, reply, prisma) {
+  try {
+    const vendorId = request.user?.vendorId
+    const { actual, nuevo } = request.body || {}
+    if (!vendorId) return reply.status(401).send({ error: 'token sin vendedor' })
+    const problema = validarPinNuevo(nuevo)
+    if (problema) return reply.status(400).send({ error: problema })
+
+    const vendor = await prisma.vendor.findFirst({ where: { id: vendorId, tenantId: request.user?.tenantId, activo: true } })
+    const llave = llaveIntento(request, vendor?.tenantId, `cambio-pin:${vendorId}`)
+    if (estaBloqueado(llave)) return reply.status(429).send({ error: 'demasiados intentos, espera unos minutos' })
+    if (!vendor || !verificarPin(actual, vendor.pin)) {
+      registrarFallo(llave)
+      return reply.status(401).send({ error: 'el PIN actual no coincide' })
+    }
+    if (verificarPin(nuevo, vendor.pin)) return reply.status(400).send({ error: 'el PIN nuevo debe ser distinto al actual' })
+
+    await prisma.vendor.update({ where: { id: vendor.id }, data: { pin: hashPin(nuevo) } })
+    intentosFallidos.delete(llave)
+    return reply.send({ ok: true })
+  } catch (error) {
+    console.error('[Auth] Error en cambiarPin:', error.message)
     return reply.status(500).send({ error: 'Error interno' })
   }
 }

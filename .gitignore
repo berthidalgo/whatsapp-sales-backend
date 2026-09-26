@@ -30,3 +30,10 @@ deep/flujos/log*.txt
 cre.txt
 cre
 CRE.txt
+
+# ejemplo de variables (sí se versiona: solo nombres)
+!.env.example
+!apps/api/.env.example
+
+# Python
+__pycache__/

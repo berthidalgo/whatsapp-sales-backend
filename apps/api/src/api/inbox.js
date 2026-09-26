@@ -50,6 +50,9 @@ export function serializeLeadDetail(lead) {
     vendedor: lead.vendor?.nombre || null,
     label: st?.label ?? null,
     creadoEn: lead.createdAt,
+    // La venta cerrada vive como clave interna (_pedido) para que el bot no la liste
+    // como dato del lead; aquí se expone aparte para el vendedor.
+    pedido: (slots._pedido && typeof slots._pedido === 'object') ? slots._pedido : null,
   }
 }
 

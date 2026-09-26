@@ -7,7 +7,8 @@ import { MODES } from '../state/stage-definitions.js'
 // Selector de proveedor (Evolution|Cloud), NO el sender de Evolution directo: así la
 // respuesta del vendedor sale por el proveedor activo (default evolution = idéntico hoy;
 // en cutover a Cloud no se queda atrás como pasaba al importar webhook/sender.js).
-import { sendToWhatsApp } from '../whatsapp/send.js'
+import { sendToWhatsApp, proveedorActivo } from '../whatsapp/send.js'
+import { defaultChannelForTenant } from '../webhook/channel-resolver.js'
 import { extraerDebrief, DEBRIEF_OUTCOMES } from '../brain/call-debrief.js'
 import { esEtiquetaValida, normalizarEtiqueta } from '../../../../packages/shared/labels.js'
 
@@ -47,24 +48,35 @@ export async function replyV2(request, reply, prisma) {
     })
     if (!lead) return reply.code(404).send({ error: 'lead no encontrado' })
 
-    // 1) Persistir el mensaje del VENDEDOR.
+    // 1) ENVIAR primero, y esperar el resultado (fix sep 2026). Antes se guardaba el
+    //    mensaje, se respondía ok:true y el envío iba "fire-and-forget": el sender no
+    //    lanza, devuelve {ok:false}, así que el .catch nunca veía nada. Con Evolution
+    //    caído (o un vendedor sin instancia) el vendedor veía su mensaje "enviado" en el
+    //    Inbox y el lead jamás lo recibía. Ahora un envío fallido es un error visible.
+    //    Canal: instancia del vendedor → canal por defecto del tenant → env del deploy.
+    let instancia = lead.vendor?.instanciaEvolution || null
+    if (!instancia) instancia = (await defaultChannelForTenant(lead.tenantId))?.externalKey || null
+    if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
+    if (!instancia && proveedorActivo() !== 'cloud') {
+      return reply.code(409).send({ error: 'este cliente no tiene un canal de WhatsApp configurado' })
+    }
+    const envio = await sendToWhatsApp({ telefono: lead.telefono, text: texto, instanceName: instancia })
+    if (!envio?.ok) {
+      console.error(`[inbox-actions] reply lead ${id}: WhatsApp no salió (${envio?.error})`)
+      return reply.code(502).send({ error: 'no se pudo enviar por WhatsApp', detalle: envio?.error || null })
+    }
+
+    // 2) Persistir el mensaje del VENDEDOR (solo lo que de verdad salió).
     const msg = await prisma.message.create({
       data: { leadId: id, conversationId: lead.conversations?.[0]?.id ?? null, origen: 'VENDEDOR', texto },
     })
 
-    // 2) Tomar control: el bot se calla y se refresca el reloj de auto-resume.
+    // 3) Tomar control: el bot se calla y se refresca el reloj de auto-resume.
     await prisma.leadState.upsert({
       where: { leadId: id },
       update: { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() },
       create: { leadId: id, currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() },
     })
-
-    // 3) Enviar por WhatsApp (si el vendedor tiene instancia). Fire-and-forget.
-    const instancia = lead.vendor?.instanciaEvolution
-    if (instancia) {
-      sendToWhatsApp({ telefono: lead.telefono, text: texto, instanceName: instancia })
-        .catch(e => console.error('[inbox-actions] reply WhatsApp:', e.message))
-    }
 
     return reply.send({ ok: true, evento: { kind: 'message', origen: 'VENDEDOR', texto, at: msg.createdAt } })
   } catch (error) {

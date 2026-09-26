@@ -23,17 +23,15 @@ import {
   getCampaigns, getCampaign, createCampaign, updateCampaign, deleteCampaign,
   saveSteps, addTrigger, deleteTrigger, testTrigger, activarCampaign
 } from './routes/campaigns.js'
-import { loginVendor, getVendorNames } from './routes/auth.js'
+import { loginVendor, getVendorNames, cambiarPin } from './routes/auth.js'
 
 // ── Hito 1 (Fase Frontend): contrato v2 del Inbox + guard JWT ──
 import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
 import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2 } from './api/inbox-actions.js'
 import { listCampaignsV2, getAgentConfigV2, saveAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
-import { verifyJwt, scopeWhere } from './lib/auth-guard.js'
+import { verifyJwt, requireAdmin, scopeWhere } from './lib/auth-guard.js'
 
-import { geminiHealthCheck } from './lib/gemini.js'
-import { callCerebras } from './lib/cerebras.js'
-import { callGroq } from './lib/groq.js'
+import { verificarCadena, resumenSalud, estadoDetallado, construirCadena, describirCadena } from './lib/llm-cadena.js'
 
 // ── Sprint 3: Cerebro unificado (banco de pruebas aislado) ──
 import { pensarYResponder, summarizeBrainResult } from './brain/agent-brain.js'
@@ -97,10 +95,16 @@ if (!JWT_SECRET) {
 }
 
 // ── Health ───────────────────────────────────────────────────
+// `commit`: qué versión está desplegada (Render expone RENDER_GIT_COMMIT) — antes no había
+// forma de saberlo sin entrar al panel. `cerebro`: resumen de la cadena de proveedores
+// LLM (solo conteos; el detalle con errores va en /debug/brain-health, con JWT de ADMIN).
+// Así cualquier monitor ve si el bot tiene con qué pensar, no solo si Node está vivo.
 app.get('/health', async () => ({
   status: 'ok',
   service: 'Hidata — WhatsApp Sales ERP',
-  version: '7.0.0',
+  version: '7.1.0',
+  commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+  cerebro: resumenSalud(),
   timestamp: new Date().toISOString()
 }))
 
@@ -117,96 +121,27 @@ app.get('/health', async () => ({
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Debug — Gemini connection ────────────────────────────────
-app.get('/debug/gemini-check', { preHandler: verifyJwt }, async (req, reply) => {
-  const result = await geminiHealthCheck()
-  return reply.send(result)
-})
+// Compat: el viejo chequeo de Gemini ahora es el de la cadena completa.
+app.get('/debug/gemini-check', { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => brainHealthHandler(req, reply))
 
-// ── Debug — Brain Health: ¿RESPONDEN los 3 seguros del cerebro? ──────────────
-// Un solo endpoint que hace PING a los tres proveedores LLM del cerebro y dice si
-// cada uno responde: PRIMARIO (Gemini vía Vertex) + los dos SEGUROS de fallback
-// (Cerebras gpt-oss-120b, Groq llama-3.3-70b). Sirve para verificar de un vistazo
-// —p.ej. tras un aviso de que un proveedor se actualiza/deprecó un modelo— si el
-// bot sigue teniendo con qué responder. Ping mínimo (temp 0, ~16 tokens) → costo casi nulo.
+// ── Debug — Brain Health: ¿RESPONDE cada paso de la cadena del cerebro? ─────────
+// Pinguea TODOS los pasos de la cadena (primario + seguros, ver lib/llm-cadena.js) y
+// devuelve además el último estado REAL de cada uno: un 413 de un plan gratis que no
+// aguanta el prompt del cerebro no lo revela un ping, lo revela el primer turno real.
 //
-// GET o POST /debug/brain-health            → prueba los 3
-// ...?provider=gemini|cerebras|groq         → prueba solo uno
-//
-// overall: 'ok' = el primario responde · 'degraded' = primario caído pero hay
-// fallback vivo (el bot NO queda mudo) · 'down' = ningún proveedor responde.
-//
-// ⚠️ El ping es de TEXTO PLANO (sin modo JSON) a propósito: gpt-oss-120b de Cerebras
-// es un modelo de RAZONAMIENTO y en modo JSON (response_format) consume cientos de
-// tokens "pensando" antes de emitir contenido → con topes bajos devuelve vacío (falso
-// negativo). Este health check responde "¿el proveedor está VIVO y responde texto?",
-// NO "¿el fallback del cerebro produce el JSON perfecto?" (eso es un smoke test aparte).
+// overall: 'ok' = el primario responde · 'degraded' = primario caído pero hay seguro
+// vivo (el bot NO queda mudo) · 'down' = ningún proveedor responde.
+// El ping es de TEXTO PLANO (sin modo JSON) a propósito: mide "¿vivo y autenticado?".
 async function brainHealthHandler(req, reply) {
-  const soloProvider = String(req.query?.provider || req.body?.provider || '').toLowerCase()
-  const PING = 'Responde solo con la palabra: OK'
-  const primary = (process.env.BRAIN_PROVIDER || 'gemini').toLowerCase()
-
-  // Ping a Gemini (reusa el health check real vía Vertex).
-  async function pingGemini() {
-    try {
-      const r = await geminiHealthCheck()
-      return {
-        provider: 'gemini', role: primary === 'gemini' ? 'primario' : 'seguro',
-        configured: true, ok: r.ok === true, model: r.model || null,
-        latency_ms: r.latency_ms ?? null, sample: r.response || null, error: r.error || null,
-      }
-    } catch (e) {
-      return { provider: 'gemini', role: primary === 'gemini' ? 'primario' : 'seguro', configured: true, ok: false, error: e.message }
-    }
-  }
-
-  // Ping genérico a un proveedor OpenAI-compatible (Cerebras / Groq).
-  async function pingOpenAICompat({ provider, envKey, model, callFn }) {
-    const role = primary === provider ? 'primario' : 'seguro'
-    if (!process.env[envKey]) {
-      return { provider, role, configured: false, ok: false, model, error: `${envKey} no seteada en el entorno` }
-    }
-    const t = Date.now()
-    try {
-      // jsonMode:false + tope holgado → el ping mide "¿responde texto?" sin que el
-      // reasoning de gpt-oss (Cerebras) se coma el presupuesto y devuelva vacío.
-      const r = await callFn({ model, systemInstruction: null, contents: PING, temperature: 0, maxOutputTokens: 256, jsonMode: false })
-      const responde = !!(r && typeof r.text === 'string' && r.text.trim())
-      return {
-        provider, role, configured: true, ok: responde, model,
-        latency_ms: r?.latencyMs ?? (Date.now() - t),
-        sample: (r?.text || '').trim().slice(0, 60),
-        error: responde ? null : 'respuesta vacía',
-      }
-    } catch (e) {
-      return { provider, role, configured: true, ok: false, model, latency_ms: Date.now() - t, error: e.message }
-    }
-  }
-
-  const jobs = {
-    gemini: pingGemini,
-    cerebras: () => pingOpenAICompat({ provider: 'cerebras', envKey: 'CEREBRAS_API_KEY', model: 'gpt-oss-120b', callFn: callCerebras }),
-    groq: () => pingOpenAICompat({ provider: 'groq', envKey: 'GROQ_API_KEY', model: 'llama-3.3-70b-versatile', callFn: callGroq }),
-  }
-
-  const aCorrer = (soloProvider && jobs[soloProvider]) ? [soloProvider] : ['gemini', 'cerebras', 'groq']
-  const resultados = await Promise.all(aCorrer.map(p => jobs[p]()))
-  const byProvider = Object.fromEntries(resultados.map(r => [r.provider, r]))
-
-  // Overall: el bot vive si el primario responde; si el primario cae pero un
-  // fallback responde, está degradado pero NO mudo; si nada responde, está caído.
-  const primarioOk = byProvider[primary]?.ok === true
-  const algunoOk = resultados.some(r => r.ok === true)
-  const overall = primarioOk ? 'ok' : (algunoOk ? 'degraded' : 'down')
-
-  return reply.code(overall === 'down' ? 503 : 200).send({
-    overall,
-    primary,
-    checked_at: new Date().toISOString(),
-    providers: byProvider,
+  const r = await verificarCadena()
+  return reply.code(r.overall === 'down' ? 503 : 200).send({
+    ...r,
+    cadena: describirCadena(construirCadena()),
+    estado: estadoDetallado()
   })
 }
-app.get('/debug/brain-health', { preHandler: verifyJwt }, brainHealthHandler)
-app.post('/debug/brain-health', { preHandler: verifyJwt }, brainHealthHandler)
+app.get('/debug/brain-health', { preHandler: [verifyJwt, requireAdmin] }, brainHealthHandler)
+app.post('/debug/brain-health', { preHandler: [verifyJwt, requireAdmin] }, brainHealthHandler)
 
 // ── Debug — Brain test (Sprint 3) — CEREBRO UNIFICADO AISLADO ────
 // Prueba el cerebro nuevo SIN tocar el pipeline real ni ningún lead.
@@ -220,7 +155,7 @@ app.post('/debug/brain-health', { preHandler: verifyJwt }, brainHealthHandler)
 //     "campaignSlug": "MPX"   (carga el factSheet de esa campaña desde la BD)
 //   }
 // ════════════════════════════════════════════════════════════════
-app.post('/debug/brain-test', { preHandler: verifyJwt }, async (req, reply) => {
+app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => {
   const startTime = Date.now()
   try {
     const {
@@ -251,8 +186,10 @@ app.post('/debug/brain-test', { preHandler: verifyJwt }, async (req, reply) => {
     // Cargar el config de la campaña desde la BD (o usar el que pasen directo)
     let config = campaignConfig
     if (!config && campaignSlug) {
+      // Tenant del TOKEN: sin esto el admin de un cliente cargaba la ficha de otro
+      // (los slugs son únicos POR tenant, no globales).
       const campaign = await prisma.campaign.findFirst({
-        where: { slug: campaignSlug },
+        where: { slug: campaignSlug, tenantId: req.user?.tenantId },
         select: { config: true, nombre: true, slug: true }
       })
       config = campaign?.config || null
@@ -265,7 +202,7 @@ app.post('/debug/brain-test', { preHandler: verifyJwt }, async (req, reply) => {
     const result = await pensarYResponder({
       mensajeActual,
       historial,
-      estadoLead,
+      estadoLead: { ...estadoLead, tenantId: req.user?.tenantId },
       campaignConfig: config,
       vendorNombre: estadoLead?.vendorNombre || 'Cristina'
     })
@@ -307,7 +244,7 @@ app.post('/debug/brain-test', { preHandler: verifyJwt }, async (req, reply) => {
 // Body (opcional): { "campaignSlug": "MPX", "idFilter": ["C001","C006"] }
 // Sin body corre los 26. Tarda ~1-2 min (chunks de 3).
 // ════════════════════════════════════════════════════════════════
-app.post('/debug/brain-evals', { preHandler: verifyJwt }, async (req, reply) => {
+app.post('/debug/brain-evals', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => {
   const startTime = Date.now()
   const {
     campaignSlug = 'MPX',
@@ -326,7 +263,7 @@ app.post('/debug/brain-evals', { preHandler: verifyJwt }, async (req, reply) => 
   try {
     let campaignConfig = null
     const campaign = await prisma.campaign.findFirst({
-      where: { slug: campaignSlug },
+      where: { slug: campaignSlug, tenantId: req.user?.tenantId },
       select: { config: true, slug: true }
     })
     campaignConfig = campaign?.config || null
@@ -449,18 +386,21 @@ async function correrUnCasoEval(caso, campaignConfig, banco = {}) {
 // Body: { overrides?, convFilter?:[ids], maxTurns?:int, chunkSize?, pauseMs? }
 //   overrides: { model?, useDevApi?, thinkingLevel?, location?, sinSchema? }
 // ════════════════════════════════════════════════════════════════
-app.post('/debug/brain-replay', { preHandler: verifyJwt }, async (req, reply) => {
+app.post('/debug/brain-replay', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => {
   const startTime = Date.now()
   const { overrides = null, convFilter = null, maxTurns = 6, chunkSize = 2, pauseMs = 1500, campaignSlug = 'MPX' } = req.body || {}
 
   try {
-    const campaign = await prisma.campaign.findFirst({ where: { slug: campaignSlug }, select: { config: true } })
+    const campaign = await prisma.campaign.findFirst({ where: { slug: campaignSlug, tenantId: req.user?.tenantId }, select: { config: true } })
     const campaignConfig = campaign?.config || null
     const fichaBloque = flattenFactSheet(campaignConfig)?.factSheetBloque || null
 
-    // Cargar conversaciones archivadas (raw SQL: la tabla no está en el schema Prisma)
+    // Conversaciones archivadas (raw SQL: la tabla no está en el schema Prisma).
+    // SOLO las del tenant del token: antes cualquier JWT leía las conversaciones reales
+    // (PII) archivadas de TODOS los clientes.
     let convs = await prisma.$queryRawUnsafe(
-      `SELECT id, telefono, motivo, mensajes, nombre_detectado FROM conversaciones_archivadas ORDER BY id`
+      `SELECT id, telefono, motivo, mensajes, nombre_detectado FROM conversaciones_archivadas WHERE tenant_id = $1 ORDER BY id`,
+      String(req.user?.tenantId || '')
     )
     if (convFilter && Array.isArray(convFilter)) convs = convs.filter(c => convFilter.includes(Number(c.id)))
 
@@ -704,24 +644,26 @@ app.get('/leads/:id/mensajes',   { preHandler: verifyJwt }, async (req, reply) =
 app.get('/reportes',             { preHandler: verifyJwt }, async (req, reply) => getReportes(req, reply, prisma))
 
 // ── Config ───────────────────────────────────────────────────
+// Escrituras de config y campañas: solo ADMIN/SUPERVISOR (sep 2026). Un VENDEDOR con
+// token podía crearse un usuario ADMIN o borrar la campaña con la ficha de precios.
 app.get('/config/bot',  { preHandler: verifyJwt }, async (req, reply) => getBotConfig(req, reply, prisma))
-app.put('/config/bot',  { preHandler: verifyJwt }, async (req, reply) => updateBotConfig(req, reply, prisma))
+app.put('/config/bot',  { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => updateBotConfig(req, reply, prisma))
 app.get('/config/vendedores',                { preHandler: verifyJwt }, async (req, reply) => getVendedores(req, reply, prisma))
-app.post('/config/vendedores',               { preHandler: verifyJwt }, async (req, reply) => createVendedor(req, reply, prisma))
-app.put('/config/vendedores/:id',            { preHandler: verifyJwt }, async (req, reply) => updateVendedor(req, reply, prisma))
-app.put('/config/vendedores/:id/desactivar', { preHandler: verifyJwt }, async (req, reply) => desactivarVendedor(req, reply, prisma))
+app.post('/config/vendedores',               { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => createVendedor(req, reply, prisma))
+app.put('/config/vendedores/:id',            { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => updateVendedor(req, reply, prisma))
+app.put('/config/vendedores/:id/desactivar', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => desactivarVendedor(req, reply, prisma))
 
 // ── Campaigns ────────────────────────────────────────────────
 app.get('/campaigns',                      { preHandler: verifyJwt }, async (req, reply) => getCampaigns(req, reply, prisma))
 app.get('/campaigns/:id',                  { preHandler: verifyJwt }, async (req, reply) => getCampaign(req, reply, prisma))
-app.post('/campaigns',                     { preHandler: verifyJwt }, async (req, reply) => createCampaign(req, reply, prisma))
-app.put('/campaigns/:id',                  { preHandler: verifyJwt }, async (req, reply) => updateCampaign(req, reply, prisma))
-app.delete('/campaigns/:id',               { preHandler: verifyJwt }, async (req, reply) => deleteCampaign(req, reply, prisma))
-app.put('/campaigns/:id/steps',            { preHandler: verifyJwt }, async (req, reply) => saveSteps(req, reply, prisma))
-app.post('/campaigns/:id/triggers',        { preHandler: verifyJwt }, async (req, reply) => addTrigger(req, reply, prisma))
-app.delete('/campaigns/:id/triggers/:tid', { preHandler: verifyJwt }, async (req, reply) => deleteTrigger(req, reply, prisma))
+app.post('/campaigns',                     { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => createCampaign(req, reply, prisma))
+app.put('/campaigns/:id',                  { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => updateCampaign(req, reply, prisma))
+app.delete('/campaigns/:id',               { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => deleteCampaign(req, reply, prisma))
+app.put('/campaigns/:id/steps',            { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => saveSteps(req, reply, prisma))
+app.post('/campaigns/:id/triggers',        { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => addTrigger(req, reply, prisma))
+app.delete('/campaigns/:id/triggers/:tid', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => deleteTrigger(req, reply, prisma))
 app.post('/campaigns/test-trigger',        { preHandler: verifyJwt }, async (req, reply) => testTrigger(req, reply, prisma))
-app.patch('/campaigns/:id/activar',        { preHandler: verifyJwt }, async (req, reply) => activarCampaign(req, reply, prisma))
+app.patch('/campaigns/:id/activar',        { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => activarCampaign(req, reply, prisma))
 
 // ── Vendors ──────────────────────────────────────────────────
 // ⚠️ FIX MULTITENANT (jul 2026): este endpoint devolvía SIN AUTENTICACIÓN los
@@ -759,6 +701,7 @@ app.get('/v2/agent-config',             { preHandler: verifyJwt }, (req, reply) 
 app.put('/v2/agent-config',             { preHandler: verifyJwt }, (req, reply) => saveAgentConfigV2(req, reply, prisma))
 app.post('/v2/flow/copilot',            { preHandler: verifyJwt }, (req, reply) => copilotV2(req, reply, prisma))
 app.post('/v2/transcribe',            { preHandler: verifyJwt }, (req, reply) => transcribeV2(req, reply))
+app.post('/v2/me/pin',                { preHandler: verifyJwt }, (req, reply) => cambiarPin(req, reply, prisma))
 
 
 
@@ -770,6 +713,15 @@ try {
   await prisma.$connect()
   console.log('✅ PostgreSQL conectado')
   await app.listen({ port: PORT, host: HOST })
+
+  // Chequeo de la cadena de proveedores del cerebro al ARRANCAR (sep 2026). Queda en
+  // los logs de Render y alimenta /health. Sin esto un seguro muerto se descubría recién
+  // el día que el primario fallaba (así estuvo el bot semanas, sin ningún seguro vivo).
+  // No bloquea: el webhook ya atiende mientras corre.
+  console.log(`[LLM] cadena del cerebro: ${describirCadena(construirCadena())}`)
+  verificarCadena()
+    .then(r => console.log(`[LLM] salud al arrancar: ${r.overall.toUpperCase()} (${r.vivos}/${r.total} vivos) · ${r.pasos.map(p => `${p.id} ${p.ok ? 'OK' : 'FALLA ' + p.error}`).join(' · ')}`))
+    .catch(err => console.error('[LLM] no se pudo verificar la cadena al arrancar:', err.message))
   console.log(`
 ╔════════════════════════════════════════╗
 ║   Hidata — WhatsApp Sales ERP v20      ║

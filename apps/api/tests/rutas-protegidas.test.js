@@ -71,12 +71,28 @@ test('sanity: se detectaron las rutas del server', () => {
 test('ninguna ruta de datos queda sin verifyJwt', () => {
   const desprotegidas = RUTAS
     .filter(r => !PUBLICAS.has(r.clave))
-    .filter(r => !/preHandler:\s*verifyJwt/.test(r.opciones))
+    .filter(r => !/preHandler:\s*\[?\s*verifyJwt/.test(r.opciones))
     .map(r => r.clave)
 
   assert.deepEqual(desprotegidas, [],
     'Estas rutas están ABIERTAS a internet. Añade `{ preHandler: verifyJwt }` o, si de ' +
     'verdad deben ser públicas, agrégalas a PUBLICAS con su motivo.')
+})
+
+test('las rutas de ADMINISTRACIÓN exigen rol ADMIN/SUPERVISOR (no solo un token)', () => {
+  // Sep 2026: con solo verifyJwt, un VENDEDOR podía crearse un usuario ADMIN, borrar la
+  // campaña que tiene la ficha de precios o correr el banco de evals contra el LLM.
+  const esAdmin = (r) =>
+    /^(GET|POST) \/debug\//.test(r.clave) ||
+    /^(POST|PUT|DELETE|PATCH) \/config\//.test(r.clave) ||
+    (/^(POST|PUT|DELETE|PATCH) \/campaigns/.test(r.clave) && r.clave !== 'POST /campaigns/test-trigger')
+  const deAdmin = RUTAS.filter(esAdmin)
+  assert.ok(deAdmin.length >= 15, `sanity: esperaba >=15 rutas de administración, hay ${deAdmin.length}`)
+  const sinRol = deAdmin
+    .filter(r => !/preHandler:\s*\[\s*verifyJwt\s*,\s*requireAdmin\s*\]/.test(r.opciones))
+    .map(r => r.clave)
+  assert.deepEqual(sinRol, [],
+    'Estas rutas de administración aceptan el token de cualquier vendedor. Usa preHandler: [verifyJwt, requireAdmin].')
 })
 
 test('la allowlist pública no creció sin querer', () => {

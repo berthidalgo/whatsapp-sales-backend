@@ -14,7 +14,9 @@ export async function callCerebras({
   contents,
   temperature = 0.7,
   maxOutputTokens = 1024,
-  jsonMode = true
+  jsonMode = true,
+  // Ver groq.js: gpt-oss razona y sin tope devuelve JSON vacío. null = no se envía.
+  reasoningEffort = null
 }) {
   const startTime = Date.now()
   const apiKey = process.env.CEREBRAS_API_KEY
@@ -26,6 +28,7 @@ export async function callCerebras({
 
   const body = { model, messages, temperature, max_tokens: maxOutputTokens }
   if (jsonMode) body.response_format = { type: 'json_object' }
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort
 
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)

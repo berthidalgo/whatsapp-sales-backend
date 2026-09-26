@@ -401,4 +401,24 @@ export function validarMensajeExtra(mensaje) {
   return { mensaje, flags: [] }
 }
 
+// ════════════════════════════════════════════════════════
+// PIEZAS DEL NEGOCIO QUE EL MOTOR CONSUME (sep 2026)
+// Antes vivían cableadas en el motor con el copy de exportación y se filtraban a
+// cualquier cliente (el briefing del vendedor de colágeno decía "📦 producto por
+// confirmar / 🏢 situación / 🌱 experiencia"). Ahora cada vertical declara las suyas.
+// ════════════════════════════════════════════════════════
+
+// Reemplazo de la oración con un precio inventado cuando la campaña no tiene ficha.
+// Byte-idéntico al histórico: aquí el cierre SÍ es en una llamada.
+export const FRASE_PRECIO_SIN_FICHA = ' Sobre la inversión, eso lo vemos juntos en la llamada según tu caso.'
+
+// Líneas del briefing al vendedor: [emoji, slot, texto si falta (null = omitir la línea)].
+// Mismo orden y textos que el briefing histórico (cero cambio para Perú Exporta).
+export const CAMPOS_BRIEFING = [
+  ['📦', 'producto', '(producto por confirmar)'],
+  ['🏢', 'empresa', '(situación por confirmar)'],
+  ['🌱', 'experiencia', '(experiencia por confirmar)'],
+  ['🌍', 'pais_destino', null]
+]
+
 export const EXPORTACION_VERTICAL_VERSION = 'v1_extraido_de_agent_brain_v6_8'

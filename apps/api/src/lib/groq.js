@@ -20,7 +20,11 @@ export async function callGroq({
   contents,
   temperature = 0.7,
   maxOutputTokens = 2048,
-  jsonMode = true
+  jsonMode = true,
+  // gpt-oss es un modelo de RAZONAMIENTO: sin tope de esfuerzo gasta el presupuesto de
+  // tokens pensando y en modo JSON devuelve vacío o basura (visto en jul 2026 con
+  // Cerebras). 'low' deja espacio para la respuesta. null = el campo no se envía.
+  reasoningEffort = null
 }) {
   const startTime = Date.now()
   const apiKey = process.env.GROQ_API_KEY
@@ -32,6 +36,7 @@ export async function callGroq({
 
   const body = { model, messages, temperature, max_tokens: maxOutputTokens }
   if (jsonMode) body.response_format = { type: 'json_object' }
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort
 
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)

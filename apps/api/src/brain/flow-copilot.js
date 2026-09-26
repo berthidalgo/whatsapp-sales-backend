@@ -1,10 +1,7 @@
 // src/brain/flow-copilot.js — Copiloto Consultor (Hito Creador de Agentes).
 // Un meta-agente que ayuda al vendedor a diseñar su bot CONVERSANDO.
 // Le hace preguntas sobre su negocio (Design Thinking) y auto-completa el AgentConfig.
-import { callCerebras } from '../lib/cerebras.js'
-import { callGroq } from '../lib/groq.js'
-
-const COPILOT_MODEL = process.env.FLOW_COPILOT_MODEL || 'gpt-oss-120b' // o gemini, claude, etc.
+import { completarJsonConCadena } from '../lib/llm-cadena.js'
 
 // ── Helpers PUROS (testables sin LLM) ───────────────────────────────────────
 
@@ -92,19 +89,9 @@ export async function copilotoFlujo({ configActual, campaignNombre = '', histori
     `GERENTE: ${mensaje.trim()}`,
   ].join('\n')
 
-  let r
-  try {
-    r = await callCerebras({
-      model: COPILOT_MODEL, systemInstruction: sys, contents: conv,
-      temperature: 0.5, maxOutputTokens: 2000, jsonMode: true,
-    })
-  } catch (err) {
-    console.warn('[flow-copilot] Cerebras saturado o caído, haciendo fallback a Groq:', err.message)
-    r = await callGroq({
-      model: 'llama-3.3-70b-versatile', systemInstruction: sys, contents: conv,
-      temperature: 0.5, maxOutputTokens: 2000, jsonMode: true,
-    })
-  }
+  // Misma cadena de proveedores que el cerebro (sep 2026): antes Cerebras directo con
+  // fallback a llama-3.3-70b de Groq — los DOS estaban muertos (402 y modelo retirado).
+  const r = await completarJsonConCadena({ systemInstruction: sys, userPrompt: conv, temperature: 0.5 })
   const parsed = parsearCopiloto(r.text)
   return {
     respuesta: parsed.respuesta || 'Vale, socio. Sigamos armando esta máquina de ventas.',

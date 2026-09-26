@@ -1,6 +1,6 @@
 # Hidata — WhatsApp Sales OS (backend)
 
-Sales Operating System WhatsApp-native para edtech LATAM. Un agente conversacional ("el cerebro") califica leads con un flujo consultivo de 6 momentos y agenda la llamada donde el humano cierra.
+Backend multitenant de un vendedor por WhatsApp. Un agente conversacional ("el cerebro") atiende a cada lead con el manual de venta de su negocio (**vertical**): califica, presenta, maneja objeciones y cierra. Según el vertical, cierra agendando una llamada con un humano (exportación) o tomando el pedido por chat con contraentrega (colágeno).
 
 ---
 
@@ -8,98 +8,91 @@ Sales Operating System WhatsApp-native para edtech LATAM. Un agente conversacion
 
 | Capa | Tecnología |
 |---|---|
-| Backend | Node.js · Fastify · Prisma |
-| Base de datos | PostgreSQL (Supabase) |
-| Transporte WhatsApp | Evolution API v2.3.7 (Baileys) |
-| IA (cerebro) | Vertex AI — Gemini 2.5 Pro · fallback Cerebras (gpt-oss-120b) |
-| Audio entrante | Whisper (Groq) |
-| Observabilidad | Sentry (errores + scrubber de PII) |
-| Hosting | Render (auto-deploy desde `main`) |
+| API | Node 20+ · Fastify 4 · Prisma 5 |
+| Base de datos | PostgreSQL (Supabase). Esquema aplicado con **SQL quirúrgico**, nunca `prisma db push` (ver abajo) |
+| Transporte WhatsApp | Evolution API v2 (Baileys) por defecto · adaptador de WhatsApp Cloud API listo (apagado) |
+| Cerebro | Cadena de proveedores LLM configurable: Gemini (Vertex) → Gemini Developer API → Groq → Cerebras |
+| Audio entrante | Whisper (Groq) · Imágenes/comprobantes: Gemini multimodal |
+| Observabilidad | Sentry (con scrubber de PII) · `turn_trace` (una fila por turno del cerebro) · `/health` |
+| Hosting | Render (auto-deploy desde `main`, root `apps/api`) |
 
 ---
 
-## Arquitectura — el cerebro
-
-El núcleo es un **único cerebro LLM** (`src/brain/`) que reemplaza el pipeline determinista anterior. Cada mensaje recorre:
+## Recorrido de un mensaje
 
 ```
-1. POST /webhook              → handler
-2. Idempotency check          → idempotency.js
-3. Event router               → event-router.js  (audio → Whisper; imagen → visión)
-4. Debounce                   → debounce.js      (agrupa ráfagas de mensajes)
-5. Lead resolver              → lead-resolver.js  (upsert atómico)
-6. Cerebro                    → brain-pipeline.js → agent-brain.js
-                                 (historial + estado + factSheet + memoria episódica
-                                  → LLM → guardrails deterministas → persistir + enviar)
-7. Sender                     → Evolution API → WhatsApp
+Evolution ─POST /webhook─▶ handler ── secreto (WEBHOOK_SECRET) + idempotencia
+                             │
+                             ▼
+                        event-router ── canal → TENANT (channels) · corte por suscripción
+                             │           audio → Whisper · foto → descripción (Gemini)
+                             ▼
+                        lead-resolver ── upsert por (tenant, teléfono) · campaña por trigger
+                             │
+                             ▼
+                         debounce 6 s ── agrupa ráfagas · lock por lead · kill-stale
+                             │
+                             ▼
+                       brain-pipeline ── compuerta de modo (HUMAN_ACTIVE/PAUSED = silencio)
+                             │            historial + estado + memoria episódica + ficha
+                             ▼
+                        agent-brain ─── vertical (prompt + schema) → CADENA LLM → guardrails
+                             │            (precio fantasma, "curar", re-saludo, vocativo…)
+                             ▼
+               estado + turn_trace + aviso al vendedor si escala + marca de venta cerrada
+                             │
+                             ▼
+                          sender ─────▶ Evolution ─▶ WhatsApp
 ```
 
-Resiliencia: si el LLM primario falla, hay **failover automático** al proveedor secundario (nunca queda mudo). Si un humano toma la conversación, el cerebro entra en silencio (compuerta de modo) y reanuda solo si la conversación queda abandonada.
+Motores de fondo (`/cron/followup`, cada ~5 min): rescate de escalados sin atender → followups 2 h / 24 h → recordatorios de compromisos. Excluyen a quien ya compró (marca `_pedido`).
 
 ---
 
-## Estado del lead
+## El cerebro
 
-**Modos** (quién maneja la conversación): `AUTO_CONSULTIVO` · `HUMAN_ACTIVE` · `PAUSED`
-
-**Stages** (momento del flujo): `first_contact` → `discovery` → `qualifying_empresa` → `presenting` → `call_scheduling` → `call_confirmed` → `post_close`
-
-**Slots:** nombre, producto, empresa, experiencia, país destino, fecha/hora, monto.
+- **Verticales** (`src/brain/verticals/`): el manual de venta de cada negocio. Componen las reglas comunes de `nucleo-comun.js` y declaran lo propio: momentos, schema de slots, guardrails del rubro, briefing al vendedor y cómo reconocer una venta cerrada. `tests/contrato-vertical.test.js` falla si un vertical pierde una regla común.
+- **Cadena de proveedores** (`src/lib/llm-cadena.js`): el primario sale de `BRAIN_PROVIDER`/`BRAIN_MODEL`; los seguros, de `BRAIN_FALLBACKS` o, si está vacío, de las llaves presentes. Los errores de configuración o de plan (401/402/403/404/413) no se reintentan y apartan ese proveedor 10 min; los transitorios (429/5xx/JSON roto) sí se reintentan. El estado de cada paso se ve en `/health` (resumen) y `/debug/brain-health` (detalle).
+- **Trampas conocidas**, resueltas en `normalizarPaso`: Gemini 3 solo existe en la location `global` y usa `thinkingLevel`; Gemini 2.x usa `thinkingBudget`; `gpt-oss` necesita `reasoning_effort` o devuelve JSON vacío.
 
 ---
 
 ## Variables de entorno
 
-Se configuran en el hosting (nombres, sin valores):
-
-```
-DATABASE_URL · DIRECT_URL
-BRAIN_MODEL · BRAIN_PROVIDER            # selección de modelo/proveedor del cerebro
-GOOGLE_APPLICATION_CREDENTIALS · GOOGLE_CLOUD_PROJECT · GOOGLE_CLOUD_LOCATION
-EVOLUTION_API_URL · EVOLUTION_API_KEY · EVOLUTION_INSTANCE_NAME
-GROQ_API_KEY · CEREBRAS_API_KEY         # audio (Whisper) + fallback LLM
-SENTRY_DSN                              # observabilidad (inerte si ausente)
-CRON_SECRET                             # protege /cron/followup
-NUMERO_JOAN                             # notificación al vendedor
-WHATSAPP_PROVIDER                       # evolution (default) | cloud
-```
+Ver [`.env.example`](.env.example). Las imprescindibles en producción: `DATABASE_URL`, `JWT_SECRET`, `WEBHOOK_SECRET`, `CRON_SECRET`, `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`, credenciales de Vertex y al menos **un seguro LLM con plan que aguante el prompt** (~10K tokens de entrada por turno).
 
 ---
 
 ## Endpoints
 
-```
-POST /webhook            recibe eventos de Evolution
-GET  /health             health check
-GET/POST /cron/followup  motor de followups (requiere ?secret=)
-```
+| Ruta | Auth |
+|---|---|
+| `GET /health` | pública — versión, commit y estado del cerebro |
+| `POST /webhook` | `WEBHOOK_SECRET` (header `x-webhook-secret`, `Bearer` o `?secret=`) |
+| `POST /webhook/cloud` | firma HMAC de Meta (solo si `WHATSAPP_PROVIDER=cloud`) |
+| `GET/POST /cron/followup` | `CRON_SECRET` |
+| `GET /auth/vendors`, `POST /auth/login` | públicas (login por PIN, hasheado con scrypt) |
+| `/v2/*` (Inbox, agente, copiloto, debrief, `POST /v2/me/pin`) | JWT, acotado al tenant y al vendedor |
+| Escrituras de `/config/*` y `/campaigns/*`, todo `/debug/*` | JWT + rol ADMIN/SUPERVISOR |
 
-CRM API: `/leads`, `/leads/:id/mensaje`, `/leads/:id/mensajes`, `/reportes`, `/campaigns`, `/config/*`, `/auth/login`.
-
-Debug: `/debug/gemini-check`, `/debug/brain-test`, `/debug/brain-evals`, `/debug/brain-replay`.
+`tests/rutas-protegidas.test.js` falla si una ruta nueva queda sin token o si una de administración acepta el token de cualquier vendedor.
 
 ---
 
-## Desarrollo
+## Operación
 
 ```bash
 npm install
-npm test          # node --test (plomería determinista; cero deps de test)
-npm run dev       # node --watch src/server.js
+npm test                                   # 220+ tests, sin BD ni LLM
+npm run dev
+
+node scripts/evolution.js estado bioayur   # ¿API arriba? ¿instancia conectada?
+node scripts/evolution.js qr bioayur       # QR al Escritorio para vincular el número
+node scripts/evolution.js webhook bioayur  # webhook de la instancia → este backend, con el secreto
 ```
 
-Deploy: commit a `main` → Render auto-deploya (~3-5 min) → verificar `/health`.
+**Esquema de BD:** la base de producción tiene tablas fuera del schema de Prisma (`conversaciones_archivadas`, backups) y drift histórico de tipos. `prisma db push` las **borraría**. Los cambios de esquema se aplican con SQL escrito a mano (modo sesión, puerto 5432) y se verifican con `prisma migrate diff --from-url … --to-schema-datamodel prisma/schema.prisma --script` antes de tocar nada.
 
----
+**Deploy:** push a `main` → Render construye (`npm install && npx prisma generate`) y arranca. Al arrancar, el log muestra la cadena del cerebro y su salud (`[LLM] salud al arrancar: …`). Verificar `/health`.
 
-## Notas de Evolution API
-
-- Imagen fija **v2.3.7** (Baileys). No cambiar de versión.
-- Buttons/lists/polls están bloqueados por Meta para Baileys desde 2024 → usar texto numerado (1️⃣ 2️⃣ 3️⃣).
-- Payload v2.3.7: `data.messages[]` es array, no `data.key` directo.
-
----
-
-## Multitenant
-
-Todas las tablas llevan `tenant_id` desde el día 1 → la arquitectura soporta múltiples clientes sin cambios de schema.
+**Evolution (Baileys):** si la instancia se desconecta, el bot recibe nada y envía nada. Estado → QR → webhook con los tres comandos de arriba. Baileys no es la API oficial: para volumen, el adaptador de Cloud API (`src/whatsapp/cloud/`) está listo pero apagado.

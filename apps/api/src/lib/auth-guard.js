@@ -29,4 +29,14 @@ export function scopeWhere(user) {
   return where
 }
 
+// preHandler de ROL (sep 2026): va DESPUÉS de verifyJwt → `preHandler: [verifyJwt, requireAdmin]`.
+// Antes, cualquier token válido —también el de un VENDEDOR— podía crear vendedores
+// (incluso ADMIN), borrar la campaña que tiene la ficha de precios o correr el banco
+// de evals completo contra el LLM. Esas acciones son de administración.
+export async function requireAdmin(request, reply) {
+  if (!ROLES_VE_TODO.has(request.user?.role)) {
+    return reply.code(403).send({ error: 'requiere rol ADMIN o SUPERVISOR' })
+  }
+}
+
 export { ROLES_VE_TODO }

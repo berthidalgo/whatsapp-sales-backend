@@ -165,6 +165,9 @@ const SQL_CANDIDATOS = `
     ORDER BY "createdAt" DESC LIMIT 1
   ) last_any ON true
   WHERE ls.current_mode = 'AUTO_CONSULTIVO'
+    -- Quien YA COMPRÓ no recibe "no se te pase la promo" (fix sep 2026): la marca
+    -- _pedido la pone el pipeline cuando el vertical reconoce el cierre.
+    AND NOT (ls.slots_filled ? '_pedido')
     -- SIN filtro de tenant (fix jul 2026): antes decía l.tenant_id = '<ACTIVE_TENANT>',
     -- así que el cron solo atendía al cliente de la env var y los demás NO recibían
     -- followups en absoluto. El tenant viaja en el SELECT y decide plantilla + canal
@@ -295,6 +298,7 @@ const SQL_COMPROMISOS_VENCIDOS = `
     AND c.reminder_sent = false
     AND c.due_date <= now()
     AND ls.current_mode = 'AUTO_CONSULTIVO'
+    AND NOT (ls.slots_filled ? '_pedido')
     AND l.archived_at IS NULL
   ORDER BY c.due_date ASC
   LIMIT ${MAX_POR_CICLO}
@@ -402,6 +406,11 @@ export async function rescatarEscaladosHuerfanos() {
       JOIN leads l ON l.id = ls.lead_id
       WHERE ls.current_mode = 'HUMAN_ACTIVE'
         AND l.archived_at IS NULL
+        -- Un pedido escalado NO es un escalado huérfano: el humano lo despacha sin
+        -- necesidad de escribirle por WhatsApp, así que "sin mensaje del vendedor"
+        -- no significa "abandonado". Devolverlo al bot le mandaba followups de venta
+        -- a una clienta que ya había comprado (fix sep 2026).
+        AND NOT (ls.slots_filled ? '_pedido')
         AND ls.mode_entered_at IS NOT NULL
         AND now() - ls.mode_entered_at >= interval '${RESCATE_HORAS} hours'
         AND NOT EXISTS (
@@ -431,4 +440,4 @@ export async function rescatarEscaladosHuerfanos() {
   }
 }
 
-export const FOLLOWUP_ENGINE_VERSION = 'v6_multitenant_+_rescate_huerfanos'
+export const FOLLOWUP_ENGINE_VERSION = 'v7_excluye_ventas_cerradas'

@@ -70,9 +70,8 @@
 //  - temperatura_lead conectada al comportamiento (hot=avanza, cold=no persigas).
 // ════════════════════════════════════════════════════════════════════════
 
-import { callGemini, calculateCost } from '../lib/gemini.js'
-import { callGroq, schemaToPrompt } from '../lib/groq.js'
-import { callCerebras } from '../lib/cerebras.js'
+import { calculateCost } from '../lib/gemini.js'
+import { construirCadena, normalizarPaso, ejecutarCadena, llamarPaso } from '../lib/llm-cadena.js'
 import { flattenFactSheet } from '../response/factsheet-loader.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 import { getVertical } from './verticals/index.js'
@@ -100,8 +99,11 @@ const BRAIN_MODEL = process.env.BRAIN_MODEL || 'gemini-2.5-flash'
 const BRAIN_LOCATION = process.env.BRAIN_LOCATION || null
 const BRAIN_THINKING_LEVEL = process.env.BRAIN_THINKING_LEVEL || null
 const TEMPERATURE = 0.6                  // Equilibrio: natural pero no descontrolado
-const MAX_OUTPUT_TOKENS = 8000   // FIX #11 (jun 2026): 2000 era insuficiente (JSON cortado). FIX Sesión 4: 4000→8000 porque el thinking de Gemini consume del MISMO presupuesto — en 3.5 los turnos pesados (M4) quemaban todo pensando y devolvían texto vacío.
-const THINKING_BUDGET = 1024     // FIX Sesión 4 (jun 2026): acota el pensamiento del modelo. El cerebro ya razona explícito en el campo "razonamiento" del JSON; no necesita pensar 4000 tokens internos. Garantiza espacio para la respuesta + baja latencia (59s → normal) y costo.
+// Presupuesto de salida (8000) y de pensamiento (1024 en 2.x / thinkingLevel en 3.x):
+// viven en lib/llm-cadena.js junto con la cadena de proveedores (sep 2026). Siguen
+// valiendo los mismos motivos: el thinking consume del MISMO presupuesto que la
+// respuesta, y con topes bajos los turnos pesados (M4) devolvían texto vacío.
+// Seguros del primario: BRAIN_FALLBACKS (ver llm-cadena.js).
 
 // ════════════════════════════════════════════════════════
 // SCHEMA de salida estructurada — AHORA VIVE EN EL VERTICAL (jul 2026)
@@ -133,43 +135,36 @@ export async function pensarYResponder({
   vendorNombre = 'el equipo',
   // ── overrides SOLO para el banco de pruebas (Sprint A.2) ──
   // En producción NO se pasan → quedan en null y el cerebro corre con las
-  // constantes vivas (BRAIN_MODEL, THINKING_BUDGET, schema). Esto permite domar
+  // perillas vivas (cadena de proveedores, schema del vertical). Esto permite domar
   // gemini-3.5 EN BANCO (probar thinkingLevel:'low', quitar responseSchema)
   // sin tocar una sola línea del flujo en vivo.
   overrides = null
 }) {
   const startTime = Date.now()
 
-  const provider = (overrides?.provider || process.env.BRAIN_PROVIDER || 'gemini').toLowerCase()  // 'gemini' (default) | 'cerebras' (switch BRAIN_PROVIDER en vivo) | 'groq' (banco)
-  const modeloUsado = overrides?.model || (provider === 'cerebras' ? 'gpt-oss-120b' : provider === 'groq' ? 'llama-3.3-70b-versatile' : BRAIN_MODEL)
   // ── VERTICAL (jul 2026): el manual de venta según campaña/tenant ──
   // exportacion (Perú Exporta, default histórico) | colageno (BIOAYUR).
   // La campaña manda (config.vertical); si no, el default del tenant.
   const vertical = getVertical(campaignConfig, estadoLead?.tenantId)
   const usarSchema = overrides?.sinSchema ? null : vertical.RESPONSE_SCHEMA
-  // Dos palancas para domar el thinking del modelo en banco (son excluyentes):
-  //   - thinkingLevel ('low'|'medium'|'high'): control de los Gemini 3.x.
-  //   - thinkingBudget (número): control de los 2.x; el banco puede pedir uno más
-  //     bajo (ej. 256) como alternativa si thinkingLevel no aplica al SDK.
-  // Si llega thinkingLevel, MANDA y el budget se anula. Sin overrides → config viva.
-  // Precedencia: override de banco > perilla por env var > default vivo.
-  const thinkingLevelUsado = overrides?.thinkingLevel || BRAIN_THINKING_LEVEL || null
-  const thinkingBudgetUsado = thinkingLevelUsado
-    ? null
-    : (overrides?.thinkingBudget ?? THINKING_BUDGET)
-  // Puerta Developer API (banco): si overrides.useDevApi, se usa el backend de
-  // aistudio/gemini.google.com con la key de ENV (GEMINI_DEV_API_KEY). La key
-  // JAMÁS viaja en el request HTTP — el banco solo manda el flag booleano; el
-  // servidor la lee del entorno. Con Developer API la location no aplica.
-  const apiKeyUsada = overrides?.useDevApi ? (process.env.GEMINI_DEV_API_KEY || null) : null
-  const locationUsada = apiKeyUsada ? null : (overrides?.location || BRAIN_LOCATION || null)
 
   // Guard: si el banco pidió Developer API pero no hay key en ENV, fallar CLARO
-  // (no caer en silencio a Vertex y dar números engañosos).
-  if (overrides?.useDevApi && !apiKeyUsada) {
+  // (no caer en silencio a Vertex y dar números engañosos). La key JAMÁS viaja en el
+  // request HTTP — el banco solo manda el flag; el servidor la lee del entorno.
+  if (overrides?.useDevApi && !process.env.GEMINI_DEV_API_KEY) {
     return buildError('falta_gemini_dev_api_key', startTime, {
       hint: 'overrides.useDevApi=true pero process.env.GEMINI_DEV_API_KEY no está seteada en el entorno (Render).'
     })
+  }
+
+  // ── CADENA DE PROVEEDORES (sep 2026) ──
+  // En vivo: la cadena configurada por entorno (ver lib/llm-cadena.js). Antes eran
+  // dos proveedores cableados aquí y el seguro llevaba semanas muerto sin que nadie lo
+  // supiera. En banco (overrides): UN paso con lo que pide el banco; el resto de la
+  // cadena solo si overrides.fallback === true.
+  const cadena = overrides ? cadenaDeBanco(overrides) : construirCadena()
+  if (!cadena.length) {
+    return buildError('sin_proveedores_llm', startTime, { hint: 'Ningún proveedor configurado (revisa BRAIN_PROVIDER y las llaves).' })
   }
 
   const fs = flattenFactSheet(campaignConfig)
@@ -177,149 +172,23 @@ export async function pensarYResponder({
   const userPrompt = construirUserPrompt({ mensajeActual, historial, estadoLead })
 
   try {
-    // ── FIX #11: reintento robusto. Antes solo reintentaba si Gemini fallaba la
-    //    LLAMADA (timeout/rate-limit), pero NO si devolvía JSON roto. Ahora un solo
-    //    loop maneja ambos: si la llamada falla O si el JSON no parsea, reintenta. ──
-    let parsed = null
-    let lastErr = null
-    let lastRawText = null
-    let lastResult = null
-    let modeloFinal = modeloUsado   // cambia a gpt-oss-120b si entra el fallback (BLOQUE #2)
-    let usoFallback = false
+    // Reintentos, clasificación de errores, circuit breaker y fallback: todo en la
+    // cadena. Un JSON roto o sin "mensaje" cuenta como fallo y se reintenta.
+    const ejec = await ejecutarCadena({
+      cadena,
+      llamar: (paso) => llamarPaso(paso, {
+        systemInstruction, userPrompt, schema: usarSchema, temperature: TEMPERATURE,
+        tenantId: estadoLead?.tenantId || ACTIVE_TENANT
+      }),
+      parsear: parsearJsonCerebro
+    })
 
-    for (let intento = 0; intento < 3; intento++) {
-      let result = null
-      try {
-        if (provider === 'groq') {
-          // Groq (OpenAI-compatible): sin responseSchema nativo → inyectamos la
-          // descripción del schema en el system prompt para que devuelva el mismo JSON.
-          const sysGroq = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
-          result = await callGroq({
-            model: modeloUsado,
-            systemInstruction: sysGroq,
-            contents: userPrompt,
-            temperature: TEMPERATURE,
-            // Groq no "piensa" con presupuesto como Gemini; el JSON del cerebro es corto.
-            // El free tier tiene TPM ajustado (6-12K) y "requested" = input + maxOutputTokens.
-            // Con la ficha real (~9K input) hay que minimizar el output para que quepa.
-            maxOutputTokens: 1024
-          })
-        } else if (provider === 'cerebras') {
-          // Cerebras: context grande (15K+ confirmado en vivo) + TPM 30K → el prompt
-          // COMPLETO cabe. Usamos el cerebro entero (calidad total), igual que Gemini.
-          // (construirSystemPromptCompacto queda disponible como opción de throughput.)
-          const sysCereb = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
-          result = await callCerebras({
-            model: modeloUsado,
-            systemInstruction: sysCereb,
-            contents: userPrompt,
-            temperature: TEMPERATURE,
-            maxOutputTokens: 3072
-          })
-        } else {
-          result = await callGemini({
-            model: modeloUsado,
-            systemInstruction,
-            contents: userPrompt,
-            temperature: TEMPERATURE,
-            maxOutputTokens: MAX_OUTPUT_TOKENS,
-            thinkingBudget: thinkingBudgetUsado,
-            thinkingLevel: thinkingLevelUsado,
-            responseSchema: usarSchema,
-            location: locationUsada,
-            apiKey: apiKeyUsada,
-            tenantId: estadoLead?.tenantId || ACTIVE_TENANT
-          })
-        }
-      } catch (callErr) {
-        lastErr = callErr
-        if (intento < 2) await new Promise(r => setTimeout(r, 1200))
-        continue  // reintenta la llamada
-      }
+    let parsed = ejec.parsed
+    const lastRawText = ejec.ultimoTexto
+    const modeloFinal = ejec.paso?.model || cadena[0].model
+    const usoFallback = ejec.indice > 0
 
-      if (!result?.text) {
-        // Telemetría del "por qué" (FIX Sesión 4): sin esto, un texto vacío era
-        // indescifrable. finishReason=MAX_TOKENS = el thinking se comió el presupuesto.
-        const candidato = result?.response?.candidates?.[0]
-        const fr = candidato?.finishReason || 'desconocido'
-        const uso = result?.usage || {}
-        console.warn(`[AgentBrain] respuesta SIN texto | finishReason=${fr} | thoughts=${uso.thoughtsTokenCount || 0} | out=${uso.candidatesTokenCount || 0} | intento=${intento + 1}`)
-        lastErr = new Error(`sin texto en respuesta (finishReason=${fr})`)
-        if (intento < 2) await new Promise(r => setTimeout(r, 1200))
-        continue
-      }
-
-      lastRawText = result.text
-      lastResult = result  // para el audit del éxito
-
-      // Intento de parseo normal
-      const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-      try {
-        parsed = JSON.parse(limpio)
-        break  // ✅ parseó bien, salimos del loop
-      } catch (e) {
-        // Rescate 1: extraer el bloque {...} completo si vino con basura alrededor
-        const match = result.text.match(/\{[\s\S]*\}/)
-        if (match) {
-          try { parsed = JSON.parse(match[0]); break } catch (_) { /* sigue */ }
-        }
-        // El JSON vino roto (cortado). Reintentamos (intento siguiente).
-        lastErr = e
-        console.warn(`[AgentBrain] JSON roto en intento ${intento + 1}, reintentando... (${e.message})`)
-        if (intento < 2) await new Promise(r => setTimeout(r, 1200))
-      }
-    }
-
-    // ─── AUTO-FALLBACK SIMÉTRICO (BLOQUE #2 + switch de primario, riesgo R3) ───
-    // Si el PRIMARIO no entregó JSON usable tras 3 intentos (timeout/500/JSON roto),
-    // caemos al OTRO proveedor ANTES del rescate → el bot NUNCA queda mudo.
-    // Funciona en ambos sentidos: primario Gemini → fallback Cerebras gpt-oss-120b;
-    // primario Cerebras (BRAIN_PROVIDER=cerebras) → fallback Gemini. gpt-oss validado
-    // en el examen (80/82): bot seco-pero-correcto >>> bot mudo.
-    // Solo en VIVO (sin overrides); en banco se activa con overrides.fallback=true.
-    const permitirFallback = overrides ? (overrides.fallback === true) : true
-    const fbProvider = provider === 'cerebras' ? 'gemini' : 'cerebras'
-    const fbDisponible = fbProvider === 'gemini' ? true : !!process.env.CEREBRAS_API_KEY
-    if (!parsed && permitirFallback && fbDisponible) {
-      const fbModel = fbProvider === 'cerebras' ? 'gpt-oss-120b' : BRAIN_MODEL
-      console.warn(`[AgentBrain] 🛟 ${provider} (${modeloUsado}) falló tras 3 intentos (causa: ${lastErr?.message || 'desconocida'}) → FALLBACK a ${fbProvider} (${fbModel})`)
-      for (let fbIntento = 0; fbIntento < 2 && !parsed; fbIntento++) {
-        try {
-          let fbResult
-          if (fbProvider === 'cerebras') {
-            const sysFb = usarSchema ? `${systemInstruction}\n\n${schemaToPrompt(usarSchema)}` : systemInstruction
-            fbResult = await callCerebras({ model: fbModel, systemInstruction: sysFb, contents: userPrompt, temperature: TEMPERATURE, maxOutputTokens: 3072 })
-          } else {
-            fbResult = await callGemini({
-              model: fbModel, systemInstruction, contents: userPrompt, temperature: TEMPERATURE,
-              maxOutputTokens: MAX_OUTPUT_TOKENS, thinkingBudget: thinkingBudgetUsado, thinkingLevel: thinkingLevelUsado,
-              responseSchema: usarSchema, location: locationUsada, apiKey: apiKeyUsada, tenantId: estadoLead?.tenantId || ACTIVE_TENANT
-            })
-          }
-          if (!fbResult?.text) { lastErr = new Error(`fallback ${fbProvider} sin texto`); continue }
-          const limpioFb = fbResult.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-          let parsedFb = null
-          try { parsedFb = JSON.parse(limpioFb) } catch (_) {
-            const m = fbResult.text.match(/\{[\s\S]*\}/)
-            if (m) { try { parsedFb = JSON.parse(m[0]) } catch (__) { /* JSON irrescatable */ } }
-          }
-          if (parsedFb) {
-            parsed = parsedFb
-            lastResult = fbResult
-            modeloFinal = fbModel
-            usoFallback = true
-            console.warn(`[AgentBrain] ✅ Fallback ${fbProvider} OK — el seguro respondió`)
-          } else {
-            lastErr = new Error(`fallback ${fbProvider} devolvió JSON inválido`)
-          }
-        } catch (fbErr) {
-          lastErr = fbErr
-          console.warn(`[AgentBrain] fallback ${fbProvider} intento ${fbIntento + 1} falló: ${fbErr.message}`)
-        }
-      }
-    }
-
-    // Si tras 3 intentos no hay JSON válido, rescate final: extraer SOLO el mensaje
+    // Si ningún proveedor entregó JSON válido, rescate final: extraer SOLO el mensaje
     // del texto crudo (el mensaje va PRIMERO en el JSON, así que aunque esté cortado,
     // el campo "mensaje" suele estar completo). Mejor un mensaje sin metadatos que un hueco mudo.
     if (!parsed) {
@@ -328,8 +197,10 @@ export async function pensarYResponder({
         console.warn('[AgentBrain] Usando mensaje rescatado de JSON incompleto')
         parsed = { mensaje: rescatado, stage_sugerido: estadoLead?.stage || 'discovery', debe_escalar_humano: false, temperatura_lead: 'warm' }
       } else {
+        const ultimo = ejec.errores[ejec.errores.length - 1]
         return buildError('brain_json_parse_failed', startTime, {
-          parse_error: lastErr?.message || 'desconocido',
+          parse_error: ultimo ? `${ultimo.paso}: ${ultimo.status ? 'HTTP ' + ultimo.status + ' ' : ''}${ultimo.error}` : 'desconocido',
+          errores: ejec.errores.slice(-8),
           raw_length: lastRawText?.length || 0,
           raw_preview: lastRawText?.slice(0, 300),
           raw_tail: lastRawText?.slice(-150)
@@ -337,7 +208,7 @@ export async function pensarYResponder({
       }
     }
 
-    const result = lastResult
+    const result = ejec.result
 
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
     // Aquí está la red de seguridad: validamos lo que el cerebro produjo
@@ -360,10 +231,11 @@ export async function pensarYResponder({
       cierre: parsed.cierre || null,           // closer consultivo (v5_5): {ofrecio_llamada, objecion_trabajada, palanca}
       enviar_imagen: parsed.enviar_imagen || null,  // vertical colágeno: 'precios' → el sistema adjunta la foto en M4
       guardrail_flags: validado.flags,
-      via_fallback: usoFallback,   // BLOQUE #2: true si respondió el seguro Cerebras
+      via_fallback: usoFallback,   // true si respondió un seguro de la cadena (no el primario)
       audit: {
         model: modeloFinal,
         fallback: usoFallback,
+        proveedor: ejec.paso?.id || null,
         tokens: result?.usage?.totalTokenCount || 0,
         cost_usd: result?.usage ? calculateCost(modeloFinal, result.usage) : null,
         latency_ms: Date.now() - startTime
@@ -579,14 +451,20 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
   // (saludo, cierre, otras respuestas) y nunca deja preposiciones/artículos sueltos.
   // Verificado contra el caso real "S/2500" + 6 variantes → todas fluyen limpio.
   if (flags.some(f => f.startsWith('precio_inventado_sin_factsheet'))) {
-    const RX_PRECIO_UNA = /(?:S\/\.?\s?|\$\s?)\s?[\d,]+/i
+    // FIX sep 2026: antes se neutralizaba con un regex SOLO de símbolo ("S/ 1500"),
+    // distinto del detector. "cuesta 2500 soles" se DETECTABA y se marcaba como
+    // neutralizado… pero llegaba intacto al lead. Detector y neutralizador usan ahora
+    // la MISMA definición de dinero (RX_DINERO), sin flag global (test() sin estado).
+    const RX_PRECIO_UNA = new RegExp(RX_DINERO.source, 'i')
+    // La frase de reemplazo es del VERTICAL: "lo vemos en la llamada" solo tiene
+    // sentido en exportación (colágeno cierra por chat, no por llamada).
+    const fraseNeutra = vertical?.FRASE_PRECIO_SIN_FICHA
+      || ' El precio exacto te lo confirmo en un momento 😊'
     // Partimos en oraciones (manteniendo el signo final) y cambiamos solo la que
     // contiene la cifra inventada.
     const oraciones = mensaje.match(/[^.!?]+[.!?]*/g) || [mensaje]
     mensaje = oraciones
-      .map(o => RX_PRECIO_UNA.test(o)
-        ? ' Sobre la inversión, eso lo vemos juntos en la llamada según tu caso.'
-        : o)
+      .map(o => RX_PRECIO_UNA.test(o) ? fraseNeutra : o)
       .join('')
       .replace(/\s{2,}/g, ' ')
       .trim()
@@ -594,6 +472,44 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
   }
 
   return { mensaje, flags }
+}
+
+// ════════════════════════════════════════════════════════
+// HELPER — cadenaDeBanco (overrides del banco de pruebas → cadena)
+// Traduce las palancas históricas del banco (provider, model, useDevApi, location,
+// thinkingLevel, thinkingBudget) a un paso de la cadena, para que /debug/brain-evals y
+// brain-replay midan EXACTAMENTE el mismo camino de llamada que el bot vivo.
+// ════════════════════════════════════════════════════════
+function cadenaDeBanco(o) {
+  const pedido = o.useDevApi ? 'devapi' : String(o.provider || process.env.BRAIN_PROVIDER || 'gemini').toLowerCase()
+  const esGemini = ['gemini', 'vertex', 'devapi'].includes(pedido)
+  const base = normalizarPaso({
+    provider: pedido,
+    model: o.model || (esGemini ? BRAIN_MODEL : null),
+    location: esGemini ? (o.location || BRAIN_LOCATION) : null,
+    thinkingLevel: esGemini ? (o.thinkingLevel || BRAIN_THINKING_LEVEL) : null,
+    thinkingBudget: o.thinkingBudget,
+    rol: 'primario'
+  })
+  if (!base) return []
+  if (o.fallback !== true) return [base]
+  return [base, ...construirCadena().slice(1).filter(p => p.id !== base.id)]
+}
+
+// ════════════════════════════════════════════════════════
+// HELPER — parsearJsonCerebro
+// Acepta el JSON limpio o envuelto en basura/fences. Exige un "mensaje" de texto: un
+// modelo de razonamiento sin presupuesto devolvió {"type":"object"} (jul 2026) y eso
+// NO es una respuesta — cuenta como fallo y la cadena reintenta o pasa al seguro.
+// ════════════════════════════════════════════════════════
+export function parsearJsonCerebro(texto) {
+  if (!texto || typeof texto !== 'string') return null
+  const valido = (o) => (o && typeof o === 'object' && typeof o.mensaje === 'string' && o.mensaje.trim()) ? o : null
+  const limpio = texto.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+  try { return valido(JSON.parse(limpio)) } catch (_) { /* sigue */ }
+  const m = texto.match(/\{[\s\S]*\}/)
+  if (m) { try { return valido(JSON.parse(m[0])) } catch (_) { /* irrescatable */ } }
+  return null
 }
 
 // ════════════════════════════════════════════════════════

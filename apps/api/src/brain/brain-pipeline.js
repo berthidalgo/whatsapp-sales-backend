@@ -49,6 +49,7 @@ import { STAGES, MODES } from '../state/stage-definitions.js'
 import { notificarEscalamiento } from '../webhook/notifications.js'
 import { reportError } from '../lib/observability.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
+import { getVertical } from './verticals/index.js'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Orden del embudo (para proteger contra retrocesos de stage).
@@ -266,6 +267,53 @@ async function persistirCompromiso(leadId, compromiso) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// TELEMETRÍA POR TURNO — turn_trace (sep 2026)
+// La tabla existía desde v20 y NADIE escribía en ella (0 filas al auditar). Sin esto
+// no hay forma de responder "¿cuánto cuesta un turno?", "¿qué modelo respondió?",
+// "¿cuántas veces entró el seguro?" o "¿qué guardrail saltó?". Una fila por turno en
+// que el cerebro fue llamado (éxito o fallo). Fire-and-forget: jamás tumba el turno.
+// SQL crudo a propósito: turn_id es uuid con default en la BD y el cliente Prisma lo
+// mandaría como texto.
+// ─────────────────────────────────────────────────────────────────────────
+export function filaTurnTrace({ leadId, mensajeActual, estadoAntes, estadoDespues, brainResult, latencyMs, tenantId }) {
+  const a = brainResult?.audit || {}
+  return {
+    leadId,
+    leadMessage: String(mensajeActual || '').slice(0, 4000),
+    stateBefore: estadoAntes || {},
+    stateAfter: estadoDespues || {},
+    policyDecision: {
+      tenantId: tenantId || null,
+      momento: brainResult?.momento_actual || null,
+      stage_sugerido: brainResult?.stage_sugerido || null,
+      escalar: brainResult?.debe_escalar_humano === true,
+      razon_escalamiento: brainResult?.razon_escalamiento || null,
+      temperatura: brainResult?.temperatura_lead || null,
+      enviar_imagen: brainResult?.enviar_imagen || null
+    },
+    guardrails: Array.isArray(brainResult?.guardrail_flags) ? brainResult.guardrail_flags.map(String) : [],
+    botResponse: brainResult?.mensaje || null,
+    modelUsed: a.proveedor || a.model || null,
+    auditLog: { fallback: a.fallback === true, tokens: a.tokens || 0, razonamiento: String(brainResult?.razonamiento || '').slice(0, 2000) },
+    errors: brainResult?.ok === false ? [{ error: brainResult.error, meta: brainResult.error_metadata || null }] : [],
+    latencyMs: Number.isFinite(latencyMs) ? Math.round(latencyMs) : null,
+    modelCosts: a.cost_usd || {}
+  }
+}
+
+async function registrarTurno(args) {
+  const t = filaTurnTrace(args)
+  await prisma.$executeRaw`
+    INSERT INTO turn_trace (lead_id, lead_message, state_before, state_after, policy_decision,
+      guardrails_evaluated, bot_response, response_version, model_used, audit_log, errors,
+      latency_ms, model_costs)
+    VALUES (${t.leadId}, ${t.leadMessage}, ${JSON.stringify(t.stateBefore)}::jsonb, ${JSON.stringify(t.stateAfter)}::jsonb,
+      ${JSON.stringify(t.policyDecision)}::jsonb, ${t.guardrails}::text[], ${t.botResponse}, ${AGENT_BRAIN_VERSION},
+      ${t.modelUsed}, ${JSON.stringify(t.auditLog)}::jsonb, ${JSON.stringify(t.errors)}::jsonb, ${t.latencyMs},
+      ${JSON.stringify(t.modelCosts)}::jsonb)`
+}
+
 async function construirHistorial(prisma, leadId, limite = 12) {
   const mensajes = await prisma.message.findMany({
     where: { leadId },
@@ -337,7 +385,9 @@ export function construirResumenMemoria(filas, ahora = Date.now()) {
 }
 
 async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId) {
-  if (!telefono) return null
+  // Sin tenant NO se recuerda nada: antes caía a 'peru_exporta' y un turno sin tenant
+  // resuelto habría "recordado" la conversación de exportación de ese teléfono.
+  if (!telefono || !tenantId) return null
   try {
     // FIX cross-tenant (jul 2026, cazado al auditar la DB para BIOAYUR): la query
     // buscaba SOLO por teléfono → un ex-lead de Perú Exporta que escribiera a
@@ -348,7 +398,7 @@ async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId) 
          FROM conversaciones_archivadas
         WHERE telefono = $1 AND lead_id_original <> $2 AND tenant_id = $3
         ORDER BY id DESC LIMIT 3`,
-      String(telefono), Number(leadIdActual) || 0, String(tenantId || 'peru_exporta')
+      String(telefono), Number(leadIdActual) || 0, String(tenantId)
     )
     return construirResumenMemoria(filas)
   } catch (err) {
@@ -488,8 +538,12 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     contabilizarTurno(tenantId)
       .catch(err => console.error(`[BrainPipeline] contador de turnos (${tenantId}):`, err.message))
 
+    const estadoAntes = { stage: estadoLead.stage, mode: modoActual }
+
     // Si el cerebro falló, devolvemos sin romper (el handler maneja el "no response")
     if (!brainResult.ok || !brainResult.mensaje) {
+      registrarTurno({ leadId, mensajeActual, estadoAntes, estadoDespues: null, brainResult, latencyMs: Date.now() - startTime, tenantId })
+        .catch(err => console.error(`[BrainPipeline] turn_trace lead ${leadId}:`, err.message))
       return {
         ok: false,
         error: brainResult.error || 'brain_no_message',
@@ -545,6 +599,24 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       slotsFusionados._cierre = acumularCierre(cierrePrev, brainResult.cierre)
     }
 
+    // ─── 6b. ¿Este turno CERRÓ una venta? (sep 2026) ───
+    // El vertical sabe reconocer su cierre (colágeno: pedido escalado con pack +
+    // distrito). La marca `_pedido` saca al lead de los motores de fondo: no se le
+    // "rescata" al bot ni se le manda el followup de "no se te pase la promo" a quien
+    // ya compró. Se marca una sola vez (el primer cierre manda).
+    const vertical = getVertical(campaignConfig, tenantId)
+    if (!slotsFusionados._pedido && typeof vertical.detectarVentaCerrada === 'function') {
+      const venta = vertical.detectarVentaCerrada({
+        debeEscalar: brainResult.debe_escalar_humano === true,
+        razonEscalamiento: brainResult.razon_escalamiento,
+        slots: slotsFusionados
+      })
+      if (venta) {
+        slotsFusionados._pedido = { ...venta, at: new Date().toISOString() }
+        console.log(`[BrainPipeline] 🛒 Venta cerrada lead ${leadId}: pack=${venta.pack || '?'} distrito=${venta.distrito || '?'}`)
+      }
+    }
+
     // ─── 7. Guardar el estado actualizado en la BD ───
     // currentMode usa el catálogo MODES (NO strings a mano — eso causó el bug #4).
     await prisma.leadState.upsert({
@@ -598,7 +670,9 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
         // llamada extra). Solo viaja si vino con contenido; si no, el briefing
         // sale igual sin el bloque 🎯.
         dataExtra: brainResult.como_cerrarlo ? { comoCerrarlo: brainResult.como_cerrarlo } : null,
-        nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || 'el programa'
+        nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || '',
+        verticalId: vertical.VERTICAL_ID,
+        tenantId
       }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
     }
 
@@ -613,6 +687,12 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
 
     // (La contabilización del turno ocurre justo tras pensarYResponder — ver arriba.
     // Aquí ya no, porque el costo se incurre en la llamada al LLM, no en el éxito.)
+
+    registrarTurno({
+      leadId, mensajeActual, estadoAntes,
+      estadoDespues: { stage: stageFinal, escalado: brainResult.debe_escalar_humano === true, pedido: !!slotsFusionados._pedido },
+      brainResult, latencyMs: Date.now() - startTime, tenantId
+    }).catch(err => console.error(`[BrainPipeline] turn_trace lead ${leadId}:`, err.message))
 
     // ─── 8. Devolver con la forma que espera el handler ───
     return {
