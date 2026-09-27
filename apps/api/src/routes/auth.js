@@ -77,7 +77,7 @@ export async function loginVendor(request, reply, prisma) {
 
     // Migración silenciosa: el PIN heredado en texto plano se guarda hasheado ya.
     const debeCambiarPin = esPinDeFabrica(pin)
-    if (!esHash(vendor.pin)) {
+    if (!esHash(vendor.pin) && process.env.SOLO_LECTURA !== 'true') {
       prisma.vendor.update({ where: { id: vendor.id }, data: { pin: hashPin(pin) } })
         .catch(err => console.error(`[Auth] no se pudo hashear el PIN del vendor ${vendor.id}:`, err.message))
     }

@@ -94,6 +94,24 @@ if (!JWT_SECRET) {
   console.warn('[auth] JWT_SECRET no seteado — usando secreto de DEV (SOLO local; en prod el boot aborta).')
 }
 
+// ── MODO SOLO LECTURA (sep 2026) ─────────────────────────────
+// Para abrir el CRM en local (o hacer una demo) conectado a la base REAL sin riesgo:
+// se puede navegar, conversar con el copiloto y transcribir voz, pero nada se escribe.
+// Sin esto, el botón "Guardar" del Meta-Agente sobrescribía la ficha de un cliente en
+// producción. Rutas con efectos (cron) quedan bloqueadas aunque sean GET.
+const SOLO_LECTURA = process.env.SOLO_LECTURA === 'true'
+const PERMITIDAS_SOLO_LECTURA = new Set(['/auth/login', '/v2/flow/copilot', '/v2/transcribe', '/v2/leads/:id/debrief'])
+if (SOLO_LECTURA) {
+  app.addHook('onRequest', async (req, reply) => {
+    const ruta = req.routeOptions?.url || req.url
+    const conEfectos = ruta.startsWith('/cron') || !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+    if (conEfectos && !PERMITIDAS_SOLO_LECTURA.has(ruta)) {
+      return reply.code(423).send({ error: 'modo solo lectura: esta instancia no guarda cambios' })
+    }
+  })
+  console.warn('[server] ⚠️ SOLO_LECTURA=true — se bloquea toda escritura (demo contra la base real)')
+}
+
 // ── Health ───────────────────────────────────────────────────
 // `commit`: qué versión está desplegada (Render expone RENDER_GIT_COMMIT) — antes no había
 // forma de saberlo sin entrar al panel. `cerebro`: resumen de la cadena de proveedores
