@@ -10,10 +10,12 @@ import { cloudConfig, cloudReady } from './config.js'
 
 const TIMEOUT_MS = 15000
 
-export async function descargarMediaCloud(mediaId) {
-  if (!mediaId)      return { ok: false, error: 'media_id_required' }
-  if (!cloudReady()) return { ok: false, error: 'cloud_not_configured' }
-  const c = cloudConfig()
+// credenciales: las del canal del cliente (multitenant); sin ellas, las del entorno.
+export async function descargarMediaCloud(mediaId, credenciales = null) {
+  if (!mediaId) return { ok: false, error: 'media_id_required' }
+  const env = cloudConfig()
+  const c = { ...env, phoneNumberId: credenciales?.phoneNumberId || env.phoneNumberId, accessToken: credenciales?.accessToken || env.accessToken }
+  if (!cloudReady(c)) return { ok: false, error: 'cloud_not_configured' }
 
   // ── Paso 1: metadata del media (URL temporal) ──
   const meta = await getJson(`${c.graphBase}/${mediaId}`, c.accessToken)
@@ -51,4 +53,4 @@ async function getJson(url, token) {
   }
 }
 
-export const CLOUD_MEDIA_VERSION = 'v1_graph_media'
+export const CLOUD_MEDIA_VERSION = 'v2_credenciales_por_canal'

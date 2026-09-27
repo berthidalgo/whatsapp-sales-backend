@@ -25,16 +25,22 @@ export function parseCloudWebhook(payload) {
       const value = change.value || {}
       const phoneNumberId = value.metadata?.phone_number_id || null
 
-      // nombre del contacto por wa_id (pushName)
+      // nombre del contacto (pushName) por wa_id y por BSUID. Desde 2026 un usuario con
+      // username puede llegar SIN wa_id: solo con su BSUID (contacts[].user_id).
       const nameByWaId = {}
-      for (const ct of (value.contacts || [])) nameByWaId[ct.wa_id] = ct.profile?.name || null
+      const nameByBsuid = {}
+      for (const ct of (value.contacts || [])) {
+        if (ct.wa_id) nameByWaId[ct.wa_id] = ct.profile?.name || null
+        if (ct.user_id) nameByBsuid[ct.user_id] = ct.profile?.name || null
+      }
 
       // statuses = recibos (delivered/read/failed) de mensajes que NOSOTROS enviamos.
       // No son del lead; se exponen para auditoría/logs, el cableado decide si los usa.
       for (const st of (value.statuses || [])) {
         eventos.push({
           tipo: 'status', messageId: st.id, status: st.status,
-          telefono: st.recipient_id, timestamp: st.timestamp, phoneNumberId
+          telefono: st.recipient_id || null, bsuid: st.recipient_user_id || null,
+          timestamp: st.timestamp, phoneNumberId
         })
       }
 
@@ -42,8 +48,9 @@ export function parseCloudWebhook(payload) {
       for (const m of (value.messages || [])) {
         const ev = {
           tipo: 'message',
-          telefono: m.from || null,          // wa_id del usuario (solo dígitos, sin '+')
-          pushName: nameByWaId[m.from] || null,
+          telefono: m.from || null,          // wa_id del usuario (solo dígitos, sin '+'); puede faltar si usa username
+          bsuid: m.from_user_id || null,     // ID del usuario para ESTE negocio (ej. "PE.8f3a..."); llega desde abr-2026
+          pushName: (m.from && nameByWaId[m.from]) || (m.from_user_id && nameByBsuid[m.from_user_id]) || null,
           messageId: m.id || null,
           messageType: m.type || 'unknown',
           text: null,
@@ -73,7 +80,7 @@ export function parseCloudWebhook(payload) {
             if (ev.caption) ev.text = ev.caption
             break
           case 'audio':
-            ev.mediaId = m.audio?.id || null   // nota de voz → redirect cortés (Whisper = Fase D)
+            ev.mediaId = m.audio?.id || null   // nota de voz → el router la transcribe con Whisper
             break
           case 'interactive':                  // respuesta a botón/lista
             ev.text = m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || ''
@@ -95,4 +102,4 @@ export function soloMensajes(payload) {
   return parseCloudWebhook(payload).filter(e => e.tipo === 'message')
 }
 
-export const CLOUD_PARSER_VERSION = 'v1_graph_webhook'
+export const CLOUD_PARSER_VERSION = 'v2_bsuid'

@@ -23,7 +23,7 @@
 
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
-import { sendToWhatsApp, sendTemplateCloud, proveedorActivo } from '../whatsapp/send.js'
+import { enviarTexto, enviarPlantilla, transporteDe } from '../whatsapp/transporte.js'
 import { ACTIVE_TENANT, verticalPorTenant } from '../lib/tenant.js'
 import { defaultChannelForTenant } from '../webhook/channel-resolver.js'
 
@@ -83,18 +83,36 @@ const NOMBRE_CURSO = 'Mi Primera Exportación'
 // El fallback a EVOLUTION_INSTANCE_NAME se conserva para el deploy single-tenant de
 // hoy, pero ya NO hay literal 'peru-exporta-test': mandar el followup de un cliente
 // por el número de otro es peor que no mandarlo.
-async function instanciaDeTenant(tenantId, cache) {
+async function canalDeTenant(tenantId, cache) {
   if (cache.has(tenantId)) return cache.get(tenantId)
-  let instancia = null
+  let canal = null
   try {
-    const ch = await defaultChannelForTenant(tenantId)
-    instancia = ch?.externalKey || null
+    canal = await defaultChannelForTenant(tenantId)
   } catch (err) {
     console.warn(`[Followup] no se pudo resolver canal de ${tenantId}: ${err.message}`)
   }
-  if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
-  cache.set(tenantId, instancia)
-  return instancia
+  // Evolution: la instancia es la llave del canal (o la del entorno, deploy de un cliente).
+  const instancia = transporteDe(canal) === 'evolution'
+    ? (canal?.externalKey || process.env.EVOLUTION_INSTANCE_NAME || null)
+    : null
+  const r = { canal, instancia }
+  cache.set(tenantId, r)
+  return r
+}
+
+// ── Política de WhatsApp oficial (Meta) por tipo de envío (sep 2026) ──
+// Meta solo acepta TEXTO LIBRE dentro de las 24 h desde el último mensaje del cliente.
+// Fuera de esa ventana exige una PLANTILLA aprobada (y la cobra). Sin plantilla
+// configurada, el envío se OMITE: intentarlo solo daría error 131047 en cada ciclo.
+//   followup_2h  → cae dentro de la ventana (2-6 h de silencio): texto.
+//   followup_24h → cae fuera (24-48 h): solo con CLOUD_TEMPLATE_FOLLOWUP_24H.
+//   compromiso   → la fecha prometida suele quedar fuera: solo con CLOUD_TEMPLATE_COMPROMISO.
+// Con Evolution no hay ventana: todo va como texto, igual que siempre.
+export function politicaEnvio(transporte, tipo, env = process.env) {
+  if (transporte !== 'cloud') return { accion: 'texto' }
+  if (tipo === 'followup_2h') return { accion: 'texto' }
+  const plantilla = tipo === 'followup_24h' ? env.CLOUD_TEMPLATE_FOLLOWUP_24H : env.CLOUD_TEMPLATE_COMPROMISO
+  return plantilla ? { accion: 'plantilla', plantilla } : { accion: 'omitir', motivo: 'fuera de la ventana de 24 h y sin plantilla aprobada' }
 }
 
 // ════════════════════════════════════════════════════════
@@ -222,22 +240,23 @@ export async function ejecutarFollowups() {
 
     // Y por el número de ESTE cliente. Sin canal resoluble no se envía: prefiero
     // perder un followup a que el lead de un cliente reciba un WhatsApp de otro.
-    const instancia = await instanciaDeTenant(tenantId, canalPorTenant)
-    if (!instancia && proveedorActivo() !== 'cloud') {
+    const { canal, instancia } = await canalDeTenant(tenantId, canalPorTenant)
+    const transporte = transporteDe(canal)
+    if (transporte === 'evolution' && !instancia) {
       omitidos++
       console.warn(`[Followup] ⏭️ lead ${c.leadId} (${tenantId}) sin canal de salida → omitido. Sembrá un Channel para este tenant.`)
       continue
     }
+    const politica = politicaEnvio(transporte, tipo)
+    if (politica.accion === 'omitir') { omitidos++; continue }
 
     try {
-      // En Cloud API el followup_24h cae FUERA de la ventana de servicio de 24h →
-      // Meta exige TEMPLATE aprobado (el de 2h va como texto, sigue dentro de ventana).
-      // Con Evolution, ambos van como texto normal (sin cambio).
       let r
-      if (proveedorActivo() === 'cloud' && tipo === 'followup_24h') {
-        r = await sendTemplateCloud({
+      if (politica.accion === 'plantilla') {
+        r = await enviarPlantilla({
+          canal,
           telefono: c.telefono,
-          templateName: process.env.CLOUD_TEMPLATE_FOLLOWUP_24H || 'followup_24h',
+          templateName: politica.plantilla,
           languageCode: 'es',
           components: [{ type: 'body', parameters: [
             { type: 'text', text: primerNombre(c.nombre) || 'qué tal' },
@@ -245,7 +264,7 @@ export async function ejecutarFollowups() {
           ]}]
         })
       } else {
-        r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: instancia })
+        r = await enviarTexto({ canal, telefono: c.telefono, texto, instancia })
       }
       if (!r.ok) { errores++; detalle.push({ leadId: c.leadId, tipo, error: r.error }); continue }
 
@@ -326,16 +345,19 @@ export async function ejecutarRecordatoriosCompromiso() {
     const texto = interpolar(PLANTILLA_COMPROMISO, { nombre: c.nombre })
     // El copy de compromiso es NEUTRO (no nombra producto ni vertical), así que sirve
     // a cualquier tenant. Lo que sí debe ser del tenant es el NÚMERO por el que sale.
-    const instancia = await instanciaDeTenant(c.tenantId || ACTIVE_TENANT, canalPorTenant)
-    if (!instancia) {
+    const { canal, instancia } = await canalDeTenant(c.tenantId || ACTIVE_TENANT, canalPorTenant)
+    const transporte = transporteDe(canal)
+    if (transporte === 'evolution' && !instancia) {
       console.warn(`[Compromiso] ⏭️ lead ${c.leadId} (${c.tenantId}) sin canal de salida → omitido.`)
       continue
     }
+    const politica = politicaEnvio(transporte, 'compromiso')
+    if (politica.accion === 'omitir') continue
     try {
-      // Nota Cloud API (futuro): un compromiso vencido suele caer FUERA de la ventana de
-      // servicio de 24h → allá requerirá template aprobado (igual que followup_24h). Con
-      // Evolution va como texto normal. Por ahora (Evolution) se envía texto.
-      const r = await sendToWhatsApp({ telefono: c.telefono, text: texto, instanceName: instancia })
+      const r = politica.accion === 'plantilla'
+        ? await enviarPlantilla({ canal, telefono: c.telefono, templateName: politica.plantilla, languageCode: 'es',
+            components: [{ type: 'body', parameters: [{ type: 'text', text: primerNombre(c.nombre) || 'qué tal' }] }] })
+        : await enviarTexto({ canal, telefono: c.telefono, texto, instancia })
       if (!r.ok) { errores++; continue }
 
       // Marcar PRIMERO el recordatorio como enviado (idempotencia: si el insert del mensaje
@@ -440,4 +462,4 @@ export async function rescatarEscaladosHuerfanos() {
   }
 }
 
-export const FOLLOWUP_ENGINE_VERSION = 'v7_excluye_ventas_cerradas'
+export const FOLLOWUP_ENGINE_VERSION = 'v8_transporte_por_canal_ventana_24h'

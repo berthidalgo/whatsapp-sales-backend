@@ -45,7 +45,8 @@ import { ejecutarFollowups, ejecutarRecordatoriosCompromiso, rescatarEscaladosHu
 // ── WhatsApp Cloud API (Meta): recepción. Apagado por default (WHATSAPP_PROVIDER=evolution) ──
 import { procesarWebhookCloud } from './whatsapp/cloud/router.js'
 import { verifyWebhookChallenge, verifySignature } from './whatsapp/cloud/webhook.js'
-import { isCloudProvider } from './whatsapp/cloud/config.js'
+import { cloudWebhookHabilitado } from './whatsapp/cloud/config.js'
+import { registrarJsonConCuerpoCrudo } from './lib/json-crudo.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -58,6 +59,10 @@ const app = Fastify({ logger: false })
 // SENTRY_DSN: la init real vive en instrument.mjs (cargado vía --import antes
 // que todo); acá solo enganchamos el error handler de Fastify si está activo.
 if (process.env.SENTRY_DSN) Sentry.setupFastifyErrorHandler(app)
+
+// ── Cuerpo CRUDO de cada JSON (sep 2026) ─────────────────────
+// La firma de los webhooks de Meta se valida sobre los bytes exactos (req.rawBody).
+registrarJsonConCuerpoCrudo(app)
 
 // CORS por env var (deploy-friendly): `CORS_ORIGINS` = lista separada por comas. Al
 // desplegar el front nuevo se agrega su dominio Vercel ahí, SIN tocar código. localhost
@@ -592,7 +597,8 @@ app.post('/cron/followup', handleCronFollowup)
 
 // ── Webhook Cloud API (Meta) — endpoint SEPARADO, NO toca /webhook de Evolution ──
 // GET = handshake de verificación de Meta (hub.challenge). POST = mensajes entrantes.
-// Inerte hasta que se configure el número (CLOUD_* env vars) y WHATSAPP_PROVIDER=cloud.
+// Inerte hasta que se configure CLOUD_APP_SECRET (la app de Meta de Hidata). El proveedor
+// de cada cliente lo dice su canal (channels.provider), no un interruptor global.
 app.get('/webhook/cloud', async (req, reply) => {
   const r = verifyWebhookChallenge(req.query || {})
   if (r.ok) return reply.code(200).type('text/plain').send(r.challenge)
@@ -609,12 +615,11 @@ app.post('/webhook/cloud', async (req, reply) => {
   // te llenaba la BD de basura y te vaciaba el presupuesto, con Cloud "apagado".
   //
   // Ahora, defensa en profundidad y FAIL-CLOSED:
-  //   1. Si Cloud NO es el proveedor activo → 200 y NO se procesa (Meta no reintenta;
-  //      no hay tráfico legítimo aquí mientras el proveedor sea Evolution).
-  //   2. Si Cloud SÍ está activo → la firma es OBLIGATORIA, no opcional. Sin app secret
-  //      o sin poder validar (falta rawBody) se RECHAZA: preferimos no procesar a
-  //      procesar algo no verificado. Enchufar Cloud EXIGE capturar rawBody (parser).
-  if (!isCloudProvider()) {
+  //   1. Sin CLOUD_APP_SECRET → 200 y NO se procesa (Meta no reintenta; sin la app de
+  //      Meta configurada no hay tráfico legítimo aquí).
+  //   2. Con él → la firma es OBLIGATORIA. Se valida contra el cuerpo CRUDO, que guarda
+  //      el parser de JSON de arriba (req.rawBody). Sin firma válida, se rechaza.
+  if (!cloudWebhookHabilitado()) {
     // Responder 200 para no generar reintentos si alguien registró el webhook por error.
     return reply.code(200).send('EVENT_RECEIVED')
   }

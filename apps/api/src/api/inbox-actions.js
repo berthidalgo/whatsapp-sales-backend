@@ -53,14 +53,17 @@ export async function replyV2(request, reply, prisma) {
     //    lanza, devuelve {ok:false}, así que el .catch nunca veía nada. Con Evolution
     //    caído (o un vendedor sin instancia) el vendedor veía su mensaje "enviado" en el
     //    Inbox y el lead jamás lo recibía. Ahora un envío fallido es un error visible.
-    //    Canal: instancia del vendedor → canal por defecto del tenant → env del deploy.
-    let instancia = lead.vendor?.instanciaEvolution || null
-    if (!instancia) instancia = (await defaultChannelForTenant(lead.tenantId))?.externalKey || null
-    if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
-    if (!instancia && proveedorActivo() !== 'cloud') {
-      return reply.code(409).send({ error: 'este cliente no tiene un canal de WhatsApp configurado' })
+    //    Canal: el canal por defecto del cliente decide si sale por Meta o por Evolution.
+    //    En Evolution, la instancia: la del vendedor → la del canal → la del entorno.
+    const canal = await defaultChannelForTenant(lead.tenantId)
+    let instancia = null
+    if (proveedorActivo(canal) === 'evolution') {
+      instancia = lead.vendor?.instanciaEvolution || canal?.externalKey || process.env.EVOLUTION_INSTANCE_NAME || null
+      if (!instancia) {
+        return reply.code(409).send({ error: 'este cliente no tiene un canal de WhatsApp configurado' })
+      }
     }
-    const envio = await sendToWhatsApp({ telefono: lead.telefono, text: texto, instanceName: instancia })
+    const envio = await sendToWhatsApp({ telefono: lead.telefono, text: texto, instanceName: instancia, canal })
     if (!envio?.ok) {
       console.error(`[inbox-actions] reply lead ${id}: WhatsApp no salió (${envio?.error})`)
       return reply.code(502).send({ error: 'no se pudo enviar por WhatsApp', detalle: envio?.error || null })

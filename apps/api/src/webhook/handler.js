@@ -29,7 +29,7 @@ import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
 import { enqueueMessage, getMessageGeneration } from './debounce.js'
-import { sendToWhatsApp, sendMediaToWhatsApp } from './sender.js'
+import { enviarTexto, enviarImagen, transporteDe } from '../whatsapp/transporte.js'
 import { procesarConCerebro } from '../brain/brain-pipeline.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 import { getImagen } from '../lib/assets.js'
@@ -193,6 +193,10 @@ async function processWebhookAsync(payload, startTime) {
  * @param {string} combinedText - Texto combinado de todos los mensajes del buffer
  * @param {object} bufferMetadata - Metadata del debounce (messageCount, etc)
  */
+// Exportada (sep 2026): el webhook de Meta (whatsapp/cloud/router.js) corre ESTE mismo
+// turno. Antes tenía su propia copia sin kill-stale, sin lock y sin foto de precios.
+export { processPipelineFn as procesarTurno }
+
 async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
   const { leadId, telefono, vendorNombre } = leadInfo
   const pipelineStart = Date.now()
@@ -282,11 +286,16 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
     // clientes activos eso respondía a los leads de BIOAYUR desde el número de Perú
     // Exporta. Ahora se responde por la instancia que RECIBIÓ el mensaje: correcto
     // por construcción, sin importar cuántos clientes haya.
+    // El canal decide el transporte (Meta o Evolution). La instancia solo aplica a
+    // Evolution; en Meta el número de salida es el phone_number_id del canal.
+    const canal = leadInfo.channel || null
+    const instancia = transporteDe(canal) === 'evolution' ? instanciaDeSalida(leadInfo) : null
     const sendStart = Date.now()
-    const sendResult = await sendToWhatsApp({
+    const sendResult = await enviarTexto({
+      canal,
       telefono,
-      text: botResponse.text,
-      instanceName: instanciaDeSalida(leadInfo)
+      texto: botResponse.text,
+      instancia
     })
     const sendMs = Date.now() - sendStart
 
@@ -311,9 +320,9 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
         // nada — antes devolvía la foto de BIOAYUR a cualquiera que la pidiera.
         const img = getImagen(botResponse.enviar_imagen, leadInfo.tenantId || ACTIVE_TENANT)
         if (img) {
-          const mediaRes = await sendMediaToWhatsApp({
-            telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,
-            instanceName: instanciaDeSalida(leadInfo)
+          const mediaRes = await enviarImagen({
+            canal, telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,
+            instancia
           })
           console.log(mediaRes.ok
             ? `[Pipeline] 📎 Imagen "${botResponse.enviar_imagen}" enviada a ${telefono} (${mediaRes.latency_ms}ms)`
@@ -362,4 +371,4 @@ export function getActivePipelines() {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const HANDLER_VERSION = 'v24_killstale_anticascade'
+export const HANDLER_VERSION = 'v25_transporte_por_canal'

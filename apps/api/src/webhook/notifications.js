@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
-import { sendToWhatsApp } from '../whatsapp/send.js'
+import { enviarTexto, transporteDe } from '../whatsapp/transporte.js'
 import { reportError } from '../lib/observability.js'
 import { defaultChannelForTenant } from './channel-resolver.js'
 import { getVertical } from '../brain/verticals/index.js'
@@ -74,24 +74,25 @@ async function destinoDeNotificacion(vendorId) {
   // whatsappNumber = el WhatsApp personal del vendedor (si lo cargó); si no, su teléfono.
   const destino = vendor?.whatsappNumber || vendor?.telefono || process.env.NUMERO_JOAN || null
 
+  let canal = null
   let instancia = null
   let numeroCanal = null
   if (vendor?.tenantId) {
     try {
-      const ch = await defaultChannelForTenant(vendor.tenantId)
-      instancia = ch?.externalKey || null
-      numeroCanal = ch?.numeroDisplay || null
+      canal = await defaultChannelForTenant(vendor.tenantId)
+      instancia = transporteDe(canal) === 'evolution' ? (canal?.externalKey || null) : null
+      numeroCanal = canal?.numeroDisplay || null
     } catch (err) {
       console.warn(`[Notif] no se pudo resolver canal de ${vendor.tenantId}: ${err.message}`)
     }
   }
-  if (!instancia) instancia = process.env.EVOLUTION_INSTANCE_NAME || null
+  if (!instancia && transporteDe(canal) === 'evolution') instancia = process.env.EVOLUTION_INSTANCE_NAME || null
 
   const motivoInvalido = destinoInvalido(destino, {
     numerosDelBot: [numeroCanal, process.env.NUMERO_BOT]
   })
 
-  return { destino, instancia, motivoInvalido, tenantId: vendor?.tenantId || null, vendorNombre: vendor?.nombre || null }
+  return { destino, canal, instancia, motivoInvalido, tenantId: vendor?.tenantId || null, vendorNombre: vendor?.nombre || null }
 }
 
 /**
@@ -116,7 +117,7 @@ export async function notificarEscalamiento({
 }) {
   // El vendedor se resuelve ANTES de armar el texto: su tenant define el vertical
   // (y con él qué datos le sirven al humano para cerrar o despachar).
-  const { destino, instancia, motivoInvalido, tenantId: tenantVendor, vendorNombre } = await destinoDeNotificacion(vendorId)
+  const { destino, canal, instancia, motivoInvalido, tenantId: tenantVendor, vendorNombre } = await destinoDeNotificacion(vendorId)
   const vertical = getVertical(verticalId ? { vertical: verticalId } : null, tenantId || tenantVendor)
 
   // Formato RICO (recuperado del sistema viejo): perfil del lead + sus palabras +
@@ -164,12 +165,15 @@ export async function notificarEscalamiento({
 
   if (motivoInvalido) {
     console.error(`[Notif] ❌ Lead ${leadId} escaló pero el aviso NO sale: el destino del vendedor ${vendorNombre || vendorId} (${tenantAviso}) es inválido — ${motivoInvalido}. Carga su WhatsApp personal (vendors.whatsappNumber) o el aviso nunca llega.`)
-  } else if (destino && instancia) {
+  } else if (destino && (instancia || transporteDe(canal) === 'cloud')) {
     try {
-      const r = await sendToWhatsApp({ telefono: destino, text: briefing, instanceName: instancia })
+      // Con la API oficial de Meta, este aviso es un mensaje que INICIA el negocio: solo
+      // entra si el vendedor le escribió al número en las últimas 24 h; si no, Meta exige
+      // una plantilla aprobada. El aviso igual queda en crm_notifications (abajo).
+      const r = await enviarTexto({ canal, telefono: destino, texto: briefing, instancia })
       sent = !!r.ok
       if (sent) {
-        console.log(`[Notif] 🔔 Escalamiento del lead ${leadId} avisado a ${vendorNombre || 'vendedor'} (${tenantAviso || 'tenant?'}) vía ${instancia}`)
+        console.log(`[Notif] 🔔 Escalamiento del lead ${leadId} avisado a ${vendorNombre || 'vendedor'} (${tenantAviso || 'tenant?'}) vía ${instancia || 'Meta'}`)
       } else {
         console.error(`[Notif] WhatsApp al vendedor falló (lead ${leadId}): ${r.error}`)
       }

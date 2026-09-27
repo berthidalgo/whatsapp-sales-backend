@@ -94,8 +94,9 @@ export async function resolveLead({
   // ─── 3. Resolver IDENTIDAD (maneja @lid) ───
   const identity = resolveIdentity({ remoteJid, remoteJidAlt, senderPn })
 
-  // Clave de dedup: número real si lo hay; si es @lid puro, el LID (estable por usuario).
-  const dedupKey = identity.phone || normalizePhone(identity.lidRaw)
+  // Clave de dedup: número real si lo hay; si no, el BSUID de Meta (usuario con username)
+  // o el LID de Baileys. Los dos son estables por usuario.
+  const dedupKey = identity.phone || identity.bsuid || normalizePhone(identity.lidRaw)
 
   if (!dedupKey || dedupKey.length < 9) {
     return buildErrorResponse('invalid_identity', startTime, {
@@ -231,7 +232,18 @@ export async function resolveLead({
  *   lidRaw: string|null        // el @lid original
  * }}
  */
-function resolveIdentity({ remoteJid, remoteJidAlt, senderPn }) {
+export function resolveIdentity({ remoteJid, remoteJidAlt, senderPn }) {
+  // ── WhatsApp Cloud API sin teléfono: solo BSUID (sep 2026) ──
+  // Desde jun-2026 un usuario puede ocultar su número con un username; Meta entonces
+  // manda solo su BSUID ("PE.8f3a..."). Se usa tal cual como identidad (no se le quitan
+  // letras: no es un teléfono) y el sender de Meta lo usa como destinatario.
+  // DEUDA: si más adelante el mismo usuario llega con teléfono, hoy serían dos leads;
+  // unirlos requiere guardar ambos IDs en el lead (columna nueva, fase de datos).
+  if (typeof remoteJid === 'string' && remoteJid.endsWith('@bsuid')) {
+    const bsuid = remoteJid.slice(0, -'@bsuid'.length)
+    return { phone: null, bsuid, waJid: bsuid, addressingMode: 'bsuid', lidRecovered: false, lidRaw: null }
+  }
+
   // ── Anillo 0 — número directo (caso normal) ──
   if (isPnJid(remoteJid)) {
     return {

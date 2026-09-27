@@ -1,38 +1,114 @@
 // src/whatsapp/cloud/sender.js — Hidata v20 · WhatsApp Cloud API (Meta)
 //
-// Envío vía Graph API. DOS funciones:
+// Envío vía Graph API:
 //   - sendToWhatsAppCloud(): mensaje de TEXTO libre. Solo válido DENTRO de la ventana
-//     de servicio de 24h (el lead escribió hace <24h). MISMA FIRMA que el sender de
-//     Evolution → drop-in para notifications.js / followupEngine.js / event-router.js.
+//     de servicio de 24h (el lead escribió hace <24h). Mismo contrato de retorno que el
+//     sender de Evolution → intercambiable desde whatsapp/transporte.js.
+//   - sendImageCloud(): imagen (p.ej. la foto de precios del Momento 4). Meta no acepta
+//     base64: primero se SUBE el archivo (/media) y luego se envía por su id.
 //   - sendTemplateCloud(): plantilla pre-aprobada. ÚNICO modo permitido FUERA de la
-//     ventana de 24h (followup >24h, campañas). Requiere template aprobado en Meta.
+//     ventana de 24h (followup >24h, campañas). Requiere plantilla aprobada en Meta.
 //
-// Contrato de retorno idéntico a Evolution: { ok, sent, messageId, status, latency_ms, error, errors }.
+// MULTITENANT (sep 2026): cada función acepta `credenciales` ({ phoneNumberId,
+// accessToken }) del canal del cliente. Sin ellas se usan las env vars CLOUD_* (el
+// número propio de Hidata o un deploy de un solo cliente).
+//
+// Destinatario: teléfono (campo `to`) o, si el usuario oculta su número con un
+// username, su BSUID (campo `recipient`; Meta lo acepta desde julio de 2026).
+//
+// Contrato de retorno: { ok, sent, messageId, status, latency_ms, error, errors }.
 
 import { cloudConfig, cloudReady } from './config.js'
 
 const TIMEOUT_MS = 10000
+const TIMEOUT_MEDIA_MS = 25000
 const MAX_TEXT = 4096
+
+// BSUID: código de país ISO de 2 letras + punto + hasta 128 alfanuméricos (ej. US.1349...).
+const RX_BSUID = /^[A-Z]{2}\.[A-Za-z0-9]{1,128}$/
+
+/** Campo de destinatario para Graph: { to: '519...' } o { recipient: 'PE.abc...' }. */
+export function destinatarioCloud(telefonoOBsuid) {
+  const v = String(telefonoOBsuid || '').trim()
+  if (RX_BSUID.test(v)) return { recipient: v }
+  const digitos = v.split('@')[0].split(':')[0].replace(/\D/g, '')
+  return digitos ? { to: digitos } : null
+}
+
+/** Credenciales efectivas: las del canal si vienen completas; si no, las del entorno. */
+function resolverCredenciales(credenciales) {
+  const env = cloudConfig()
+  const phoneNumberId = credenciales?.phoneNumberId || env.phoneNumberId
+  const accessToken = credenciales?.accessToken || env.accessToken
+  return { ...env, phoneNumberId, accessToken }
+}
 
 // ════════════════════════════════════════════════════════
 // TEXTO (dentro de ventana 24h)
 // ════════════════════════════════════════════════════════
-export async function sendToWhatsAppCloud({ telefono, text, instanceName = null }) {
+export async function sendToWhatsAppCloud({ telefono, text, credenciales = null }) {
   const start = Date.now()
-  if (!telefono || typeof telefono !== 'string') return buildErr('telefono_required', start)
-  if (!text || typeof text !== 'string')         return buildErr('text_required', start)
-  if (!cloudReady())                              return buildErr('cloud_not_configured', start)
+  const dest = destinatarioCloud(telefono)
+  if (!dest)                             return buildErr('telefono_required', start)
+  if (!text || typeof text !== 'string') return buildErr('text_required', start)
+  const c = resolverCredenciales(credenciales)
+  if (!cloudReady(c))                    return buildErr('cloud_not_configured', start)
 
-  const c = cloudConfig()
   let finalText = text.trim()
   if (finalText.length > MAX_TEXT) finalText = finalText.slice(0, MAX_TEXT - 3) + '...'
 
   const body = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: soloDigitos(telefono),
+    ...dest,
     type: 'text',
     text: { preview_url: false, body: finalText }
+  }
+  return postGraph(`${c.graphBase}/${c.phoneNumberId}/messages`, c.accessToken, body, start)
+}
+
+// ════════════════════════════════════════════════════════
+// IMAGEN: subir a /media y enviar por id
+// ════════════════════════════════════════════════════════
+export async function sendImageCloud({ telefono, base64, mimetype = 'image/png', fileName = 'imagen.png', caption = '', credenciales = null }) {
+  const start = Date.now()
+  const dest = destinatarioCloud(telefono)
+  if (!dest || !base64) return buildErr('media_params_missing', start)
+  const c = resolverCredenciales(credenciales)
+  if (!cloudReady(c))   return buildErr('cloud_not_configured', start)
+
+  // 1. Subir el archivo (multipart). Meta devuelve { id } y lo guarda 30 días.
+  const form = new FormData()
+  form.append('messaging_product', 'whatsapp')
+  form.append('type', mimetype)
+  const binario = Buffer.from(String(base64).replace(/^data:[^;]+;base64,/, ''), 'base64')
+  form.append('file', new Blob([binario], { type: mimetype }), fileName)
+
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MEDIA_MS)
+  let mediaId = null
+  try {
+    const res = await fetch(`${c.graphBase}/${c.phoneNumberId}/media`, {
+      method: 'POST', headers: { Authorization: `Bearer ${c.accessToken}` }, body: form, signal: ctrl.signal
+    })
+    clearTimeout(timer)
+    const data = await res.json().catch(() => null)
+    if (!res.ok || !data?.id) {
+      return { ...buildErr(`graph_upload_${res.status}`, start), status: res.status, errors: [String(data?.error?.message || '').slice(0, 300)] }
+    }
+    mediaId = data.id
+  } catch (e) {
+    clearTimeout(timer)
+    return { ...buildErr(e.name === 'AbortError' ? `timeout_${TIMEOUT_MEDIA_MS}ms` : 'fetch_error', start), errors: [e.message] }
+  }
+
+  // 2. Enviar el mensaje con la imagen subida
+  const body = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    ...dest,
+    type: 'image',
+    image: { id: mediaId, ...(caption ? { caption } : {}) }
   }
   return postGraph(`${c.graphBase}/${c.phoneNumberId}/messages`, c.accessToken, body, start)
 }
@@ -41,16 +117,17 @@ export async function sendToWhatsAppCloud({ telefono, text, instanceName = null 
 // TEMPLATE (fuera de ventana 24h — followups/campañas)
 // components: array Meta (header/body/button params). Vacío = template sin variables.
 // ════════════════════════════════════════════════════════
-export async function sendTemplateCloud({ telefono, templateName, languageCode = 'es', components = [] }) {
+export async function sendTemplateCloud({ telefono, templateName, languageCode = 'es', components = [], credenciales = null }) {
   const start = Date.now()
-  if (!telefono || typeof telefono !== 'string') return buildErr('telefono_required', start)
-  if (!templateName)                             return buildErr('template_required', start)
-  if (!cloudReady())                             return buildErr('cloud_not_configured', start)
+  const dest = destinatarioCloud(telefono)
+  if (!dest)          return buildErr('telefono_required', start)
+  if (!templateName)  return buildErr('template_required', start)
+  const c = resolverCredenciales(credenciales)
+  if (!cloudReady(c)) return buildErr('cloud_not_configured', start)
 
-  const c = cloudConfig()
   const body = {
     messaging_product: 'whatsapp',
-    to: soloDigitos(telefono),
+    ...dest,
     type: 'template',
     template: {
       name: templateName,
@@ -78,11 +155,14 @@ async function postGraph(url, token, body, start) {
     const data = await res.json().catch(() => null)
 
     if (!res.ok) {
-      // Meta devuelve { error: { message, code, error_subcode, ... } }
+      // Meta devuelve { error: { message, code, error_subcode, ... } }. El código 131047
+      // significa "fuera de la ventana de 24 h": ahí solo se puede enviar una plantilla.
       const metaErr = data?.error?.message || `http_${res.status}`
+      const code = data?.error?.code
       return {
         ok: false, sent: false, messageId: null, status: res.status,
-        latency_ms: Date.now() - start, error: `graph_${res.status}`,
+        latency_ms: Date.now() - start,
+        error: code === 131047 ? 'fuera_de_ventana_24h' : `graph_${res.status}`,
         errors: [String(metaErr).slice(0, 300)]
       }
     }
@@ -102,12 +182,8 @@ async function postGraph(url, token, body, start) {
   }
 }
 
-function soloDigitos(tel) {
-  return String(tel).split('@')[0].split(':')[0].replace(/\D/g, '')
-}
-
 function buildErr(code, start) {
   return { ok: false, sent: false, messageId: null, status: null, latency_ms: Date.now() - start, error: code, errors: [] }
 }
 
-export const CLOUD_SENDER_VERSION = 'v1_cloud_api_graph'
+export const CLOUD_SENDER_VERSION = 'v2_multitenant_imagen_bsuid'

@@ -31,9 +31,18 @@ export function cloudConfig() {
  * ¿Está Cloud API listo para ENVIAR? Necesita al menos phoneNumberId + accessToken.
  * Se usa como guard antes de cualquier llamada a Graph.
  */
-export function cloudReady() {
-  const c = cloudConfig()
+export function cloudReady(credenciales = null) {
+  const c = credenciales || cloudConfig()
   return !!(c.phoneNumberId && c.accessToken)
+}
+
+/**
+ * ¿Recibimos webhooks de Meta? Basta con tener el app secret (la firma es obligatoria).
+ * Es independiente de WHATSAPP_PROVIDER: con varios clientes, unos pueden estar en Cloud
+ * y otros en Evolution a la vez; el proveedor de cada uno lo dice su canal.
+ */
+export function cloudWebhookHabilitado() {
+  return !!cloudConfig().appSecret
 }
 
 /** ¿Es Cloud el proveedor activo? (default = evolution, no rompe producción) */
