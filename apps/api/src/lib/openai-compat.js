@@ -24,9 +24,11 @@ export const PROVEEDORES_COMPAT = {
   mistral: {
     url: 'https://api.mistral.ai/v1/chat/completions',
     llave: 'MISTRAL_API_KEY',
-    // Small 4 ($0.15/$0.60): rinde los US$10/mes gratis del plan Free (~600 conversaciones).
-    // Ojo: Medium 3.5 cuesta 10x ($1.5/$7.5) y Large 3 ($0.5/$1.5) es más barato que Medium.
-    modelo: 'mistral-small-latest',
+    // Plan Free (verificado con la cuenta, 28-sep-2026): SOLO los Ministral (3B/8B/14B) y
+    // open-mistral-nemo tienen cupo; Small, Medium, Magistral y Devstral dan 0 pedidos/min
+    // y Large 403. Ministral 14B ($0.2/$0.2, 30 RPM) es el mejor de los gratis
+    // (~500 conversaciones/mes con los US$10). La caché NO aplica aquí (cached_tokens=0).
+    modelo: 'ministral-14b-latest',
     json: true
   },
   openrouter: {

@@ -124,7 +124,7 @@ export function pasoConfigurado(paso, env = process.env) {
  * El primario, respetando las perillas históricas (BRAIN_PROVIDER + BRAIN_MODEL...).
  * BRAIN_MODEL es SIEMPRE de Gemini (también nombra al Vertex de seguro cuando el
  * primario es otro); un primario no-Gemini lleva su modelo en BRAIN_PROVIDER:
- *   BRAIN_PROVIDER=mistral:mistral-small-latest · BRAIN_PROVIDER=openrouter:google/gemma-4-31b-it:free
+ *   BRAIN_PROVIDER=mistral:ministral-14b-latest · BRAIN_PROVIDER=openrouter:google/gemma-4-31b-it:free
  */
 export function pasoPrimario(env = process.env) {
   const pedido = parsearPaso(env.BRAIN_PROVIDER || 'gemini') || { provider: 'vertex', model: null }

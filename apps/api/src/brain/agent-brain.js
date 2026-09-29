@@ -481,7 +481,7 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
 // brain-replay midan EXACTAMENTE el mismo camino de llamada que el bot vivo.
 // ════════════════════════════════════════════════════════
 function cadenaDeBanco(o) {
-  // BRAIN_PROVIDER puede traer el modelo del primario no-Gemini ("mistral:mistral-small-latest")
+  // BRAIN_PROVIDER puede traer el modelo del primario no-Gemini ("mistral:ministral-14b-latest")
   const delEntorno = o.provider ? null : parsearPaso(process.env.BRAIN_PROVIDER || 'gemini')
   const pedido = o.useDevApi ? 'devapi' : String(o.provider || delEntorno?.provider || 'gemini').toLowerCase()
   const esGemini = ['gemini', 'vertex', 'devapi'].includes(pedido)

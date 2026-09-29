@@ -11,7 +11,7 @@
 //   node scripts/probar-cerebro.js --tenant bioayur        → otro cliente
 //   node scripts/probar-cerebro.js --mensaje "cuánto cuesta?"
 //   node scripts/probar-cerebro.js --solo mistral          → un solo proveedor
-//   node scripts/probar-cerebro.js --solo mistral --modelos mistral-small-latest,mistral-large-latest
+//   node scripts/probar-cerebro.js --solo mistral --modelos ministral-14b-latest,ministral-8b-latest
 //   node scripts/probar-cerebro.js --conversacion          → 4 turnos (saludo, precio, objeción, pedido)
 //                                                            para juzgar CALIDAD, no solo si responde
 //
@@ -97,7 +97,10 @@ for (const paso of cadena) {
       break
     }
     const largo = GUION.length > 1 ? 600 : 220
-    console.log(`   LEAD: ${texto}\n   BOT (${r.audit?.latency_ms} ms · ${r.stage_sugerido}): ${r.mensaje.replace(/\s+/g, ' ').slice(0, largo)}\n`)
+    // Los guardianes de salida (precio que no está en la ficha, promesas prohibidas...)
+    // marcan lo que el modelo dijo mal: es la mejor señal de calidad de un modelo barato.
+    const flags = (r.guardrail_flags || []).length ? `\n   ⚠ guardianes: ${r.guardrail_flags.join(' | ').slice(0, 300)}` : ''
+    console.log(`   LEAD: ${texto}\n   BOT (${r.audit?.latency_ms} ms · ${r.stage_sugerido}): ${r.mensaje.replace(/\s+/g, ' ').slice(0, largo)}${flags}\n`)
     historial.push({ rol: 'lead', texto }, { rol: 'agente', texto: r.mensaje })
     estadoLead = { ...estadoLead, stage: r.stage_sugerido || estadoLead.stage, slots: { ...estadoLead.slots, ...(r.slots_detectados || {}) } }
   }
