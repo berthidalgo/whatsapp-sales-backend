@@ -11,7 +11,7 @@ Backend multitenant de un vendedor por WhatsApp. Un agente conversacional ("el c
 | API | Node 20+ · Fastify 5 · Prisma 5 |
 | Base de datos | PostgreSQL (Supabase). Esquema aplicado con **SQL quirúrgico**, nunca `prisma db push` (ver abajo) |
 | Transporte WhatsApp | Evolution API v2 (Baileys) por defecto · adaptador de WhatsApp Cloud API listo (apagado) |
-| Cerebro | Cadena de proveedores LLM configurable: Gemini (Vertex) → Gemini Developer API → Groq → Cerebras |
+| Cerebro | Cadena de proveedores LLM configurable: Gemini (Vertex / Developer API), Groq, Cerebras y cualquier OpenAI-compatible (Mistral, OpenRouter, DeepSeek, NVIDIA o una URL propia) |
 | Audio entrante | Whisper (Groq) · Imágenes/comprobantes: Gemini multimodal |
 | Observabilidad | Sentry (con scrubber de PII) · `turn_trace` (una fila por turno del cerebro) · `/health` |
 | Hosting | Render (auto-deploy desde `main`, root `apps/api`) |
@@ -52,7 +52,7 @@ Motores de fondo (`/cron/followup`, cada ~5 min): rescate de escalados sin atend
 ## El cerebro
 
 - **Verticales** (`src/brain/verticals/`): el manual de venta de cada negocio. Componen las reglas comunes de `nucleo-comun.js` y declaran lo propio: momentos, schema de slots, guardrails del rubro, briefing al vendedor y cómo reconocer una venta cerrada. `tests/contrato-vertical.test.js` falla si un vertical pierde una regla común.
-- **Cadena de proveedores** (`src/lib/llm-cadena.js`): el primario sale de `BRAIN_PROVIDER`/`BRAIN_MODEL`; los seguros, de `BRAIN_FALLBACKS` o, si está vacío, de las llaves presentes. Los errores de configuración o de plan (401/402/403/404/413) no se reintentan y apartan ese proveedor 10 min; los transitorios (429/5xx/JSON roto) sí se reintentan. El estado de cada paso se ve en `/health` (resumen) y `/debug/brain-health` (detalle).
+- **Cadena de proveedores** (`src/lib/llm-cadena.js`): el primario sale de `BRAIN_PROVIDER`/`BRAIN_MODEL`; los seguros, de `BRAIN_FALLBACKS` o, si está vacío, de las llaves presentes. Los errores de configuración o de plan (401/402/403/404/413) no se reintentan y apartan ese proveedor 10 min; los transitorios (429/5xx/JSON roto) sí se reintentan. El estado de cada paso se ve en `/health` (resumen) y `/debug/brain-health` (detalle). El ping solo prueba la llave; para saber si un proveedor aguanta el turno REAL (~11K tokens, JSON), correr `node scripts/probar-cerebro.js` (lee la campaña de la base y no envía nada).
 - **Trampas conocidas**, resueltas en `normalizarPaso`: Gemini 3 solo existe en la location `global` y usa `thinkingLevel`; Gemini 2.x usa `thinkingBudget`; `gpt-oss` necesita `reasoning_effort` o devuelve JSON vacío.
 
 ---

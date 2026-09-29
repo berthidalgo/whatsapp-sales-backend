@@ -11,8 +11,9 @@ import assert from 'node:assert/strict'
 import {
   parsearPaso, normalizarPaso, construirCadena, pasoPrimario, statusDeError,
   esErrorDeConfig, abreCircuito, ejecutarCadena, circuitoAbierto, _resetCadena,
-  extraerJsonTexto, resumenSalud, pasoVision
+  extraerJsonTexto, resumenSalud, pasoVision, llamarPaso
 } from '../src/lib/llm-cadena.js'
+import { urlCompat } from '../src/lib/openai-compat.js'
 import { parsearJsonCerebro } from '../src/brain/agent-brain.js'
 
 const sinEspera = async () => {}
@@ -78,6 +79,76 @@ test('construirCadena: BRAIN_FALLBACKS manda, sin duplicar al primario', () => {
 test('construirCadena: primario no-Gemini → Vertex entra como seguro (fallback simétrico histórico)', () => {
   const ids = construirCadena({ BRAIN_PROVIDER: 'cerebras', CEREBRAS_API_KEY: 'y', BRAIN_MODEL: 'gemini-2.5-flash' }).map(p => p.id)
   assert.deepEqual(ids, ['cerebras:gpt-oss-120b', 'vertex:gemini-2.5-flash'])
+})
+
+// ── Proveedores OpenAI-compatibles (sep 2026: ninguno de los 4 originales respondía) ──
+
+test('compat: poner la llave de Mistral u OpenRouter basta para sumar un seguro', () => {
+  const env = { BRAIN_PROVIDER: 'devapi', BRAIN_MODEL: 'gemini-3.1-flash-lite', GEMINI_DEV_API_KEY: 'g', MISTRAL_API_KEY: 'm', OPENROUTER_API_KEY: 'o', BRAIN_FALLBACKS: 'mistral,openrouter' }
+  assert.deepEqual(construirCadena(env).map(p => p.id),
+    ['devapi:gemini-3.1-flash-lite', 'mistral:mistral-medium-latest', 'openrouter:google/gemma-4-31b-it:free'])
+  const auto = construirCadena({ BRAIN_MODEL: 'gemini-2.5-pro', DEEPSEEK_API_KEY: 'd' }).map(p => p.id)
+  assert.deepEqual(auto, ['vertex:gemini-2.5-pro', 'deepseek:deepseek-flash'], 'sin BRAIN_FALLBACKS entra solo por tener llave')
+})
+
+test('compat: primario no-Gemini con su modelo en BRAIN_PROVIDER (el ":free" de OpenRouter no se confunde)', () => {
+  const p = pasoPrimario({ BRAIN_PROVIDER: 'openrouter:google/gemma-4-31b-it:free', BRAIN_MODEL: 'gemini-2.5-pro' })
+  assert.equal(p.id, 'openrouter:google/gemma-4-31b-it:free')
+  assert.equal(p.rol, 'primario')
+  assert.equal(pasoPrimario({ BRAIN_PROVIDER: 'mistral' }).model, 'mistral-medium-latest')
+  assert.equal(pasoPrimario({ BRAIN_PROVIDER: 'devapi:gemini-3.5-flash-lite' }).id, 'devapi:gemini-3.5-flash-lite')
+})
+
+test('compat: el genérico necesita URL y modelo; sin eso no entra a la cadena', () => {
+  assert.equal(normalizarPaso({ provider: 'compat' }, {}), null, 'sin modelo no hay a quién llamar')
+  const env = { OPENAI_COMPAT_BASE_URL: 'https://api.together.xyz/v1', OPENAI_COMPAT_MODEL: 'Qwen/Qwen3-32B' }
+  const ids = construirCadena({ ...env, BRAIN_PROVIDER: 'devapi', GEMINI_DEV_API_KEY: 'g', BRAIN_FALLBACKS: 'compat' }).map(p => p.id)
+  assert.deepEqual(ids, ['devapi:gemini-2.5-flash', 'compat:Qwen/Qwen3-32B'])
+  assert.deepEqual(construirCadena({ BRAIN_PROVIDER: 'devapi', GEMINI_DEV_API_KEY: 'g', BRAIN_FALLBACKS: 'compat' }).map(p => p.id), ['devapi:gemini-2.5-flash'])
+})
+
+test('compat: urlCompat arma /chat/completions desde la base del genérico', () => {
+  assert.equal(urlCompat('compat', { OPENAI_COMPAT_BASE_URL: 'http://localhost:11434/v1/' }), 'http://localhost:11434/v1/chat/completions')
+  assert.equal(urlCompat('mistral', {}), 'https://api.mistral.ai/v1/chat/completions')
+  assert.equal(urlCompat('compat', {}), null)
+})
+
+test('compat: el cliente manda el JSON mode y el razonamiento con el dialecto de cada proveedor', async () => {
+  const fetchOriginal = globalThis.fetch
+  const cuerpos = []
+  globalThis.fetch = async (url, opts) => {
+    cuerpos.push({ url, headers: opts.headers, body: JSON.parse(opts.body) })
+    return { ok: true, json: async () => ({ model: 'x', choices: [{ message: { content: '{"mensaje":"hola"}' } }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }) }
+  }
+  try {
+    const env = { OPENROUTER_API_KEY: 'o', NVIDIA_API_KEY: 'n' }
+    const r = await llamarPaso(normalizarPaso({ provider: 'openrouter', model: 'openai/gpt-oss-120b:free' }, env), { systemInstruction: 's', userPrompt: 'u', env })
+    assert.equal(r.text, '{"mensaje":"hola"}')
+    assert.equal(r.usage.promptTokenCount, 10)
+    assert.deepEqual(cuerpos[0].body.reasoning, { effort: 'low' }, 'OpenRouter usa su campo "reasoning"')
+    assert.deepEqual(cuerpos[0].body.response_format, { type: 'json_object' })
+    assert.equal(cuerpos[0].headers.Authorization, 'Bearer o')
+    await llamarPaso(normalizarPaso({ provider: 'nvidia' }, env), { systemInstruction: 's', userPrompt: 'u', env })
+    assert.equal(cuerpos[1].body.reasoning_effort, 'low')
+    assert.equal(cuerpos[1].body.response_format, undefined, 'NIM: el JSON lo rescata el parser')
+  } finally {
+    globalThis.fetch = fetchOriginal
+  }
+})
+
+test('compat: un 402 de OpenRouter se entiende como error de plan (abre circuito)', async () => {
+  const fetchOriginal = globalThis.fetch
+  globalThis.fetch = async () => ({ ok: false, status: 402, json: async () => ({ error: { message: 'Insufficient credits' } }) })
+  try {
+    const env = { OPENROUTER_API_KEY: 'o' }
+    await assert.rejects(
+      llamarPaso(normalizarPaso({ provider: 'openrouter' }, env), { systemInstruction: 's', userPrompt: 'u', env }),
+      (e) => statusDeError(e) === 402 && abreCircuito(e)
+    )
+    assert.equal(statusDeError(new Error('mistral_401: {"message":"Unauthorized"}')), 401)
+  } finally {
+    globalThis.fetch = fetchOriginal
+  }
 })
 
 test('pasoVision: el primer Gemini de la cadena (el único multimodal)', () => {

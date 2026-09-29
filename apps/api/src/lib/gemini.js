@@ -215,7 +215,14 @@ const PRICING_PER_1M_TOKENS = {
   'gemini-3.5-flash': {
     input:  1.50,
     output: 9.00
-  }
+  },
+
+  // Candidatos del cerebro tras el peritaje de sep-2026 (Vertex sin facturación →
+  // Gemini Developer API). Los Flash-Lite tienen plan gratis (~500 pedidos/día).
+  // 3.8 Flash: precio de lanzamiento hasta dic-2026 (después $1.50 / $7.50).
+  'gemini-3.1-flash-lite': { input: 0.25, output: 1.50 },
+  'gemini-3.5-flash-lite': { input: 0.30, output: 2.50 },
+  'gemini-3.8-flash':      { input: 0.75, output: 3.75 }
 }
 
 /**

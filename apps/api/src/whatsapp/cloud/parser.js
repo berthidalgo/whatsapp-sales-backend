@@ -11,7 +11,7 @@
 //             statuses:[{id,status,recipient_id,...}] } }] }] }
 //
 // Salida (por evento): { tipo:'message'|'status', telefono, pushName, messageId,
-//   messageType, text, mediaId, caption, timestamp, phoneNumberId }.
+//   messageType, text, mediaId, caption, timestamp, phoneNumberId, adContext }.
 // El caption de una imagen se mapea a `text` (mismo criterio que el fix de Evolution:
 // imagen con pie de foto va al cerebro como texto).
 
@@ -57,7 +57,8 @@ export function parseCloudWebhook(payload) {
           mediaId: null,
           caption: null,
           timestamp: m.timestamp || null,
-          phoneNumberId
+          phoneNumberId,
+          adContext: contextoDeAnuncio(m.referral)
         }
 
         switch (m.type) {
@@ -97,9 +98,29 @@ export function parseCloudWebhook(payload) {
   return eventos
 }
 
+/**
+ * El primer mensaje de alguien que tocó "Enviar mensaje" en un anuncio (Click-to-WhatsApp)
+ * trae `referral`: titular y texto del anuncio, su ID y el ctwa_clid del clic. Se traduce
+ * a la MISMA forma que extractAdContext() de Evolution para que el Campaign Resolver
+ * (Plan B: titular del anuncio → campaña) funcione igual con los dos proveedores.
+ */
+export function contextoDeAnuncio(referral) {
+  if (!referral || typeof referral !== 'object') return null
+  return {
+    adReplyTitle: referral.headline || null,
+    adReplyBody: referral.body || null,
+    sourceId: referral.source_id || null,        // ID del anuncio (o del post)
+    sourceUrl: referral.source_url || null,
+    sourceType: referral.source_type || null,    // 'ad' | 'post'
+    ctwaClid: referral.ctwa_clid || null,        // ID del clic: lo pide la Conversions API de Meta
+    conversionSource: referral.source_type === 'ad' ? 'FB_Ads' : (referral.source_type || null),
+    hasAdContext: true
+  }
+}
+
 /** Extrae solo los mensajes entrantes (descarta statuses). Atajo para el cableado. */
 export function soloMensajes(payload) {
   return parseCloudWebhook(payload).filter(e => e.tipo === 'message')
 }
 
-export const CLOUD_PARSER_VERSION = 'v2_bsuid'
+export const CLOUD_PARSER_VERSION = 'v3_bsuid_referral'

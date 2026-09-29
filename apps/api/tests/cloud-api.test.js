@@ -62,6 +62,19 @@ test('parser: foto con pie → el pie es el texto; audio → mediaId para transc
   assert.equal(evs[1].mediaId, 'MEDIA2')
 })
 
+test('parser: quien llega de un anuncio (Click-to-WhatsApp) trae el titular, el ID del anuncio y el ctwa_clid', () => {
+  const [ev] = parseCloudWebhook(envoltura({ ...meta, messages: [{
+    from: '51987654321', id: 'wamid.ad', type: 'text', text: { body: 'Hola, quiero más información' },
+    referral: { source_url: 'https://fb.me/x', source_id: '120210000000', source_type: 'ad', headline: 'Colágeno Premium 2x1', body: 'Solo esta semana', ctwa_clid: 'ARAkLmN0' }
+  }] }))
+  assert.equal(ev.adContext.adReplyTitle, 'Colágeno Premium 2x1', 'el Campaign Resolver (Plan B) matchea por el titular')
+  assert.equal(ev.adContext.sourceId, '120210000000')
+  assert.equal(ev.adContext.ctwaClid, 'ARAkLmN0')
+  assert.equal(ev.adContext.conversionSource, 'FB_Ads')
+  const [organico] = parseCloudWebhook(envoltura({ ...meta, messages: [{ from: '519', id: 'o', type: 'text', text: { body: 'hola' } }] }))
+  assert.equal(organico.adContext, null)
+})
+
 test('parser: solo procesa webhooks de WhatsApp Business', () => {
   assert.deepEqual(parseCloudWebhook({ object: 'page', entry: [] }), [])
 })
@@ -139,6 +152,13 @@ test('router: un texto entra al MISMO turno que Evolution, con el canal y el ten
   const { leadInfo } = llamadas.turno[0]
   assert.equal(leadInfo.channel.provider, 'cloud', 'la respuesta sale por Meta')
   assert.equal(leadInfo.tenantId, 'hidata')
+})
+
+test('router: el contexto del anuncio llega al Campaign Resolver (antes se perdía con Meta)', async () => {
+  const { deps, llamadas } = depsFalsas()
+  const adContext = { adReplyTitle: 'Colágeno Premium 2x1', sourceId: '1202', hasAdContext: true }
+  await procesarMensajeCloud({ ...evTexto, adContext }, deps)
+  assert.equal(llamadas.resolveLead[0].adContext, adContext)
 })
 
 test('router: Meta reintenta webhooks → el mensaje repetido no se procesa dos veces', async () => {

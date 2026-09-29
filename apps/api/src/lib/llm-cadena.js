@@ -24,12 +24,14 @@
 //      /debug/brain-health dicen la verdad en vez de suponerla.
 //
 // Contrato de cada paso: { id, provider, model, location, thinkingLevel,
-//   thinkingBudget, reasoningEffort, rol }. provider ∈ vertex | devapi | groq | cerebras.
+//   thinkingBudget, reasoningEffort, rol }. provider ∈ vertex | devapi | groq | cerebras
+//   | mistral | openrouter | deepseek | nvidia | compat (los 5 últimos: openai-compat.js).
 // ─────────────────────────────────────────────────────────────────────────
 
 import { callGemini } from './gemini.js'
 import { callGroq, schemaToPrompt } from './groq.js'
 import { callCerebras } from './cerebras.js'
+import { callCompat, esProveedorCompat, compatConfigurado, modeloCompatDefault } from './openai-compat.js'
 
 const THINKING_BUDGET_2X = 1024          // tope de pensamiento para los Gemini 2.x
 const MAX_OUT_GEMINI = 8000              // el thinking consume del MISMO presupuesto
@@ -44,7 +46,16 @@ const MODELO_DEFAULT = {
   cerebras: 'gpt-oss-120b'
 }
 
-const ALIAS = { gemini: 'vertex', 'gemini-dev': 'devapi', google: 'vertex' }
+const ALIAS = { gemini: 'vertex', 'gemini-dev': 'devapi', google: 'vertex', 'openai-compat': 'compat' }
+
+/** Modelo por defecto del proveedor (los OpenAI-compatibles lo leen de su preset). */
+function modeloDefault(provider, env) {
+  return MODELO_DEFAULT[provider] || (esProveedorCompat(provider) ? modeloCompatDefault(provider, env) : null)
+}
+
+function proveedorConocido(provider) {
+  return !!MODELO_DEFAULT[provider] || esProveedorCompat(provider)
+}
 
 // ════════════════════════════════════════════════════════
 // ARMADO DE LA CADENA (funciones puras sobre `env` → testeables)
@@ -74,8 +85,9 @@ export function parsearPaso(txt) {
 export function normalizarPaso(paso, env = process.env) {
   if (!paso?.provider) return null
   const provider = ALIAS[paso.provider] || paso.provider
-  if (!MODELO_DEFAULT[provider]) return null
-  const model = paso.model || MODELO_DEFAULT[provider]
+  if (!proveedorConocido(provider)) return null
+  const model = paso.model || modeloDefault(provider, env)
+  if (!model) return null   // "compat" sin modelo: no hay a quién llamar
   const esGemini = provider === 'vertex' || provider === 'devapi'
   const esGemini3 = /^gemini-3/.test(model)
 
@@ -104,17 +116,24 @@ export function pasoConfigurado(paso, env = process.env) {
   if (paso.provider === 'devapi') return !!env.GEMINI_DEV_API_KEY
   if (paso.provider === 'groq') return !!env.GROQ_API_KEY
   if (paso.provider === 'cerebras') return !!env.CEREBRAS_API_KEY
+  if (esProveedorCompat(paso.provider)) return compatConfigurado(paso.provider, env)
   return false
 }
 
-/** El primario, respetando las perillas históricas (BRAIN_PROVIDER + BRAIN_MODEL...). */
+/**
+ * El primario, respetando las perillas históricas (BRAIN_PROVIDER + BRAIN_MODEL...).
+ * BRAIN_MODEL es SIEMPRE de Gemini (también nombra al Vertex de seguro cuando el
+ * primario es otro); un primario no-Gemini lleva su modelo en BRAIN_PROVIDER:
+ *   BRAIN_PROVIDER=mistral:mistral-small-latest · BRAIN_PROVIDER=openrouter:google/gemma-4-31b-it:free
+ */
 export function pasoPrimario(env = process.env) {
-  const provider = ALIAS[(env.BRAIN_PROVIDER || 'gemini').toLowerCase()] || (env.BRAIN_PROVIDER || '').toLowerCase()
+  const pedido = parsearPaso(env.BRAIN_PROVIDER || 'gemini') || { provider: 'vertex', model: null }
+  const provider = pedido.provider
   const esGemini = provider === 'vertex' || provider === 'devapi'
   return normalizarPaso({
     provider,
-    model: esGemini ? (env.BRAIN_MODEL || 'gemini-2.5-flash') : null,
-    location: esGemini ? (env.BRAIN_LOCATION || null) : null,
+    model: esGemini ? (pedido.model || env.BRAIN_MODEL || 'gemini-2.5-flash') : pedido.model,
+    location: esGemini ? (pedido.location || env.BRAIN_LOCATION || null) : null,
     thinkingLevel: esGemini ? (env.BRAIN_THINKING_LEVEL || null) : null,
     rol: 'primario'
   }, env)
@@ -123,8 +142,8 @@ export function pasoPrimario(env = process.env) {
 /**
  * La cadena viva: primario + seguros, sin duplicados y sin pasos sin llave.
  * Sin BRAIN_FALLBACKS: Vertex (si el primario no lo es) → Gemini Developer API →
- * Groq → Cerebras, cada uno solo si tiene llave. Así, poner una llave en Render
- * basta para sumar un seguro.
+ * Groq → Cerebras → Mistral → OpenRouter → DeepSeek → NVIDIA → compat, cada uno solo
+ * si tiene llave. Así, poner una llave en Render basta para sumar un seguro.
  */
 export function construirCadena(env = process.env) {
   const primario = pasoPrimario(env)
@@ -134,7 +153,12 @@ export function construirCadena(env = process.env) {
         primario?.provider !== 'vertex' ? { provider: 'vertex', model: env.BRAIN_MODEL || null, location: env.BRAIN_LOCATION || null } : null,
         { provider: 'devapi', model: null },
         { provider: 'groq', model: null },
-        { provider: 'cerebras', model: null }
+        { provider: 'cerebras', model: null },
+        { provider: 'mistral', model: null },
+        { provider: 'openrouter', model: null },
+        { provider: 'deepseek', model: null },
+        { provider: 'nvidia', model: null },
+        { provider: 'compat', model: null }
       ]
   const cadena = primario ? [primario] : []
   for (const c of crudos) {
@@ -156,7 +180,7 @@ export function statusDeError(err) {
   if (Number.isInteger(err.status)) return err.status
   if (Number.isInteger(err.code) && err.code >= 100 && err.code < 600) return err.code
   const msg = String(err.message || err)
-  const m = msg.match(/\b(?:groq|cerebras)_(\d{3})\b/) || msg.match(/"code"\s*:\s*(\d{3})/) || msg.match(/\bstatus(?:Code)?\s*[:=]?\s*(\d{3})\b/i)
+  const m = msg.match(/\b(?:groq|cerebras|mistral|openrouter|deepseek|nvidia|compat)_(\d{3})\b/) || msg.match(/"code"\s*:\s*(\d{3})/) || msg.match(/\bstatus(?:Code)?\s*[:=]?\s*(\d{3})\b/i)
   return m ? Number(m[1]) : null
 }
 
@@ -228,6 +252,19 @@ export async function llamarPaso(paso, { systemInstruction, userPrompt, schema =
   }
   // OpenAI-compatibles: sin responseSchema nativo → el schema va descrito en el prompt.
   const sys = schema ? `${systemInstruction}\n\n${schemaToPrompt(schema)}` : systemInstruction
+  if (esProveedorCompat(paso.provider)) {
+    return callCompat({
+      provider: paso.provider,
+      model: paso.model,
+      systemInstruction: sys,
+      contents: userPrompt,
+      temperature,
+      maxOutputTokens: MAX_OUT_OPENAI_COMPAT,
+      reasoningEffort: paso.reasoningEffort,
+      jsonMode,
+      env
+    })
+  }
   const fn = paso.provider === 'groq' ? callGroq : callCerebras
   return fn({
     model: paso.model,
@@ -439,4 +476,4 @@ export function describirCadena(cadena) {
   return cadena.map((p, i) => `${i === 0 ? 'primario' : 'seguro' + i}=${p.id}`).join(' → ')
 }
 
-export const LLM_CADENA_VERSION = 'v1_cadena_configurable_circuit_breaker'
+export const LLM_CADENA_VERSION = 'v2_cadena_con_openai_compat'

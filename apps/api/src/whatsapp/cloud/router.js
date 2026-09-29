@@ -77,12 +77,16 @@ export async function procesarMensajeCloud(ev, deps = {}) {
   // 3. Identidad: teléfono si viene; si el usuario usa username, su BSUID.
   const remitente = ev.telefono || ev.bsuid
   if (!remitente) return { queued: false, reason: 'sin_remitente' }
+  if (ev.adContext?.hasAdContext) {
+    console.log(`[CloudRouter] 📢 llegó de un anuncio: "${ev.adContext.adReplyTitle || '(sin titular)'}" (ad ${ev.adContext.sourceId || '?'})`)
+  }
   const resolution = await d.resolveLead({
     remoteJid: ev.telefono ? `${ev.telefono}@s.whatsapp.net` : `${ev.bsuid}@bsuid`,
     senderPn: ev.telefono ? `${ev.telefono}@s.whatsapp.net` : null,
     addressingMode: ev.telefono ? 'pn' : 'bsuid',
     instanceName: ev.phoneNumberId,
     pushName: ev.pushName,
+    adContext: ev.adContext || null,   // anuncio → campaña (Plan B del Campaign Resolver)
     firstMessageText: ev.text || '',
     tenantId: canal.tenantId
   })

@@ -71,7 +71,7 @@
 // ════════════════════════════════════════════════════════════════════════
 
 import { calculateCost } from '../lib/gemini.js'
-import { construirCadena, normalizarPaso, ejecutarCadena, llamarPaso } from '../lib/llm-cadena.js'
+import { construirCadena, normalizarPaso, parsearPaso, ejecutarCadena, llamarPaso } from '../lib/llm-cadena.js'
 import { flattenFactSheet } from '../response/factsheet-loader.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 import { getVertical } from './verticals/index.js'
@@ -481,11 +481,13 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
 // brain-replay midan EXACTAMENTE el mismo camino de llamada que el bot vivo.
 // ════════════════════════════════════════════════════════
 function cadenaDeBanco(o) {
-  const pedido = o.useDevApi ? 'devapi' : String(o.provider || process.env.BRAIN_PROVIDER || 'gemini').toLowerCase()
+  // BRAIN_PROVIDER puede traer el modelo del primario no-Gemini ("mistral:mistral-small-latest")
+  const delEntorno = o.provider ? null : parsearPaso(process.env.BRAIN_PROVIDER || 'gemini')
+  const pedido = o.useDevApi ? 'devapi' : String(o.provider || delEntorno?.provider || 'gemini').toLowerCase()
   const esGemini = ['gemini', 'vertex', 'devapi'].includes(pedido)
   const base = normalizarPaso({
     provider: pedido,
-    model: o.model || (esGemini ? BRAIN_MODEL : null),
+    model: o.model || (esGemini ? BRAIN_MODEL : (delEntorno?.model || null)),
     location: esGemini ? (o.location || BRAIN_LOCATION) : null,
     thinkingLevel: esGemini ? (o.thinkingLevel || BRAIN_THINKING_LEVEL) : null,
     thinkingBudget: o.thinkingBudget,
