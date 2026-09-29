@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { destinoInvalido, lineasPerfil } from '../src/webhook/notifications.js'
+import { destinoInvalido, lineasPerfil, componentesAvisoVendedor } from '../src/webhook/notifications.js'
 import { secretoWebhookValido } from '../src/webhook/handler.js'
 import { hashPin, verificarPin, esHash, validarPinNuevo } from '../src/lib/pin.js'
 import { filaTurnTrace } from '../src/brain/brain-pipeline.js'
@@ -141,4 +141,15 @@ test('turn_trace: un turno FALLIDO también deja rastro con el error', () => {
   const fila = filaTurnTrace({ leadId: 1, mensajeActual: 'hola', brainResult: { ok: false, error: 'brain_json_parse_failed', error_metadata: { parse_error: 'x' } } })
   assert.equal(fila.errors[0].error, 'brain_json_parse_failed')
   assert.equal(fila.botResponse, null)
+})
+
+test('aviso al vendedor por plantilla de Meta: 3 variables limpias (sin saltos ni espacios de más)', () => {
+  // Un pedido confirmado que el vendedor no ve es una venta perdida: fuera de las 24 h,
+  // Meta solo deja pasar una plantilla, y rechaza variables con saltos de línea.
+  const [body] = componentesAvisoVendedor({ nombre: 'Rosa', motivo: 'PEDIDO: 3 envases,\n  Rosa,     Surco', telefono: '+51 987 654 321' })
+  assert.equal(body.type, 'body')
+  assert.deepEqual(body.parameters.map(p => p.text), ['Rosa', 'PEDIDO: 3 envases, Rosa, Surco', 'https://wa.me/51987654321'])
+  const sinNombre = componentesAvisoVendedor({ nombre: null, motivo: '', telefono: '51999' })[0].parameters
+  assert.equal(sinNombre[0].text, 'Cliente sin nombre')
+  assert.equal(sinNombre[1].text, '-', 'Meta no acepta una variable vacía')
 })

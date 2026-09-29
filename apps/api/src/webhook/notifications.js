@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
-import { enviarTexto, transporteDe } from '../whatsapp/transporte.js'
+import { enviarTexto, enviarPlantilla, transporteDe } from '../whatsapp/transporte.js'
 import { reportError } from '../lib/observability.js'
 import { defaultChannelForTenant } from './channel-resolver.js'
 import { getVertical } from '../brain/verticals/index.js'
@@ -29,6 +29,21 @@ export function destinoInvalido(destino, { numerosDelBot = [] } = {}) {
     return 'es el número del propio bot (el aviso se lo manda a sí mismo)'
   }
   return null
+}
+
+// Variables de la plantilla de aviso al vendedor (API de Meta). La plantilla aprobada
+// tiene 3: {{1}} quién, {{2}} por qué, {{3}} enlace para escribirle. Meta rechaza
+// variables con saltos de línea, tabulaciones o más de 4 espacios seguidos.
+export function componentesAvisoVendedor({ nombre, motivo, telefono }) {
+  const limpio = (t, max) => String(t || '').replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim().slice(0, max) || '-'
+  return [{
+    type: 'body',
+    parameters: [
+      { type: 'text', text: limpio(nombre || 'Cliente sin nombre', 60) },
+      { type: 'text', text: limpio(motivo, 200) },
+      { type: 'text', text: `https://wa.me/${String(telefono || '').replace(/\D/g, '')}` }
+    ]
+  }]
 }
 
 // Líneas de perfil del briefing según el vertical (ver CAMPOS_BRIEFING en cada uno).
@@ -168,10 +183,23 @@ export async function notificarEscalamiento({
   } else if (destino && (instancia || transporteDe(canal) === 'cloud')) {
     try {
       // Con la API oficial de Meta, este aviso es un mensaje que INICIA el negocio: solo
-      // entra si el vendedor le escribió al número en las últimas 24 h; si no, Meta exige
-      // una plantilla aprobada. El aviso igual queda en crm_notifications (abajo).
+      // entra si el vendedor le escribió al número en las últimas 24 h, y el rechazo
+      // (131047) puede llegar DESPUÉS por webhook, con el envío ya dado por bueno. Para
+      // un pedido confirmado eso es una venta perdida. Con una plantilla de utilidad
+      // aprobada (CLOUD_TEMPLATE_AVISO_VENDEDOR) el aviso corto llega siempre; el
+      // briefing completo va detrás y entra si la ventana está abierta.
+      const plantilla = transporteDe(canal) === 'cloud' ? process.env.CLOUD_TEMPLATE_AVISO_VENDEDOR : null
+      if (plantilla) {
+        const p = await enviarPlantilla({
+          canal, telefono: destino, templateName: plantilla,
+          languageCode: process.env.CLOUD_TEMPLATE_IDIOMA || 'es',
+          components: componentesAvisoVendedor({ nombre: nom, motivo, telefono })
+        })
+        sent = !!p.ok
+        if (!p.ok) console.error(`[Notif] Plantilla "${plantilla}" al vendedor falló (lead ${leadId}): ${p.error} ${(p.errors || []).join(' ')}`)
+      }
       const r = await enviarTexto({ canal, telefono: destino, texto: briefing, instancia })
-      sent = !!r.ok
+      sent = sent || !!r.ok
       if (sent) {
         console.log(`[Notif] 🔔 Escalamiento del lead ${leadId} avisado a ${vendorNombre || 'vendedor'} (${tenantAviso || 'tenant?'}) vía ${instancia || 'Meta'}`)
       } else {
