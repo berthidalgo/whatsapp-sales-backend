@@ -86,7 +86,7 @@ test('construirCadena: primario no-Gemini → Vertex entra como seguro (fallback
 test('compat: poner la llave de Mistral u OpenRouter basta para sumar un seguro', () => {
   const env = { BRAIN_PROVIDER: 'devapi', BRAIN_MODEL: 'gemini-3.1-flash-lite', GEMINI_DEV_API_KEY: 'g', MISTRAL_API_KEY: 'm', OPENROUTER_API_KEY: 'o', BRAIN_FALLBACKS: 'mistral,openrouter' }
   assert.deepEqual(construirCadena(env).map(p => p.id),
-    ['devapi:gemini-3.1-flash-lite', 'mistral:mistral-medium-latest', 'openrouter:google/gemma-4-31b-it:free'])
+    ['devapi:gemini-3.1-flash-lite', 'mistral:mistral-small-latest', 'openrouter:google/gemma-4-31b-it:free'])
   const auto = construirCadena({ BRAIN_MODEL: 'gemini-2.5-pro', DEEPSEEK_API_KEY: 'd' }).map(p => p.id)
   assert.deepEqual(auto, ['vertex:gemini-2.5-pro', 'deepseek:deepseek-flash'], 'sin BRAIN_FALLBACKS entra solo por tener llave')
 })
@@ -95,7 +95,7 @@ test('compat: primario no-Gemini con su modelo en BRAIN_PROVIDER (el ":free" de 
   const p = pasoPrimario({ BRAIN_PROVIDER: 'openrouter:google/gemma-4-31b-it:free', BRAIN_MODEL: 'gemini-2.5-pro' })
   assert.equal(p.id, 'openrouter:google/gemma-4-31b-it:free')
   assert.equal(p.rol, 'primario')
-  assert.equal(pasoPrimario({ BRAIN_PROVIDER: 'mistral' }).model, 'mistral-medium-latest')
+  assert.equal(pasoPrimario({ BRAIN_PROVIDER: 'mistral' }).model, 'mistral-small-latest')
   assert.equal(pasoPrimario({ BRAIN_PROVIDER: 'devapi:gemini-3.5-flash-lite' }).id, 'devapi:gemini-3.5-flash-lite')
 })
 

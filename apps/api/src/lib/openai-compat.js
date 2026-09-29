@@ -7,7 +7,7 @@
 // proveedor es poner su llave en el entorno, sin tocar código.
 //
 // Presets (llave en el entorno → entra solo a la cadena como seguro):
-//   mistral     MISTRAL_API_KEY      plan gratis "Experiment" (sin tarjeta), modelos de pesos abiertos
+//   mistral     MISTRAL_API_KEY      plan Free: US$10/mes de crédito API, sin tarjeta (desde ago-2026)
 //   openrouter  OPENROUTER_API_KEY   una llave para cientos de modelos; los ":free" cuestan $0
 //   deepseek    DEEPSEEK_API_KEY     de pago (prepago), el más barato por token
 //   nvidia      NVIDIA_API_KEY       build.nvidia.com: gratis para PROTOTIPOS (no producción)
@@ -24,7 +24,9 @@ export const PROVEEDORES_COMPAT = {
   mistral: {
     url: 'https://api.mistral.ai/v1/chat/completions',
     llave: 'MISTRAL_API_KEY',
-    modelo: 'mistral-medium-latest',
+    // Small 4 ($0.15/$0.60): rinde los US$10/mes gratis del plan Free (~600 conversaciones).
+    // Ojo: Medium 3.5 cuesta 10x ($1.5/$7.5) y Large 3 ($0.5/$1.5) es más barato que Medium.
+    modelo: 'mistral-small-latest',
     json: true
   },
   openrouter: {
