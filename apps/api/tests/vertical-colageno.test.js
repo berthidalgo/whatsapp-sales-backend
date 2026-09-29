@@ -12,6 +12,7 @@ import { getVertical, VERTICALES_DISPONIBLES } from '../src/brain/verticals/inde
 import * as colageno from '../src/brain/verticals/colageno.js'
 import * as exportacion from '../src/brain/verticals/exportacion.js'
 import { flattenFactSheet } from '../src/response/factsheet-loader.js'
+import { construirUserPrompt } from '../src/brain/agent-brain.js'
 
 // ═══════════════ 1. REGISTRY ═══════════════
 
@@ -81,13 +82,34 @@ test('prompt colágeno: sin ficha NO da precios (degradación segura)', () => {
   assert.match(p, /NO des ningún precio/)
 })
 
-test('prompt colágeno: memoria episódica y resumen de cierre entran cuando existen', () => {
-  const p = promptColageno({ memoriaEpisodica: '# 🧠 MEMORIA — bloque de prueba', cierreResumen: 'ya propusiste la llamada 2 veces' })
-  assert.match(p, /MEMORIA — bloque de prueba/)
-  assert.match(p, /TU HISTORIAL DE CIERRE/)
-  // Sin ellos, los bloques NO aparecen (prompt limpio para lead nuevo)
-  const p2 = promptColageno()
-  assert.doesNotMatch(p2, /TU HISTORIAL DE CIERRE/)
+test('prompt colágeno: memoria y cierre viajan en el mensaje del turno, no en el system prompt', () => {
+  const estado = { memoriaEpisodica: '# 🧠 MEMORIA — bloque de prueba', cierreResumen: 'ya propusiste la llamada 2 veces' }
+  // El system prompt es el mismo para cualquier lead: si cambiara, el proveedor no
+  // podría reutilizar las ~11K fichas del manual de un pedido a otro (caché de prefijo).
+  assert.equal(promptColageno(estado), promptColageno())
+  const u = construirUserPrompt({ mensajeActual: 'hola', historial: [], estadoLead: estado, vertical: colageno })
+  assert.match(u, /MEMORIA — bloque de prueba/)
+  assert.match(u, /TU HISTORIAL DE CIERRE/)
+  assert.match(u, /intentos de concretar el pedido/)   // el texto del cierre es del vertical
+  // Sin ellos, los bloques NO aparecen (lead nuevo)
+  const u2 = construirUserPrompt({ mensajeActual: 'hola', historial: [], estadoLead: {}, vertical: colageno })
+  assert.doesNotMatch(u2, /TU HISTORIAL DE CIERRE/)
+  assert.doesNotMatch(u2, /MEMORIA/)
+})
+
+test('mensaje del turno: lo fijo primero, lo que cambia en cada turno después', () => {
+  const u = construirUserPrompt({
+    mensajeActual: 'ok',
+    historial: [{ rol: 'lead', texto: 'hola' }],
+    estadoLead: { memoriaEpisodica: '# 🧠 MEMORIA — X', cierreResumen: 'ya propusiste la llamada 1 vez' },
+    vertical: colageno,
+    ahora: new Date('2026-09-29T15:00:00Z')
+  })
+  const marcas = ['MEMORIA — X', '# CONVERSACIÓN HASTA AHORA', '# AHORA MISMO', 'TU HISTORIAL DE CIERRE', '# ESTADO ACTUAL DEL LEAD', '# ÚLTIMO MENSAJE']
+  const posiciones = marcas.map(m => u.indexOf(m))
+  assert.ok(posiciones.every(i => i >= 0), `faltan bloques: ${marcas.filter((m, i) => posiciones[i] < 0).join(', ')}`)
+  assert.deepEqual([...posiciones].sort((a, b) => a - b), posiciones, 'orden: memoria → conversación → hora → cierre → estado → último mensaje')
+  assert.match(u, /29 de se(p)?tiembre de 2026/)
 })
 
 test('schema colágeno: slots del negocio y contrato del motor intactos', () => {

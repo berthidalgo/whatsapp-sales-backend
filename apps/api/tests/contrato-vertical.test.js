@@ -82,6 +82,30 @@ for (const id of VERTICALES_DISPONIBLES) {
 }
 
 // ════════════════════════════════════════════════════════
+// 2b. System prompt FIJO — la caché de prefijo del proveedor
+// ════════════════════════════════════════════════════════
+// Los proveedores cobran más barato la parte del pedido idéntica a un pedido anterior,
+// pero solo si es idéntica desde el primer carácter. Hasta sep 2026 la hora iba en la
+// segunda línea del prompt: ~70 de ~11K tokens eran reutilizables. Lo que cambia por
+// turno (hora, memoria del contacto, historial de cierre) va en el mensaje del turno.
+
+for (const id of VERTICALES_DISPONIBLES) {
+  test(`contrato [${id}]: el system prompt no cambia entre leads ni turnos`, () => {
+    const v = getVertical({ vertical: id }, null)
+    const conDatosDelLead = v.construirSystemPrompt({
+      campaignConfig: CAMPAIGN, fs: FS, vendorNombre: 'Jhon',
+      estadoLead: { ...ESTADO, memoriaEpisodica: '# 🧠 MEMORIA — contacto que vuelve', cierreResumen: 'ya propusiste la llamada 3 veces' }
+    })
+    assert.equal(conDatosDelLead, promptDe(v),
+      'la memoria y el historial de cierre van en el mensaje del turno (agent-brain → construirUserPrompt)')
+    assert.doesNotMatch(promptDe(v), /Hoy es /,
+      'la hora va en el mensaje del turno: dentro del system prompt rompe la caché del proveedor')
+    assert.equal(typeof v.textoHistorialCierre, 'function',
+      'debe traer textoHistorialCierre: el historial de cierre se dice distinto en cada negocio')
+  })
+}
+
+// ════════════════════════════════════════════════════════
 // 3. Degradación segura — un vertical no puede morir sin config
 // ════════════════════════════════════════════════════════
 

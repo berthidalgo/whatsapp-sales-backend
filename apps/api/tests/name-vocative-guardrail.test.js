@@ -70,3 +70,10 @@ test('re-saludo: "¡Buenas tardes!" + contenido → quita el saludo', () => {
   assert.equal(r.limpiado, true)
   assert.ok(/programa dura/i.test(r.mensaje))
 })
+
+test('re-saludo: conserva el signo de apertura de la frase que sigue al saludo', () => {
+  // Ministral re-saluda en cada turno (prueba del 29-sep-2026): quedaba "Perfecto!" sin "¡".
+  const r = limpiarReSaludo('¡Hola Rosa! ¡Perfecto! Te cuento cómo sigue.', true)
+  assert.equal(r.limpiado, true)
+  assert.equal(r.mensaje, '¡Perfecto! Te cuento cómo sigue.')
+})

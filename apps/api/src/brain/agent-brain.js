@@ -169,17 +169,18 @@ export async function pensarYResponder({
 
   const fs = flattenFactSheet(campaignConfig)
   const systemInstruction = vertical.construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
-  const userPrompt = construirUserPrompt({ mensajeActual, historial, estadoLead })
+  const userPrompt = construirUserPrompt({ mensajeActual, historial, estadoLead, vertical })
+  const llamarCon = (prompt) => (paso) => llamarPaso(paso, {
+    systemInstruction, userPrompt: prompt, schema: usarSchema, temperature: TEMPERATURE,
+    tenantId: estadoLead?.tenantId || ACTIVE_TENANT
+  })
 
   try {
     // Reintentos, clasificación de errores, circuit breaker y fallback: todo en la
     // cadena. Un JSON roto o sin "mensaje" cuenta como fallo y se reintenta.
     const ejec = await ejecutarCadena({
       cadena,
-      llamar: (paso) => llamarPaso(paso, {
-        systemInstruction, userPrompt, schema: usarSchema, temperature: TEMPERATURE,
-        tenantId: estadoLead?.tenantId || ACTIVE_TENANT
-      }),
+      llamar: llamarCon(userPrompt),
       parsear: parsearJsonCerebro
     })
 
@@ -208,13 +209,47 @@ export async function pensarYResponder({
       }
     }
 
-    const result = ejec.result
+    let usage = ejec.result?.usage || null
 
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
     // Aquí está la red de seguridad: validamos lo que el cerebro produjo
     // ANTES de devolverlo. Esto es lo que nos diferencia de un autoresponder.
     const yaSaludo = Array.isArray(historial) && historial.some(m => m?.rol === 'agente')
-    const validado = validarSalida(parsed, fs, estadoLead?.slots?.nombre, yaSaludo, vertical)
+    const validar = (p) => validarSalida(p, fs, estadoLead?.slots?.nombre, yaSaludo, vertical)
+    let validado = validar(parsed)
+
+    // ─── PRECIO QUE NO SALE DE LA FICHA → UNA CORRECCIÓN (sep 2026) ───
+    // Con ficha, el guardrail solo MARCABA la cifra inventada y el mensaje salía igual:
+    // en la prueba con Ministral el bot dijo "S/ 319" por el pack de 3 (el real es
+    // S/ 329), y ese precio lo reclama la clienta al recibir. Borrar la oración no sirve
+    // en el Momento 4 (el precio ES el mensaje), así que primero se le devuelve el
+    // borrador al modelo con los precios reales para que lo reescriba. Si la corrección
+    // también falla, se neutraliza la oración: es preferible omitir el precio a dar uno falso.
+    if (validado.preciosMalos.length) {
+      const malos = validado.preciosMalos
+      const corr = await ejecutarCadena({
+        cadena,
+        llamar: llamarCon(userPrompt + notaCorreccionPrecio({ borrador: validado.mensaje, malos, fs })),
+        parsear: parsearJsonCerebro,
+        intentosPrimario: 1,
+        intentosSeguro: 1
+      })
+      usage = sumarUso(usage, corr.result?.usage)
+      const v2 = corr.parsed ? validar(corr.parsed) : null
+      if (v2 && !v2.preciosMalos.length) {
+        parsed = corr.parsed
+        validado = { ...v2, flags: [...v2.flags, `precio_corregido_por_reintento:${malos.join('|')}`] }
+        console.warn(`[AgentBrain] 💲 precio fuera de la ficha (${malos.join(', ')}) corregido con un reintento`)
+      } else {
+        const frase = vertical?.FRASE_PRECIO_SIN_FICHA || FRASE_PRECIO_DEFAULT
+        validado = {
+          ...validado,
+          mensaje: neutralizarOraciones(validado.mensaje, (o) => malos.some(t => o.includes(t)), frase),
+          flags: [...validado.flags, 'precio_neutralizado_oracion_completa']
+        }
+        console.warn(`[AgentBrain] 💲 precio fuera de la ficha (${malos.join(', ')}) sin corrección válida → oración neutralizada`)
+      }
+    }
 
     return {
       ok: true,
@@ -236,8 +271,8 @@ export async function pensarYResponder({
         model: modeloFinal,
         fallback: usoFallback,
         proveedor: ejec.paso?.id || null,
-        tokens: result?.usage?.totalTokenCount || 0,
-        cost_usd: result?.usage ? calculateCost(modeloFinal, result.usage) : null,
+        tokens: usage?.totalTokenCount || 0,
+        cost_usd: usage ? calculateCost(modeloFinal, usage) : null,
         latency_ms: Date.now() - startTime
       }
     }
@@ -265,9 +300,27 @@ export {
 } from './verticals/exportacion.js'
 
 // ════════════════════════════════════════════════════════
-// USER PROMPT — la conversación + el estado actual
+// USER PROMPT — la conversación + el estado actual + lo que cambia en cada turno
+//
+// CACHÉ DE PREFIJO (sep 2026): la hora ("AHORA MISMO"), la memoria del contacto y su
+// historial de cierre vivían DENTRO del system prompt, la hora en su segunda línea.
+// Los proveedores descuentan la parte del pedido que es idéntica desde el primer
+// carácter a un pedido anterior (Gemini y Groq, por ejemplo), y la hora cambia cada
+// minuto: de ~11K tokens de manual, solo ~70 se reconocían. Ahora el system prompt es
+// fijo por campaña y todo lo variable viaja aquí. El orden sigue la misma idea: la
+// memoria (fija para este contacto) y la conversación (crece turno a turno) van
+// antes que la hora y el cierre, que cambian siempre.
 // ════════════════════════════════════════════════════════
-function construirUserPrompt({ mensajeActual, historial, estadoLead }) {
+export function bloqueAhoraMismo(ahora = new Date()) {
+  const ahoraPeru = ahora.toLocaleString('es-PE', {
+    timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long',
+    year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
+  })
+  return `# AHORA MISMO
+Hoy es ${ahoraPeru} (hora de Perú, zona UTC-05:00). Úsalo para entender "hoy", "mañana", "el viernes", etc., y para fechar cualquier compromiso con la zona -05:00.`
+}
+
+export function construirUserPrompt({ mensajeActual, historial = [], estadoLead, vertical = null, ahora = new Date() }) {
   const slots = estadoLead?.slots || {}
   const slotsConocidos = Object.entries(slots)
     // Claves con guion bajo (ej. _cierre) son ESTADO INTERNO del closer, no datos
@@ -281,8 +334,18 @@ function construirUserPrompt({ mensajeActual, historial, estadoLead }) {
     ? historial.map(h => `${h.rol === 'lead' ? 'LEAD' : nombreCorto(estadoLead)}: ${h.texto}`).join('\n')
     : '(esta es la primera interacción)'
 
-  return `# CONVERSACIÓN HASTA AHORA
+  // Memoria episódica (lead que vuelve): la arma brain-pipeline; null si es nuevo.
+  const memoria = estadoLead?.memoriaEpisodica ? `${estadoLead.memoriaEpisodica}\n\n` : ''
+  // Historial de cierre del closer (v5_5): el texto es del vertical ("la llamada" en
+  // exportación, "el pedido" en colágeno). null al inicio → no aparece.
+  const cierre = (estadoLead?.cierreResumen && typeof vertical?.textoHistorialCierre === 'function')
+    ? `\n\n${vertical.textoHistorialCierre(estadoLead.cierreResumen)}`
+    : ''
+
+  return `${memoria}# CONVERSACIÓN HASTA AHORA
 ${historialTexto}
+
+${bloqueAhoraMismo(ahora)}${cierre}
 
 # ESTADO ACTUAL DEL LEAD
 - Etapa del funnel: ${estadoLead?.stage || 'first_contact'}
@@ -331,20 +394,183 @@ export function limpiarReSaludo(mensaje, yaSaludo) {
     .replace(/^\s*[¡!]*\s*hola\b[^.!?\n]*[.!?]+\s*/i, '')                              // "¡Hola [nombre]!"
     .replace(/^\s*[¡!]*\s*buen[oa]s(\s+(d[ií]as|tardes|noches))?\b[^.!?\n]*[.!?]+\s*/i, '') // "Buenas tardes!"
     .replace(/^\s*[¡!]*\s*(un|qué|que)\s+gusto\b[^.!?\n]*[.!?]+\s*/i, '')              // "Un gusto saludarte."
-    .replace(/^[¡\s]+/, '')
+    // Solo un "¡" huérfano: el que abre la frase siguiente se queda ("¡Hola! ¡Perfecto!"
+    // → "¡Perfecto!"; antes salía "Perfecto!", sin el signo de apertura).
+    .replace(/^\s*¡+(?![\p{L}¿])/u, '')
     .trim()
   if (m.length < 8 || m === mensaje.trim()) return { mensaje, limpiado: false }       // era casi solo saludo → no tocar
   m = m.charAt(0).toUpperCase() + m.slice(1)                                          // capitaliza lo que quedó
   return { mensaje: m, limpiado: true }
 }
 
+// ════════════════════════════════════════════════════════
+// DINERO EN EL MENSAJE — detector, respaldo en la ficha y neutralizador
+// ════════════════════════════════════════════════════════
+// Qué cuenta como dinero (AMPLIADO en la auditoría pre-producción, jul 2026: antes solo
+// el SÍMBOLO delante, y "cuesta 2500 soles" llegaba al lead sin marcar):
+//   · símbolo delante: "S/ 1,500", "$300"
+//   · moneda detrás:   "1500 soles", "300 dólares", "2500 PEN"
+//   · símbolo pegado:  "S/1500"
+// Deliberadamente NO se marcan números sueltos ("12 sesiones", "1,300 alumnos"): eso
+// llenaría de falsos positivos y, sin factSheet, NEUTRALIZARÍA mensajes sanos.
+export const RX_DINERO = /(?:S\/\.?\s?\d[\d,\.]*)|(?:\$\s?\d[\d,\.]*)|(?:\d[\d,\.]*\s?(?:soles|sol|dólares|dolares|usd|pen|euros?|eur)\b)/gi
+
+const FRASE_PRECIO_DEFAULT = ' El precio exacto te lo confirmo en un momento 😊'
+
+/** "S/ 1,500" → 1500 · "S/ 124.50" → 124.5 · "124,50 soles" → 124.5 · "S/. 139" → 139 */
+export function montoDe(texto) {
+  const m = String(texto || '').match(/\d[\d.,]*/)
+  if (!m) return null
+  let s = m[0].replace(/[.,]+$/, '')                                                        // "329." al cerrar la frase
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '')                         // 1,500 · 1,500.50
+  else if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.') // 1.500 · 1.500,50
+  else s = s.replace(',', '.')                                                               // 124,50
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
+
+// Qué cifras respalda la ficha. Antes se comparaban DÍGITOS concatenados como texto:
+// "S/ 24" pasaba porque "24" está dentro de "249", y un precio por envase bien
+// calculado (S/ 329 ÷ 3 = S/ 109.67) se marcaba como inventado. Ahora se compara el
+// MONTO, y además de las cifras de la ficha cuentan las cuentas que hace un vendedor
+// con ella, pero solo si la frase dice que es esa cuenta (sin la frase, "S/ 169" sería
+// un precio de pack inventado que casualmente es 339 ÷ 2):
+//   · lo que sale cada unidad de un pack ("c/u", "por envase", "al mes"): total ÷ 2..6, ±S/ 1
+//   · el ahorro ("ahorras", "descuento", "menos"): diferencia entre dos precios, o N sueltos vs el pack
+//   · lo que sale al día o por porción: menor que el precio mayor ÷ 15
+const RX_POR_UNIDAD = /c\/u|cada\s+(uno|una|envase|frasco|unidad|caja|pote|mes)|por\s+(envase|unidad|frasco|caja|pote|mes)|la\s+unidad|al\s+mes|mensual/i
+const RX_AHORRO = /ahorr|descuento|dscto|rebaja|diferencia|menos/i
+const RX_POR_DIA = /\bd[ií]as?\b|diari|porci[oó]n/i
+
+function montosDeLaFicha(fs) {
+  const exactos = new Set()
+  const precios = new Set()
+  const agregar = (set, n) => { if (Number.isFinite(n) && n > 0) set.add(n) }
+  const camposPrecio = `${fs?.precioTexto || ''} ${fs?.ofertaHoyTexto || ''}`
+  // En los campos de precio cuenta todo número (la ficha puede decir "3 envases: 339").
+  for (const m of camposPrecio.matchAll(/\d[\d.,]*/g)) agregar(exactos, montoDe(m[0]))
+  // El dinero de toda la ficha (garantía, píldoras, FAQ) es la base de las cuentas.
+  for (const m of `${camposPrecio} ${fs?.factSheetBloque || ''}`.matchAll(RX_DINERO)) agregar(precios, montoDe(m[0]))
+  agregar(precios, fs?.precioMonto == null ? NaN : Number(fs.precioMonto))
+  for (const p of precios) exactos.add(p)
+  return { exactos: [...exactos], precios: [...precios] }
+}
+
+function montoRespaldado(x, { exactos, precios }, contexto) {
+  const cerca = (a, b, tol) => Math.abs(a - b) <= tol
+  if (exactos.some(b => cerca(x, b, 0.01))) return true
+  if (RX_POR_UNIDAD.test(contexto)) {
+    for (const b of precios) for (let n = 2; n <= 6; n++) if (cerca(x, b / n, 1)) return true
+  }
+  if (RX_AHORRO.test(contexto)) {
+    for (const a of precios) for (const b of precios) {
+      if (a !== b && cerca(x, Math.abs(a - b), 0.01)) return true
+      for (let n = 2; n <= 6; n++) if (n * a > b && cerca(x, n * a - b, 0.01)) return true
+    }
+  }
+  return RX_POR_DIA.test(contexto) && x <= Math.max(0, ...precios) / 15
+}
+
+/**
+ * Revisa el dinero del mensaje contra la ficha (función pura).
+ * @returns {{ detectados: string[], malos: string[], sinFicha: boolean }}
+ *   sinFicha=true: la campaña no tiene precio y TODA cifra es inventada.
+ */
+export function revisarPrecios(mensaje, fs) {
+  const texto = String(mensaje || '')
+  const hallados = [...texto.matchAll(RX_DINERO)]
+  const limpio = (t) => t.trim().replace(/[.,]+$/, '')
+  const detectados = hallados.map(m => limpio(m[0]))
+  if (!hallados.length) return { detectados, malos: [], sinFicha: false }
+  if (!fs?.precioTexto) return { detectados, malos: detectados, sinFicha: true }
+  const ficha = montosDeLaFicha(fs)
+  const malos = hallados
+    .filter(m => {
+      const x = montoDe(m[0])
+      if (x === null) return false
+      const contexto = texto.slice(Math.max(0, m.index - 40), m.index + m[0].length + 40)
+      return !montoRespaldado(x, ficha, contexto)
+    })
+    .map(m => limpio(m[0]))
+  return { detectados, malos, sinFicha: false }
+}
+
+/**
+ * Parte un mensaje en oraciones sin perder un solo carácter (join('') lo reconstruye).
+ * El punto cierra oración solo si le sigue un espacio o el final: así "S/ 124.50" y
+ * "S/. 139" quedan enteros. Los saltos de línea van como piezas propias, para que los
+ * párrafos del Momento 4 sobrevivan a la neutralización (antes se aplastaban a espacios).
+ */
+export function partirOraciones(texto) {
+  const partes = []
+  let inicio = 0
+  const rx = /[.!?]+(?=\s|$)|\n+/g
+  let m
+  while ((m = rx.exec(texto))) {
+    if (m[0] === '.' && /S\/$/i.test(texto.slice(0, m.index))) continue   // "S/." es el símbolo del sol
+    if (m[0][0] === '\n') {
+      if (m.index > inicio) partes.push(texto.slice(inicio, m.index))
+      partes.push(m[0])
+    } else {
+      partes.push(texto.slice(inicio, m.index + m[0].length))
+    }
+    inicio = m.index + m[0].length
+  }
+  if (inicio < texto.length) partes.push(texto.slice(inicio))
+  return partes
+}
+
+/**
+ * Cambia la PRIMERA oración que cumple `esMala` por `frase` y borra las demás que la
+ * cumplan. Reemplazar solo la cifra rompe la gramática (caso real JH, jun 2026:
+ * "tiene una inversión de el detalle de la inversión..."); la oración completa no.
+ */
+export function neutralizarOraciones(mensaje, esMala, frase) {
+  let puesta = false
+  const out = partirOraciones(String(mensaje || ''))
+    .map(o => {
+      if (!esMala(o)) return o
+      if (puesta) return ''
+      puesta = true
+      return frase
+    })
+    .join('')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return out || frase.trim()
+}
+
+/** Lo que se le agrega al pedido cuando el borrador trae un precio que la ficha no respalda. */
+export function notaCorreccionPrecio({ borrador, malos, fs }) {
+  const oferta = fs?.ofertaHoyTexto ? `\nOferta de hoy: ${fs.ofertaHoyTexto}` : ''
+  return `
+
+# ⚠️ CORRIGE TU BORRADOR ANTES DE ENVIARLO
+Ibas a responder: "${borrador}"
+Ahí escribiste ${malos.join(', ')}, y esa cifra NO sale de la ficha: no existe. Los precios REALES son estos, y ninguno más:
+${fs?.precioTexto || ''}${oferta}
+Reescribe tu respuesta con esas cifras exactas (si das lo que sale cada unidad, divide el total del pack entre sus unidades). Mismo tono y misma intención: solo corrige el dinero. Devuelve el JSON estructurado completo.`
+}
+
+function sumarUso(a, b) {
+  if (!a) return b || null
+  if (!b) return a
+  const s = (k) => (a[k] || 0) + (b[k] || 0)
+  return { ...a, promptTokenCount: s('promptTokenCount'), candidatesTokenCount: s('candidatesTokenCount'), totalTokenCount: s('totalTokenCount') }
+}
+
+
 /**
  * Valida el mensaje del cerebro contra el factSheet.
- * Si detecta un precio que NO está en la ficha, lo marca (y en modo estricto, reescribe).
+ * Precio sin ficha → neutraliza la oración. Precio que la ficha no respalda → lo marca
+ * y lo devuelve en `preciosMalos` (pensarYResponder pide la corrección).
  * El vertical puede aportar validaciones EXTRA de su negocio (ej. colágeno:
  * guardrail anti-"curar" DIGEMID) vía vertical.validarMensajeExtra.
  *
- * @returns {{ mensaje: string, flags: string[] }}
+ * @returns {{ mensaje: string, flags: string[], preciosMalos: string[] }}
  */
 function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vertical = null) {
   const flags = []
@@ -385,41 +611,19 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
   if (r4.limpiado) { mensaje = r4.mensaje; flags.push('re_saludo_limpiado') }
 
   // ── Guardrail 1: precio fantasma ──
-  // Busca cifras de dinero en el mensaje y las verifica contra el factSheet.
-  //
-  // AMPLIADO (auditoría pre-producción jul 2026): antes solo se detectaba el SÍMBOLO
-  // delante ("S/ 1500", "$300"). Pero el modelo escribe dinero de varias formas, y en
-  // cuanto el bot de un cliente nuevo dijera "cuesta 2500 soles" —sin símbolo— el
-  // guardrail no veía NADA y una cifra inventada llegaba al lead sin marcar. Ahora
-  // se cubren las tres formas reales:
-  //   · símbolo delante: "S/ 1,500", "$300"
-  //   · moneda detrás:   "1500 soles", "300 dólares", "2500 PEN"
-  //   · símbolo pegado:  "S/1500"
-  // Deliberadamente NO se marcan números sueltos ("12 sesiones", "1,300 alumnos"):
-  // eso llenaría de falsos positivos y, sin factSheet, NEUTRALIZARÍA mensajes sanos.
-  // Solo cuenta como dinero lo que trae símbolo o palabra de moneda pegada.
-  const RX_DINERO = /(?:S\/\.?\s?\d[\d,\.]*)|(?:\$\s?\d[\d,\.]*)|(?:\d[\d,\.]*\s?(?:soles|sol|dólares|dolares|usd|pen|euros?|eur)\b)/gi
-  const preciosEnMensaje = mensaje.match(RX_DINERO) || []
-  if (preciosEnMensaje.length > 0) {
-    if (!fs.precioTexto) {
-      // CASO MÁS PELIGROSO: la campaña no tiene precio en su factSheet, pero el
-      // cerebro escribió una cifra → es inventada sí o sí. Marcar TODAS.
-      for (const p of preciosEnMensaje) {
-        flags.push(`precio_inventado_sin_factsheet:${p.trim()}`)
-      }
-    } else {
-      // Hay precio real: cualquier cifra que no coincida con el real es sospechosa.
-      // Validamos contra el precio regular Y la OFERTA DE HOY (descuento oficial de la
-      // ficha) — si no, los precios de la promo se marcarían como fantasma (jul 2026).
-      const montoReal = fs.precioMonto ? String(fs.precioMonto) : null
-      const textoRealDigitos = (fs.precioTexto + ' ' + (fs.ofertaHoyTexto || '')).replace(/\D/g, '')
-      for (const p of preciosEnMensaje) {
-        const soloDigitos = p.replace(/\D/g, '')
-        if (soloDigitos && soloDigitos !== montoReal && !textoRealDigitos.includes(soloDigitos)) {
-          flags.push(`precio_no_coincide_factsheet:${p.trim()}_vs_${fs.precioTexto}`)
-        }
-      }
-    }
+  // Busca cifras de dinero en el mensaje y las verifica contra el factSheet (qué
+  // cuenta como dinero y qué cifras respalda la ficha: ver revisarPrecios).
+  const precios = revisarPrecios(mensaje, fs)
+  let preciosMalos = []
+  if (precios.sinFicha) {
+    // CASO MÁS PELIGROSO: la campaña no tiene precio en su factSheet, pero el
+    // cerebro escribió una cifra → es inventada sí o sí. Marcar TODAS.
+    for (const p of precios.malos) flags.push(`precio_inventado_sin_factsheet:${p}`)
+  } else if (precios.malos.length) {
+    // Hay ficha y la cifra no sale de ella. Aquí solo se MARCA: pensarYResponder le
+    // pide al modelo que corrija el borrador y, si no lo logra, neutraliza la oración.
+    preciosMalos = precios.malos
+    for (const p of preciosMalos) flags.push(`precio_no_coincide_factsheet:${p}`)
   }
 
   // ── Guardrail 2: promesas prohibidas ──
@@ -434,23 +638,10 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
     }
   }
 
-  // NOTA: en esta versión los flags se REPORTAN (para medir cuánto se equivoca el
-  // cerebro en producción real). La REESCRITURA automática (re-pedirle al LLM que
-  // corrija) es el siguiente incremento, cuando tengamos datos de cuán frecuente es.
-  // Por ahora: si hay flag de precio inventado y NO hay factSheet, neutralizamos
-  // el precio para no decir una cifra falsa al lead.
-  //
-  // FIX #1 (jun 2026): antes el reemplazo era "el detalle de la inversión (lo vemos
-  // juntos en la llamada)" insertado donde estaba la cifra — eso producía
-  // frankenstein gramatical visible al lead (caso real JH: "tiene una inversión de
-  // el detalle de la inversión..."). Reemplazar el FRAGMENTO siempre rompe la
-  // gramática porque no sabemos qué palabras lo rodean.
-  //
-  // SOLUCIÓN: neutralizar la ORACIÓN COMPLETA que contiene el precio fantasma,
-  // sustituyéndola por una frase humana cerrada. Esto preserva el resto del mensaje
-  // (saludo, cierre, otras respuestas) y nunca deja preposiciones/artículos sueltos.
-  // Verificado contra el caso real "S/2500" + 6 variantes → todas fluyen limpio.
-  if (flags.some(f => f.startsWith('precio_inventado_sin_factsheet'))) {
+  // Sin ficha no hay precio correcto que pedirle al modelo: se neutraliza la ORACIÓN
+  // COMPLETA que trae la cifra, sustituyéndola por una frase humana cerrada (ver
+  // neutralizarOraciones: reemplazar solo el fragmento dejaba frankenstein gramatical).
+  if (precios.sinFicha) {
     // FIX sep 2026: antes se neutralizaba con un regex SOLO de símbolo ("S/ 1500"),
     // distinto del detector. "cuesta 2500 soles" se DETECTABA y se marcaba como
     // neutralizado… pero llegaba intacto al lead. Detector y neutralizador usan ahora
@@ -458,20 +649,12 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
     const RX_PRECIO_UNA = new RegExp(RX_DINERO.source, 'i')
     // La frase de reemplazo es del VERTICAL: "lo vemos en la llamada" solo tiene
     // sentido en exportación (colágeno cierra por chat, no por llamada).
-    const fraseNeutra = vertical?.FRASE_PRECIO_SIN_FICHA
-      || ' El precio exacto te lo confirmo en un momento 😊'
-    // Partimos en oraciones (manteniendo el signo final) y cambiamos solo la que
-    // contiene la cifra inventada.
-    const oraciones = mensaje.match(/[^.!?]+[.!?]*/g) || [mensaje]
-    mensaje = oraciones
-      .map(o => RX_PRECIO_UNA.test(o) ? fraseNeutra : o)
-      .join('')
-      .replace(/\s{2,}/g, ' ')
-      .trim()
+    const fraseNeutra = vertical?.FRASE_PRECIO_SIN_FICHA || FRASE_PRECIO_DEFAULT
+    mensaje = neutralizarOraciones(mensaje, (o) => RX_PRECIO_UNA.test(o), fraseNeutra)
     flags.push('precio_neutralizado_oracion_completa')
   }
 
-  return { mensaje, flags }
+  return { mensaje, flags, preciosMalos }
 }
 
 // ════════════════════════════════════════════════════════
@@ -590,4 +773,4 @@ export function summarizeBrainResult(r) {
 // ════════════════════════════════════════════════════════
 // VERSION TRACKING
 // ════════════════════════════════════════════════════════
-export const AGENT_BRAIN_VERSION = 'v7_0_verticales_exportacion_colageno'
+export const AGENT_BRAIN_VERSION = 'v7_1_precio_corregido_prompt_fijo'

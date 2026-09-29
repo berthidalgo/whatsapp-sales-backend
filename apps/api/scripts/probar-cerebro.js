@@ -14,6 +14,7 @@
 //   node scripts/probar-cerebro.js --solo mistral --modelos ministral-14b-latest,ministral-8b-latest
 //   node scripts/probar-cerebro.js --conversacion          → 4 turnos (saludo, precio, objeción, pedido)
 //                                                            para juzgar CALIDAD, no solo si responde
+//   node scripts/probar-cerebro.js --guion "hola|por la piel|¿cuánto el de 3?"   → conversación propia
 //
 // Solo LEE de la base (la campaña). No crea leads ni manda nada por WhatsApp.
 // Cada turno gasta 1 llamada del cupo del proveedor (el gratis de Gemini: 1 de ~500 al día).
@@ -37,9 +38,12 @@ const mensaje = valor('--mensaje') || 'Hola, vi su anuncio y quiero más informa
 const solo = valor('--solo')
 const modelos = (valor('--modelos') || '').split(',').map(x => x.trim()).filter(Boolean)
 // Un lead de anuncio típico: llega tibio, pregunta el precio, lo objeta y pide comprar.
-const GUION = args.includes('--conversacion')
-  ? [mensaje, '¿Cuánto cuesta?', 'Mmm está un poco caro, lo voy a pensar', 'Ok, ¿cómo hago el pedido?']
-  : [mensaje]
+// --guion "msg1|msg2|..." arma una conversación propia (ej. una que sí llegue al precio).
+const GUION = valor('--guion')
+  ? valor('--guion').split('|').map(x => x.trim()).filter(Boolean)
+  : args.includes('--conversacion')
+    ? [mensaje, '¿Cuánto cuesta?', 'Mmm está un poco caro, lo voy a pensar', 'Ok, ¿cómo hago el pedido?']
+    : [mensaje]
 
 // Import dinámico: agent-brain lee BRAIN_* del entorno al cargarse (después del .env).
 const { construirCadena, describirCadena, normalizarPaso } = await import('../src/lib/llm-cadena.js')

@@ -98,7 +98,7 @@ export const RESPONSE_SCHEMA = {
       properties: {
         tipo: { type: 'string', description: 'Tipo de compromiso.', enum: ['pago', 'comprobante', 'decision', 'otro'] },
         descripcion: { type: 'string', description: 'Qué prometió, en pocas palabras. Ej: "confirmar el pedido mañana".' },
-        fecha_iso: { type: 'string', description: 'Fecha/hora ISO 8601 zona Perú -05:00. Ej: "2026-07-20T15:00:00-05:00". Resuelve "mañana"/"el lunes" con AHORA MISMO (arriba). Sin fecha concreta → omite el compromiso entero.' }
+        fecha_iso: { type: 'string', description: 'Fecha/hora ISO 8601 zona Perú -05:00. Ej: "2026-07-20T15:00:00-05:00". Resuelve "mañana"/"el lunes" con AHORA MISMO (va junto a la conversación). Sin fecha concreta → omite el compromiso entero.' }
       }
     },
     cierre: {
@@ -206,8 +206,9 @@ export function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estado
   const rolAgente = agente.rol || `asesor comercial de ${nombreEmpresa}`
   const nombreProducto = agente.nombreProducto || 'ELIXIR'
 
-  const bloqueMemoria = estadoLead?.memoriaEpisodica ? `\n${estadoLead.memoriaEpisodica}\n` : ''
-  const cierreResumen = estadoLead?.cierreResumen || null
+  // La hora, la memoria del contacto y el historial de cierre NO van aquí: cambian con
+  // cada turno y romperían la caché de prefijo del proveedor. Viajan en el mensaje del
+  // turno (agent-brain.js → construirUserPrompt; el texto del cierre es textoHistorialCierre).
 
   // Sin ficha real, el bot de colágeno NO da precios (flattenFactSheet devuelve
   // un texto genérico aunque no haya ficha → chequeamos la señal tieneFactSheet).
@@ -215,15 +216,7 @@ export function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estado
     ? fs.factSheetBloque
     : '(no tengo la ficha exacta a la mano; NO des ningún precio — dile con calidez que en un momento le confirmas las opciones y escala a humano si insiste)'
 
-  const ahoraPeru = new Date().toLocaleString('es-PE', {
-    timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long',
-    year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-  })
-
   return `Eres ${nombreAgente}, ${rolAgente}. Atiendes por WhatsApp a personas (mayormente mujeres de 30 a 60, de Lima) que vieron un anuncio de ${nombreProducto} — un suplemento de colágeno con fórmula completa — y escribieron para aprovechar la promoción.
-
-# AHORA MISMO
-Hoy es ${ahoraPeru} (hora de Perú, zona UTC-05:00). Úsalo para entender "hoy", "mañana", "el lunes", y para fechar compromisos con la zona -05:00.
 
 # QUIÉN ERES Y TU FILOSOFÍA
 - Eres ${nombreAgente}, una persona REAL del equipo de ${nombreEmpresa}. Cálido, cercano y genuinamente interesado en ayudar a cada clienta a elegir bien. Llevas años asesorando a personas que quieren cuidarse.
@@ -235,7 +228,7 @@ ${personaBase({ nombreAgente, nombreEmpresa })}
 - ⛔ EL NOMBRE DE LA CLIENTA — JAMÁS LO INVENTES: solo puedes llamarla por su nombre si ELLA lo ESCRIBIÓ en el chat con sus propias palabras ("me llamo Rosa", "soy Ana"). Si no te lo dio, NUNCA le pongas un nombre, NUNCA adivines, NUNCA uses un nombre "por si acaso" — háblale sin nombre (es normal y natural). Inventar un nombre y equivocarte destruye la confianza al instante ("¿por qué me llamas así?").
 - Eres un HOMBRE (Jhon): usa emojis neutros (😊 💜 👀 🙌 📦), JAMÁS emojis con figura de mujer (🤦🏻‍♀️ 💁‍♀️ 🙋‍♀️) — te delatan como un guion mal armado.
 - ⚠️ Sobre el saludo: el mensaje automático de la marca ya la saludó; tú apareces con tu nombre UNA vez y nunca más.
-${bloqueMemoria}
+
 # LA REGLA MÁS IMPORTANTE — UNA PREGUNTA A LA VEZ
 ${UNA_PREGUNTA_A_LA_VEZ}
 Y NUNCA dispares todo de golpe (fórmula + precios + foto + distrito en un solo mensaje): ese volcado de catálogo es EXACTAMENTE el error que mata la conversión. La información se dosifica: cada mensaje da UN paso.
@@ -269,8 +262,7 @@ ${CONDUCCION_BASE}
   · Solo "no me interesa / ya no quiero" es rechazo real → retírate con calidez y dignidad, temperatura_lead=cold, cero persecución.
 - LEAD CALIENTE (dice "quiero pedirlo", "cómo pago", da su distrito sin que preguntes, elige pack): DEJA DE CALIFICAR Y TOMA EL PEDIDO. Encuestar a quien ya quiere comprar es perderlo. Salta directo al cierre logístico.
 - VARÍA LA PALANCA: no repitas el mismo empujón turno tras turno — alterna valor nuevo, respaldo, resolver el freno, cierre suave, elección entre 2 packs.
-- UNA SOLA RESPUESTA COHERENTE: si escribe varios mensajes seguidos, responde como UN pensamiento que leyó todo, con UN solo siguiente paso.${cierreResumen ? `
-- ⚠️ TU HISTORIAL DE CIERRE EN ESTA CONVERSACIÓN: ${cierreResumen}. (Aquí "llamada" = tus intentos de concretar el pedido.) NO es para que abandones el cierre — es para que NO lo propongas calcado: cada nuevo intento con un ángulo fresco atado a lo último que dijo. Si ya resolviste una objeción, no la re-expliques.` : ''}
+- UNA SOLA RESPUESTA COHERENTE: si escribe varios mensajes seguidos, responde como UN pensamiento que leyó todo, con UN solo siguiente paso.
 
 ${construirFlujoMomentos({ pasoPresentacion })}
 
@@ -360,6 +352,13 @@ export function validarMensajeExtra(mensaje) {
 // ════════════════════════════════════════════════════════
 // PIEZAS DEL NEGOCIO QUE EL MOTOR CONSUME (sep 2026)
 // ════════════════════════════════════════════════════════
+
+// Historial de cierre de ESTA conversación (lo resume brain-pipeline desde lead_state).
+// Viaja en el mensaje del turno, no en el system prompt (cambia turno a turno).
+export function textoHistorialCierre(cierreResumen) {
+  return `# TU HISTORIAL DE CIERRE EN ESTA CONVERSACIÓN
+${cierreResumen}. (Aquí "llamada" = tus intentos de concretar el pedido.) NO es para que abandones el cierre — es para que NO lo propongas calcado: cada nuevo intento con un ángulo fresco atado a lo último que dijo. Si ya resolviste una objeción, no la re-expliques.`
+}
 
 // Si la campaña no tiene ficha y el modelo escribe un precio, se neutraliza la
 // oración con esto. Aquí no hay llamada: el cierre es por chat.

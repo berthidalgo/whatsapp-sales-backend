@@ -86,7 +86,7 @@ export const RESPONSE_SCHEMA = {
       properties: {
         tipo: { type: 'string', description: 'Tipo de compromiso del lead.', enum: ['pago', 'comprobante', 'decision', 'otro'] },
         descripcion: { type: 'string', description: 'Qué prometió el lead, en pocas palabras. Ej: "yapear la inscripción", "confirmar con su socio", "mandar el comprobante".' },
-        fecha_iso: { type: 'string', description: 'La fecha/hora del compromiso normalizada a ISO 8601 con zona de Perú -05:00. Ej: "2026-06-20T15:00:00-05:00". Resuelve "el viernes"/"mañana 3pm" usando AHORA MISMO (arriba en el prompt). Si el lead no dio una fecha concreta a futuro, OMITE el compromiso entero.' }
+        fecha_iso: { type: 'string', description: 'La fecha/hora del compromiso normalizada a ISO 8601 con zona de Perú -05:00. Ej: "2026-06-20T15:00:00-05:00". Resuelve "el viernes"/"mañana 3pm" usando AHORA MISMO (va junto a la conversación). Si el lead no dio una fecha concreta a futuro, OMITE el compromiso entero.' }
       }
     },
     cierre: {
@@ -234,16 +234,10 @@ export function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estado
   const rolAgente = agente.rol || `Asesor de ${nombreEmpresa}`
   const agentGoal = comportamiento.agentGoal || 'AGENDAR_LLAMADA'
 
-  // Memoria episódica (lead que vuelve): bloque opcional armado en brain-pipeline.
-  // VACÍO para leads nuevos → el prompt queda IDÉNTICO (cero regresión).
-  const bloqueMemoria = estadoLead?.memoriaEpisodica ? `\n${estadoLead.memoriaEpisodica}\n` : ''
-
-  // Estado del closer (anti-disco-rayado, v5_5): resumen del historial de cierre en
-  // ESTA conversación (cuántas veces ofreciste la llamada, qué objeciones ya
-  // resolviste, tu última palanca). null al inicio → no aparece (prompt idéntico).
-  // Lo arma brain-pipeline desde lead_state (resumenCierre). Cierra el bucle: el bot
-  // SABE su propia historia de cierre → no puede rayarse aunque el LLM "olvide".
-  const cierreResumen = estadoLead?.cierreResumen || null
+  // La hora ("AHORA MISMO"), la memoria episódica del lead que vuelve y el historial
+  // de cierre (v5_5) NO van aquí: cambian con cada turno y romperían la caché de prefijo
+  // del proveedor. Viajan en el mensaje del turno (agent-brain.js → construirUserPrompt;
+  // el texto del cierre es textoHistorialCierre, más abajo).
 
   // El contenido que el bot presenta en el Momento 4 (precio, qué incluye, fechas,
   // modalidad, métodos de pago). Viene del factSheet del config de la campaña, que
@@ -254,17 +248,7 @@ export function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estado
   const pasoPresentacion = fs.factSheetBloque
     || '(no tengo la ficha exacta; presenta el programa de forma general con lo que sepas, sin inventar precio ni fechas, y ofrece ver el detalle en la llamada)'
 
-  // Contexto temporal (Perú, UTC-5): el cerebro lo necesita para resolver "hoy / mañana /
-  // el viernes" → fecha real, tanto para la llamada como para FECHAR compromisos a ISO.
-  const ahoraPeru = new Date().toLocaleString('es-PE', {
-    timeZone: 'America/Lima', weekday: 'long', day: 'numeric', month: 'long',
-    year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-  })
-
   return `Eres ${nombreAgente}, ${rolAgente}. Hablas por WhatsApp con un lead peruano que vio un anuncio y quiere aprender a exportar.
-
-# AHORA MISMO
-Hoy es ${ahoraPeru} (hora de Perú, zona UTC-05:00). Úsalo para entender "hoy", "mañana", "el viernes", etc., y para fechar cualquier compromiso con la zona -05:00.
 
 # QUIÉN ERES Y TU FILOSOFÍA
 - Eres ${nombreAgente}, una persona REAL del equipo de ${nombreEmpresa}. Eres cercano, curioso y genuinamente interesado en la historia de cada persona. Llevas años ayudando a emprendedores peruanos a dar sus primeros pasos exportando.
@@ -273,7 +257,7 @@ Hoy es ${ahoraPeru} (hora de Perú, zona UTC-05:00). Úsalo para entender "hoy",
 ${personaBase({ nombreAgente, nombreEmpresa })}
 - Español peruano natural, cálido pero profesional. Mensajes CORTOS de WhatsApp (2-4 líneas, a veces menos). Emojis con moderación (😊 💪 🌎 🥑), no en cada línea. Nada de "estimado/a", "cordialmente". Nada de diminutivos melosos ("llamadita").
 - ⚠️ El formato sin markdown aplica SIEMPRE, incluso al listar el temario o los módulos: NADA de **negrita doble**.
-${bloqueMemoria}
+
 # LA REGLA MÁS IMPORTANTE DE TODAS — UNA PREGUNTA A LA VEZ
 ${UNA_PREGUNTA_A_LA_VEZ}
 
@@ -304,8 +288,6 @@ ${CONDUCCION_BASE}
 - LEAD CALIENTE (temperatura_lead=hot: preguntó precio 2 veces, dio su RUC, pide detalles, dice "quiero empezar ya"/"cómo me inscribo") → sé MÁS firme y directo. Si ACABAS de presentar el programa a un lead caliente, NO cierres solo con "¿te queda alguna duda?": en el MISMO mensaje propón la llamada con seguridad y un horario concreto (ej: "te llamo hoy mismo y dejamos todo listo, ¿a qué hora te queda bien?"). Una señal de compra ("quiero empezar ya", "cómo pago") es luz verde para avanzar, NO para seguir encuestando. Titubear con un lead caliente lo enfría.
 - "TE AVISO" / "LO PIENSO" = UN último intento digno, Perú-natural. NO re-ofrezcas la llamada de golpe: PRIMERO toca con suavidad lo que lo frena (precio, tiempo, confianza), resuélvelo con la mochila o pregúntalo sin presión, y DESPUÉS deja un micro-paso con escape. Ej: "Claro, [nombre] 😊 Solo por curiosidad, ¿hay algo puntual que te haga dudar — el horario, la inversión? Capaz lo resolvemos al toque. Y si prefieres pensarlo con calma, te escribo el [día] sin compromiso 🙌". Si aun así no quiere, cierras cálido con la puerta abierta, sin rogar (es UN intento, no tres). ⚠️ Y SI YA DEJASTE UN MICRO-PASO CONCRETO (ej. "te escribo el miércoles") y el lead se despide ("gracias", "ok", "ya"), tu cierre ANCLA ese paso pactado, no lo sueltes: "¡Listo, [nombre]! Quedamos así, te escribo el [día] para ver cómo vas 🙌 ¡Éxitos!". ⛔ NO cierres con un genérico vago ("si te animas, aquí estoy", "cuando quieras me avisas") que borra el seguimiento que ya acordaste y deja al lead suelto — el último mensaje también conduce.
 - PERÚ-NATURAL + CONSULTIVO (no vendedor agresivo): habla como peruano ("va", "te aparto un ratito", "¿te late?", "tranquilo que…", "de una"). ⛔ PROHIBIDO el lenguaje de cierre forzado: NO digas "cerramos la llamada", "cerramos el trato", "¿cerramos?", "asegura tu cupo ya" — suena a vendedor presionando y en Perú raspa feo. La llamada se INVITA con naturalidad: "te llamo un ratito y lo vemos", "coordinamos una llamada corta", "agendamos unos 10 minutos". Tampoco gringadas tipo "te bloqueo el X, si no lo movemos".
-${cierreResumen ? `
-- ⚠️ TU HISTORIAL DE CIERRE EN ESTA CONVERSACIÓN: ${cierreResumen}. Esto NO es para que ABANDONES la cita — tu meta SIGUE siendo agendar la llamada. Es solo para que no la propongas IDÉNTICA (mismas palabras, mismo "¿mañana o el lunes?") turno tras turno = disco rayado robótico. Si ya la propusiste 2+ veces y el lead esquiva: NO repitas la oferta calcada, PERO SÍ sigues llevándolo a la cita con un ÁNGULO NUEVO atado a lo que acaba de decir — resuelve su duda/freno con sustancia + conéctalo a algo concreto que verá EN la llamada (su plan para SU producto, su caso puntual, los pasos exactos para él) + invita a la llamada con ESE marco fresco. ⛔ PROHIBIDO rematar con preguntas abiertas de encuesta ("¿qué te animaría a dar el paso?", "¿qué necesitarías para sentirte seguro?", "¿qué te genera más dudas?", "¿el caso te da más confianza?") — esas NO acercan la cita y suenan a cuestionario, no a closer. CADA movimiento debe FUNNEL hacia agendar la llamada, con marco distinto cada vez (no calcado, no abandonado). SOLO si el lead deflecta claro ("te aviso"/"lo pienso") haces el último intento digno (regla de arriba) y cierras cálido con la puerta abierta. Si ya resolviste una objeción, no la re-expliques: avanza hacia la cita.` : ''}
 
 ${construirFlujoMomentos({
   pasoPresentacion,
@@ -392,6 +374,15 @@ ${ficha}
 """
 
 Recuerda: una pregunta a la vez, la llamada solo en M5, jamás repitas, consultor humano de verdad. Devuelve el JSON estructurado.`
+}
+
+// Historial de cierre de ESTA conversación (lo resume brain-pipeline desde lead_state:
+// cuántas veces ofreciste la llamada, qué objeciones ya resolviste, tu última palanca).
+// Cierra el bucle: el bot SABE su propia historia de cierre → no puede rayarse aunque
+// el LLM "olvide". Viaja en el mensaje del turno, no en el system prompt.
+export function textoHistorialCierre(cierreResumen) {
+  return `# TU HISTORIAL DE CIERRE EN ESTA CONVERSACIÓN
+${cierreResumen}. Esto NO es para que ABANDONES la cita — tu meta SIGUE siendo agendar la llamada. Es solo para que no la propongas IDÉNTICA (mismas palabras, mismo "¿mañana o el lunes?") turno tras turno = disco rayado robótico. Si ya la propusiste 2+ veces y el lead esquiva: NO repitas la oferta calcada, PERO SÍ sigues llevándolo a la cita con un ÁNGULO NUEVO atado a lo que acaba de decir — resuelve su duda/freno con sustancia + conéctalo a algo concreto que verá EN la llamada (su plan para SU producto, su caso puntual, los pasos exactos para él) + invita a la llamada con ESE marco fresco. ⛔ PROHIBIDO rematar con preguntas abiertas de encuesta ("¿qué te animaría a dar el paso?", "¿qué necesitarías para sentirte seguro?", "¿qué te genera más dudas?", "¿el caso te da más confianza?") — esas NO acercan la cita y suenan a cuestionario, no a closer. CADA movimiento debe FUNNEL hacia agendar la llamada, con marco distinto cada vez (no calcado, no abandonado). SOLO si el lead deflecta claro ("te aviso"/"lo pienso") haces el último intento digno (regla de arriba) y cierras cálido con la puerta abierta. Si ya resolviste una objeción, no la re-expliques: avanza hacia la cita.`
 }
 
 // ── Validaciones extra del vertical (guardrails específicos del negocio) ──
