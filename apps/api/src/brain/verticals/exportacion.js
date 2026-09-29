@@ -385,6 +385,26 @@ export function textoHistorialCierre(cierreResumen) {
 ${cierreResumen}. Esto NO es para que ABANDONES la cita — tu meta SIGUE siendo agendar la llamada. Es solo para que no la propongas IDÉNTICA (mismas palabras, mismo "¿mañana o el lunes?") turno tras turno = disco rayado robótico. Si ya la propusiste 2+ veces y el lead esquiva: NO repitas la oferta calcada, PERO SÍ sigues llevándolo a la cita con un ÁNGULO NUEVO atado a lo que acaba de decir — resuelve su duda/freno con sustancia + conéctalo a algo concreto que verá EN la llamada (su plan para SU producto, su caso puntual, los pasos exactos para él) + invita a la llamada con ESE marco fresco. ⛔ PROHIBIDO rematar con preguntas abiertas de encuesta ("¿qué te animaría a dar el paso?", "¿qué necesitarías para sentirte seguro?", "¿qué te genera más dudas?", "¿el caso te da más confianza?") — esas NO acercan la cita y suenan a cuestionario, no a closer. CADA movimiento debe FUNNEL hacia agendar la llamada, con marco distinto cada vez (no calcado, no abandonado). SOLO si el lead deflecta claro ("te aviso"/"lo pienso") haces el último intento digno (regla de arriba) y cierras cálido con la puerta abierta. Si ya resolviste una objeción, no la re-expliques: avanza hacia la cita.`
 }
 
+// Memoria del lead que vuelve (brain-pipeline → construirResumenMemoria): qué slots se
+// recuerdan y cómo se dice hasta dónde llegaron la última vez.
+export const MEMORIA_EPISODICA = {
+  datos: [
+    ['producto', 'Le interesaba exportar'],
+    ['experiencia', 'Experiencia'],
+    ['empresa', 'Situación']
+  ],
+  etapas: {
+    first_contact:         'apenas se estaban saludando',
+    discovery:             'estaban conociéndose (qué quería exportar)',
+    qualifying_empresa:    'ya habían hablado de su experiencia y empresa',
+    presenting:            'ya le habías presentado el programa',
+    call_scheduling:       'ya estaban coordinando una llamada',
+    call_confirmed:        'ya habían confirmado una llamada',
+    post_close:            'ya había avanzado al cierre',
+    returning_recognition: 'ya había vuelto antes'
+  }
+}
+
 // ── Validaciones extra del vertical (guardrails específicos del negocio) ──
 // Exportación no añade validaciones más allá de las genéricas del motor
 // (precio fantasma, promesas, formato, vocativo, re-saludo).

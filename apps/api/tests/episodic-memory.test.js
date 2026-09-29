@@ -44,3 +44,20 @@ test('cae al nombre_detectado si falta el slot nombre', () => {
   const b = construirResumenMemoria([{ nombre_detectado: 'Pedro', slots: {}, stage_final: 'discovery', archived_at: new Date() }])
   assert.match(b, /Nombre: Pedro/)
 })
+
+test('colágeno: la clienta que vuelve se recuerda con palabras de SU negocio, no de exportación', async () => {
+  const colageno = await import('../src/brain/verticals/colageno.js')
+  const filas = [{
+    nombre_detectado: 'Rosa',
+    slots: { nombre: 'Rosa', dolor: 'piel', detalle_dolor: 'resequedad', pack: '3', distrito: 'Surco', _pedido: { pack: '3' } },
+    stage_final: 'call_scheduling',
+    archived_at: new Date()
+  }]
+  const b = construirResumenMemoria(filas, Date.now(), colageno.MEMORIA_EPISODICA)
+  assert.match(b, /Nombre: Rosa/)
+  assert.match(b, /Quería mejorar: piel/)
+  assert.match(b, /Pack que eligió: 3/)
+  assert.match(b, /coordinando su pedido/)
+  assert.doesNotMatch(b, /exportar|llamada|programa/i, 'nada del vocabulario de exportación')
+  assert.doesNotMatch(b, /_pedido|\[object/, 'el estado interno no se "recuerda"')
+})

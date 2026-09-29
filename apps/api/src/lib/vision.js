@@ -11,7 +11,9 @@
 // Usa el MISMO modelo/location del cerebro (BRAIN_* env) → en prod es 3.5 global.
 
 import { callGemini } from './gemini.js'
-import { pasoVision } from './llm-cadena.js'
+import { pasoVision, parsearPaso, normalizarPaso } from './llm-cadena.js'
+import { callCompat, esProveedorCompat, compatConfigurado } from './openai-compat.js'
+import { schemaToPrompt } from './groq.js'
 
 // Modelo, location y thinking del primer Gemini de la cadena del cerebro (sep 2026).
 // Antes se leían BRAIN_MODEL/BRAIN_LOCATION a mano: al pasar a Gemini 3 sin fijar
@@ -25,6 +27,46 @@ function configVision() {
     thinkingBudget: p.thinkingBudget,
     apiKey: p.provider === 'devapi' ? (process.env.GEMINI_DEV_API_KEY || null) : null
   }
+}
+
+// VISIÓN SIN LLAVE DE GOOGLE (sep 2026): las llaves nuevas de AI Studio ("AQ.") dan 401
+// y Vertex exige facturación, así que Gemini puede llegar por un proveedor
+// OpenAI-compatible (OpenRouter). VISION_PROVIDER=openrouter:google/gemini-3.1-flash-lite
+// manda las fotos por ahí; sin la variable (o sin su llave) todo sigue por Gemini directo.
+export function pasoVisionCompat(env = process.env) {
+  const paso = normalizarPaso(parsearPaso(env.VISION_PROVIDER || ''), env)
+  return paso && esProveedorCompat(paso.provider) && compatConfigurado(paso.provider, env) ? paso : null
+}
+
+// Una foto + una instrucción → { text, usage } por el camino que toque.
+async function llamarVision({ systemInstruction, texto, base64, mimeType, schema, maxOutputTokens, tenantId }) {
+  const compat = pasoVisionCompat()
+  if (compat) {
+    return callCompat({
+      provider: compat.provider,
+      model: compat.model,
+      systemInstruction: `${systemInstruction}\n\n${schemaToPrompt(schema)}`,
+      contents: [
+        { type: 'text', text: texto },
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } }
+      ],
+      temperature: 0.1,
+      maxOutputTokens
+    })
+  }
+  return callGemini({
+    ...configVision(),
+    systemInstruction,
+    // contents multimodal: parte de texto + parte de imagen (inlineData).
+    contents: [{ role: 'user', parts: [{ text: texto }, { inlineData: { mimeType, data: base64 } }] }],
+    temperature: 0.1,
+    maxOutputTokens,
+    responseSchema: schema,
+    // `|| undefined` a propósito: en JS el default de un parámetro solo aplica con
+    // undefined, NO con null. Pasar null haría que callGemini consulte
+    // tenantSettings con tenantId=null y cachee el cliente bajo la llave "null".
+    tenantId: tenantId || undefined
+  })
 }
 
 const VISION_SCHEMA = {
@@ -57,29 +99,17 @@ export async function leerComprobante({ base64, mimeType = 'image/jpeg', tenantI
     return { ok: false, esComprobante: false, resumen: '(sin imagen)', error: 'base64_vacio' }
   }
 
-  const systemInstruction = `Eres un validador EXPERTO de comprobantes de pago peruanos (Yape, Plin, transferencias BCP/Interbank/BBVA, depósitos). Te dan una imagen que un lead envió por WhatsApp tras decir que pagó un curso. Tu trabajo: (1) decidir si REALMENTE es un comprobante de pago o es otra cosa (foto cualquiera, meme, captura no relacionada), y (2) si lo es, extraer los datos clave para que el vendedor humano valide el pago. NO inventes datos: si un campo no se ve en la imagen, déjalo en "". Sé literal con lo que la imagen muestra.`
-
-  // contents multimodal: parte de texto + parte de imagen (inlineData).
-  const contents = [{
-    role: 'user',
-    parts: [
-      { text: 'Analiza esta imagen. ¿Es un comprobante de pago? Si sí, extrae monto, fecha, número de operación, método y nombres. Devuelve el JSON.' },
-      { inlineData: { mimeType, data: base64 } }
-    ]
-  }]
+  const systemInstruction = `Eres un validador EXPERTO de comprobantes de pago peruanos (Yape, Plin, transferencias BCP/Interbank/BBVA, depósitos). Te dan una imagen que un cliente envió por WhatsApp tras decir que pagó. Tu trabajo: (1) decidir si REALMENTE es un comprobante de pago o es otra cosa (foto cualquiera, meme, captura no relacionada), y (2) si lo es, extraer los datos clave para que el vendedor humano valide el pago. NO inventes datos: si un campo no se ve en la imagen, déjalo en "". Sé literal con lo que la imagen muestra.`
 
   try {
-    const result = await callGemini({
-      ...configVision(),
+    const result = await llamarVision({
       systemInstruction,
-      contents,
-      temperature: 0.1,            // determinista: extracción, no creatividad
-      maxOutputTokens: 4000,       // incluye el thinking del modelo (ver configVision)
-      responseSchema: VISION_SCHEMA,
-      // `|| undefined` a propósito: en JS el default de un parámetro solo aplica con
-      // undefined, NO con null. Pasar null haría que callGemini consulte
-      // tenantSettings con tenantId=null y cachee el cliente bajo la llave "null".
-      tenantId: tenantId || undefined
+      texto: 'Analiza esta imagen. ¿Es un comprobante de pago? Si sí, extrae monto, fecha, número de operación, método y nombres. Devuelve el JSON.',
+      base64,
+      mimeType,
+      schema: VISION_SCHEMA,
+      maxOutputTokens: 4000,       // incluye el thinking del modelo (ver configVision); temperatura 0.1: extracción
+      tenantId
     })
 
     if (!result?.text) {
@@ -164,23 +194,15 @@ export async function describirImagen({ base64, mimeType = 'image/jpeg', tenantI
   // contaminar a un tenant con el discurso de otro.
   const systemInstruction = `Eres un descriptor de imágenes. Te dan una foto que alguien envió por WhatsApp y devuelves una descripción objetiva y breve de lo que se ve. NO eres un asistente de ventas, NO saludas, NO haces preguntas, NO ofreces nada. Solo describes lo visible, en español neutro. Si no se distingue bien, dilo ("una imagen borrosa").`
 
-  const contents = [{
-    role: 'user',
-    parts: [
-      { text: 'Describe objetivamente esta imagen. Devuelve el JSON.' },
-      { inlineData: { mimeType, data: base64 } }
-    ]
-  }]
-
   try {
-    const result = await callGemini({
-      ...configVision(),
+    const result = await llamarVision({
       systemInstruction,
-      contents,
-      temperature: 0.1,            // determinista: describir, no crear
+      texto: 'Describe objetivamente esta imagen. Devuelve el JSON.',
+      base64,
+      mimeType,
+      schema: IMAGEN_SCHEMA,
       maxOutputTokens: 3000,       // con 300, el thinking de 2.5-pro se comía todo → respuesta vacía
-      responseSchema: IMAGEN_SCHEMA,
-      tenantId: tenantId || undefined   // ver nota en leerComprobante: null ≠ undefined
+      tenantId
     })
     if (!result?.text) return { ok: false, error: 'sin_texto' }
     let parsed

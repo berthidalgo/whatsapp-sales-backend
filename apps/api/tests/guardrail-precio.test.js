@@ -189,8 +189,10 @@ const servidor = createServer((req, res) => {
   })
 })
 await new Promise((r) => servidor.listen(0, '127.0.0.1', r))
+// La URL se fija en cada turno, no al cargar el archivo: los tests corren en un solo
+// proceso (--test-isolation=none) y otro archivo puede tener su propio servidor falso.
+const URL_FALSA = `http://127.0.0.1:${servidor.address().port}/v1`
 const baseAnterior = process.env.OPENAI_COMPAT_BASE_URL
-process.env.OPENAI_COMPAT_BASE_URL = `http://127.0.0.1:${servidor.address().port}/v1`
 after(() => {
   servidor.close()
   if (baseAnterior === undefined) delete process.env.OPENAI_COMPAT_BASE_URL
@@ -201,6 +203,7 @@ function turno(respuestas) {
   _resetCadena()
   pedidos.length = 0
   guion = [...respuestas]
+  process.env.OPENAI_COMPAT_BASE_URL = URL_FALSA
   return pensarYResponder({
     mensajeActual: '¿Y cuánto está el de 3?',
     historial: [{ rol: 'lead', texto: 'Hola, quiero la oferta' }, { rol: 'agente', texto: 'Soy Jhon 😊 ¿Por la piel, la energía o las articulaciones?' }],

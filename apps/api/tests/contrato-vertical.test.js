@@ -53,6 +53,9 @@ for (const id of VERTICALES_DISPONIBLES) {
     assert.ok(v.RESPONSE_SCHEMA?.properties, 'debe traer RESPONSE_SCHEMA con properties')
     assert.equal(typeof v.construirSystemPrompt, 'function', 'debe traer construirSystemPrompt')
     assert.ok(v.MOMENTOS && Object.keys(v.MOMENTOS).length > 0, 'debe traer sus MOMENTOS')
+    // La memoria del lead que vuelve habla el idioma del negocio (qué slots, qué etapas).
+    assert.ok(Array.isArray(v.MEMORIA_EPISODICA?.datos) && v.MEMORIA_EPISODICA.etapas,
+      'debe traer MEMORIA_EPISODICA { datos, etapas }: sin ella, un cliente que vuelve se recuerda con palabras de otro negocio')
 
     // El contrato de salida que el pipeline lee en CADA turno. Si un vertical no
     // los declara, el motor no sabe avanzar de etapa ni cuándo escalar.

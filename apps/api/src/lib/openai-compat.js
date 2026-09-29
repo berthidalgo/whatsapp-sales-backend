@@ -109,7 +109,10 @@ export async function callCompat({
   const startTime = Date.now()
   const messages = []
   if (systemInstruction) messages.push({ role: 'system', content: systemInstruction })
-  messages.push({ role: 'user', content: typeof contents === 'string' ? contents : JSON.stringify(contents) })
+  // Partes al estilo OpenAI ([{ type: 'text' }, { type: 'image_url' }]) pasan tal cual:
+  // así se le manda una foto a un modelo multimodal (visión por OpenRouter, sep 2026).
+  const esMultimodal = Array.isArray(contents) && contents.length > 0 && contents.every(p => typeof p?.type === 'string')
+  messages.push({ role: 'user', content: typeof contents === 'string' || esMultimodal ? contents : JSON.stringify(contents) })
 
   const body = { model, messages, temperature, max_tokens: maxOutputTokens }
   if (jsonMode && p.json) body.response_format = { type: 'json_object' }

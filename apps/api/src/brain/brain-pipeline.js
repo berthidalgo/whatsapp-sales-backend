@@ -341,20 +341,16 @@ async function construirHistorial(prisma, leadId, limite = 12) {
 // pocos usuarios/sesiones). ADDITIVE: si no hay historial previo devuelve null y
 // el prompt queda IDÉNTICO (cero regresión para leads nuevos).
 // ─────────────────────────────────────────────────────────────────────────
-const STAGE_LEGIBLE_MEMORIA = {
-  first_contact:         'apenas se estaban saludando',
-  discovery:             'estaban conociéndose (qué quería exportar)',
-  qualifying_empresa:    'ya habían hablado de su experiencia y empresa',
-  presenting:            'ya le habías presentado el programa',
-  call_scheduling:       'ya estaban coordinando una llamada',
-  call_confirmed:        'ya habían confirmado una llamada',
-  post_close:            'ya había avanzado al cierre',
-  returning_recognition: 'ya había vuelto antes'
-}
+// QUÉ se recuerda y CÓMO se dice lo trae el vertical (MEMORIA_EPISODICA): los slots
+// de cada negocio son otros, y hasta sep 2026 una clienta de colágeno que volvía era
+// "recordada" con frases de exportación ("qué quería exportar", "coordinando una
+// llamada"). Sin vertical, el default histórico del registry (exportación).
+const MEMORIA_POR_DEFECTO = () => getVertical(null, null).MEMORIA_EPISODICA
 
 // Función PURA (testeable sin BD): arma el bloque de memoria desde filas archivadas.
-export function construirResumenMemoria(filas, ahora = Date.now()) {
+export function construirResumenMemoria(filas, ahora = Date.now(), memoria = null) {
   if (!Array.isArray(filas) || filas.length === 0) return null
+  const { datos: camposDatos = [], etapas = {} } = memoria || MEMORIA_POR_DEFECTO() || {}
   const ult = filas[0]  // la conversación archivada más reciente
   const slots = ult.slots || {}
   // Filtra valores-basura para no "recordar" datos vacíos o de descarte.
@@ -363,9 +359,9 @@ export function construirResumenMemoria(filas, ahora = Date.now()) {
   const nombre = limpio(slots.nombre) || (ult.nombre_detectado && ult.nombre_detectado !== 'null' ? ult.nombre_detectado : null)
   const datos = []
   if (nombre) datos.push(`Nombre: ${nombre}`)
-  if (limpio(slots.producto))    datos.push(`Le interesaba exportar: ${limpio(slots.producto)}`)
-  if (limpio(slots.experiencia)) datos.push(`Experiencia: ${limpio(slots.experiencia)}`)
-  if (limpio(slots.empresa))     datos.push(`Situación: ${limpio(slots.empresa)}`)
+  for (const [slot, etiqueta] of camposDatos) {
+    if (limpio(slots[slot])) datos.push(`${etiqueta}: ${limpio(slots[slot])}`)
+  }
 
   let cuando = ''
   if (ult.archived_at) {
@@ -378,13 +374,13 @@ export function construirResumenMemoria(filas, ahora = Date.now()) {
     `⚠️ MUY IMPORTANTE — LEE ESTO ANTES DE RESPONDER: aunque el historial de mensajes de abajo esté vacío, este lead YA habló contigo en una sesión anterior (se archivó). Por lo tanto NO estás en el Momento 1 y este lead NO es un desconocido. Esto es lo que YA sabes de él/ella:`,
     ...datos.map(d => `- ${d}`)
   ]
-  const hastaDonde = STAGE_LEGIBLE_MEMORIA[ult.stage_final]
+  const hastaDonde = etapas[ult.stage_final]
   if (hastaDonde) lineas.push(`- La última vez ${hastaDonde}.`)
-  lineas.push(`→ PROHIBIDO presentarte desde cero o preguntar su nombre/producto: YA los sabes (arriba). Salúdalo como un REENCUENTRO cálido y por su nombre (ej: "¡${nombre || 'Hola de nuevo'}! Qué gusto que vuelvas 😊"), y retoma con naturalidad desde donde quedaron. Trátalo como alguien CONOCIDO, no como un lead nuevo. (Este bloque MANDA sobre la apertura del Momento 1.)`)
+  lineas.push(`→ PROHIBIDO presentarte desde cero o volver a preguntar lo que ya sabes (arriba). Salúdalo como un REENCUENTRO cálido y por su nombre (ej: "¡${nombre || 'Hola de nuevo'}! Qué gusto que vuelvas 😊"), y retoma con naturalidad desde donde quedaron. Trátalo como alguien CONOCIDO, no como un lead nuevo. (Este bloque MANDA sobre la apertura del Momento 1.)`)
   return lineas.join('\n')
 }
 
-async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId) {
+async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId, memoria = null) {
   // Sin tenant NO se recuerda nada: antes caía a 'peru_exporta' y un turno sin tenant
   // resuelto habría "recordado" la conversación de exportación de ese teléfono.
   if (!telefono || !tenantId) return null
@@ -400,7 +396,7 @@ async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId) 
         ORDER BY id DESC LIMIT 3`,
       String(telefono), Number(leadIdActual) || 0, String(tenantId)
     )
-    return construirResumenMemoria(filas)
+    return construirResumenMemoria(filas, Date.now(), memoria)
   } catch (err) {
     // Degradación elegante (ADN #11): si la memoria falla, el cerebro sigue normal.
     console.error(`[BrainPipeline] memoria episódica falló (lead ${leadIdActual}):`, err.message)
@@ -498,7 +494,8 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // Memoria episódica: si este contacto ya conversó antes (conversación
     // archivada), cargamos un resumen de hechos para que el cerebro lo RECONOZCA
     // (lead que vuelve). null si es nuevo → el prompt queda idéntico.
-    const memoriaEpisodica = await cargarMemoriaEpisodica(prisma, telefono, leadId, tenantId)
+    const vertical = getVertical(campaignConfig, tenantId)
+    const memoriaEpisodica = await cargarMemoriaEpisodica(prisma, telefono, leadId, tenantId, vertical.MEMORIA_EPISODICA)
     if (memoriaEpisodica) {
       console.log(`[BrainPipeline] 🧠 Memoria episódica activa para lead ${leadId} (contacto ya conocido)`)
     }
@@ -604,7 +601,6 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // distrito). La marca `_pedido` saca al lead de los motores de fondo: no se le
     // "rescata" al bot ni se le manda el followup de "no se te pase la promo" a quien
     // ya compró. Se marca una sola vez (el primer cierre manda).
-    const vertical = getVertical(campaignConfig, tenantId)
     if (!slotsFusionados._pedido && typeof vertical.detectarVentaCerrada === 'function') {
       const venta = vertical.detectarVentaCerrada({
         debeEscalar: brainResult.debe_escalar_humano === true,

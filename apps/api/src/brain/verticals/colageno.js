@@ -360,6 +360,28 @@ export function textoHistorialCierre(cierreResumen) {
 ${cierreResumen}. (Aquí "llamada" = tus intentos de concretar el pedido.) NO es para que abandones el cierre — es para que NO lo propongas calcado: cada nuevo intento con un ángulo fresco atado a lo último que dijo. Si ya resolviste una objeción, no la re-expliques.`
 }
 
+// Memoria de la clienta que vuelve (brain-pipeline → construirResumenMemoria): sus
+// slots y hasta dónde llegaron, dicho en el idioma de este negocio.
+export const MEMORIA_EPISODICA = {
+  datos: [
+    ['dolor', 'Quería mejorar'],
+    ['detalle_dolor', 'Lo que le preocupaba'],
+    ['experiencia_colageno', 'Experiencia con colágeno'],
+    ['pack', 'Pack que eligió'],
+    ['distrito', 'Distrito']
+  ],
+  etapas: {
+    first_contact:         'apenas se estaban saludando',
+    discovery:             'estaban viendo qué quería mejorar',
+    qualifying_empresa:    'ya le habías contado de la fórmula',
+    presenting:            'ya le habías dado los precios',
+    call_scheduling:       'ya estaban coordinando su pedido',
+    call_confirmed:        'ya había confirmado un pedido',
+    post_close:            'ya había comprado',
+    returning_recognition: 'ya había vuelto antes'
+  }
+}
+
 // Si la campaña no tiene ficha y el modelo escribe un precio, se neutraliza la
 // oración con esto. Aquí no hay llamada: el cierre es por chat.
 export const FRASE_PRECIO_SIN_FICHA = ' El precio exacto de los packs te lo confirmo en un momento 😊'
