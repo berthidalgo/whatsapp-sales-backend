@@ -55,7 +55,7 @@ export async function procesarWebhookCloud(payload) {
 export async function procesarMensajeCloud(ev, deps = {}) {
   const d = {
     checkAndMark, resolveChannel, tenantAtiende, resolveLead, enqueueMessage, procesarTurno,
-    convertirMediaATexto, responderNoTexto,
+    manejarMedia, responderNoTexto,
     ...deps
   }
 
@@ -96,16 +96,19 @@ export async function procesarMensajeCloud(ev, deps = {}) {
   // El canal viaja dentro del turno: el envío sale por ESTE número y con SUS credenciales.
   const leadInfo = { ...resolution, channel: canal, tenantId: canal.tenantId }
 
-  // 4. Audio y foto sin texto → se convierten en texto antes del cerebro.
+  // Se descarga y guarda la media aunque tenga comentario. El comentario, si existe,
+  // es el texto del cliente; solo audio y foto sin comentario necesitan conversión.
   let texto = ev.text
-  if (!texto && ev.mediaId && (ev.messageType === 'audio' || ev.messageType === 'image')) {
-    texto = await d.convertirMediaATexto({ ev, leadInfo })
+  let mediaAssetId = null
+  if (ev.mediaId && TIPOS_CON_MEDIA.has(ev.messageType)) {
+    const media = await d.manejarMedia({ ev, leadInfo, hayTexto: !!texto })
+    mediaAssetId = media.mediaAssetId ?? null
+    if (!texto) texto = media.texto
   }
   if (!texto) {
-    await d.responderNoTexto({ ev, leadInfo })
-    return { queued: false, reason: `sin_texto (${ev.messageType})` }
+    await d.responderNoTexto({ ev, leadInfo, mediaAssetId })
+    return { queued: false, reason: 'sin_texto (' + ev.messageType + ')' }
   }
-
   // 5. Mismo camino que Evolution: el debounce agrupa ráfagas y el turno corre una vez.
   const r = d.enqueueMessage({
     leadId: leadInfo.leadId,
@@ -120,55 +123,88 @@ export async function procesarMensajeCloud(ev, deps = {}) {
 // ════════════════════════════════════════════════════════
 // AUDIO y FOTO → texto
 // ════════════════════════════════════════════════════════
-async function convertirMediaATexto({ ev, leadInfo }) {
+const TIPOS_CON_MEDIA = new Set(['image', 'audio', 'document', 'video'])
+const MARCADORES = {
+  image: '[📷 el lead envió una imagen]',
+  audio: '[🎙️ el lead envió una nota de voz]',
+  document: '[📄 el lead envió un documento]',
+  video: '[🎬 el lead envió un video]'
+}
+
+async function manejarMedia({ ev, leadInfo, hayTexto }) {
+  const vacio = { texto: null, mediaAssetId: null }
   try {
     const media = await descargarMediaCloud(ev.mediaId, credencialesCloud(leadInfo.channel))
     if (!media.ok) {
-      console.warn(`[CloudRouter] no se pudo descargar ${ev.messageType} del lead ${leadInfo.leadId}: ${media.error}`)
-      return null
+      console.warn('[CloudRouter] no se pudo descargar ' + ev.messageType + ': ' + media.error)
+      return vacio
     }
+    const guardada = await saveInboundMedia(prisma, {
+      leadId: leadInfo.leadId, messageId: null, tenantId: leadInfo.tenantId,
+      tipo: ev.messageType, mimeType: media.mimeType, base64: media.base64
+    })
+    if (!guardada.ok) console.warn('[CloudRouter] media no persistida: ' + guardada.error)
+    const mediaAssetId = guardada.id ?? null
+    if (hayTexto) return { texto: null, mediaAssetId }
+
     if (ev.messageType === 'audio') {
       const tr = await transcribirAudio({
         base64: media.base64, mimeType: media.mimeType || 'audio/ogg', language: 'es',
         vertical: verticalPorTenant(leadInfo.tenantId)
       })
       if (tr.ok && tr.texto) {
-        console.log(`[CloudRouter] 🎙️→📝 audio del lead ${leadInfo.leadId} transcrito (${tr.texto.length} chars)`)
-        return tr.texto
+        console.log('[CloudRouter] audio transcrito (' + tr.texto.length + ' chars)')
+        return { texto: tr.texto, mediaAssetId }
       }
-      return null
     }
-    // Foto: se guarda para la bandeja y se describe para el cerebro.
-    saveInboundMedia(prisma, {
-      leadId: leadInfo.leadId, messageId: null, tenantId: leadInfo.tenantId,
-      tipo: 'image', mimeType: media.mimeType, base64: media.base64
-    }).catch(e => console.error(`[CloudRouter] persistir imagen lead ${leadInfo.leadId}:`, e.message))
-    const d = await describirImagen({ base64: media.base64, mimeType: media.mimeType, tenantId: leadInfo.tenantId })
-    return d.ok ? `[el lead envió una foto: ${d.descripcion}]` : null
+    if (ev.messageType === 'image') {
+      const d = await describirImagen({ base64: media.base64, mimeType: media.mimeType, tenantId: leadInfo.tenantId })
+      if (d.ok) return { texto: '[el lead envió una foto: ' + d.descripcion + ']', mediaAssetId }
+    }
+    return { texto: null, mediaAssetId }
   } catch (err) {
-    console.error(`[CloudRouter] error convirtiendo ${ev.messageType} del lead ${leadInfo.leadId}:`, err.message)
-    return null
+    console.error('[CloudRouter] error manejando ' + ev.messageType + ':', err.message)
+    return vacio
   }
 }
-
 // Lo que no se pudo convertir: se deja registro y, si el bot está a cargo, un acuse
 // NEUTRO (sin marca ni vertical) para que el lead no quede sin respuesta. Stickers,
 // ubicaciones y reacciones se ignoran en silencio (responderles sería raro).
-async function responderNoTexto({ ev, leadInfo }) {
-  if (ev.messageType !== 'image' && ev.messageType !== 'audio') return
-  const marcador = ev.messageType === 'image' ? '[📷 el lead envió una imagen]' : '[🎙️ el lead envió una nota de voz]'
+export async function responderNoTexto({ ev, leadInfo, mediaAssetId = null }, deps = {}) {
+  const d = { prisma, enviarTexto, ...deps }
+  const marcador = mediaAssetId || !TIPOS_CON_MEDIA.has(ev.messageType)
+    ? MARCADORES[ev.messageType]
+    : '[⚠️ el lead envió ' + ev.messageType + ' pero no se pudo guardar]'
+  if (!marcador) return
   try {
-    await prisma.message.create({ data: { leadId: leadInfo.leadId, origen: 'LEAD', texto: marcador } })
-    const st = await prisma.leadState.findUnique({ where: { leadId: leadInfo.leadId }, select: { currentMode: true } })
-    if (st?.currentMode === MODES.HUMAN_ACTIVE || st?.currentMode === MODES.PAUSED) return
+    const msg = await d.prisma.message.create({ data: { leadId: leadInfo.leadId, origen: 'LEAD', texto: marcador } })
+    if (mediaAssetId) {
+      await d.prisma.mediaAsset.update({ where: { id: mediaAssetId }, data: { messageId: msg.id } })
+        .catch(e => console.error('[CloudRouter] no se pudo vincular la media:', e.message))
+    }
+    const st = await d.prisma.leadState.findUnique({ where: { leadId: leadInfo.leadId }, select: { currentMode: true } })
+    if (st?.currentMode === MODES.HUMAN_ACTIVE || st?.currentMode === MODES.PAUSED) {
+      console.log('[CloudRouter] acuse de ' + ev.messageType + ' omitido: modo ' + st.currentMode)
+      return
+    }
     const respuesta = ev.messageType === 'image'
-      ? 'Vi tu imagen 🙌 Para ayudarte mejor por aquí, ¿me cuentas por escrito qué necesitas? 😊'
-      : 'Disculpa, no pude escuchar bien tu audio 😊 ¿Me lo escribes por aquí?'
-    const r = await enviarTexto({ canal: leadInfo.channel, telefono: leadInfo.telefono, texto: respuesta })
-    if (r.ok) await prisma.message.create({ data: { leadId: leadInfo.leadId, origen: 'BOT', texto: respuesta } })
+      ? 'Recibí tu imagen 🙌 ¿Me cuentas por escrito qué necesitas?'
+      : ev.messageType === 'audio'
+        ? 'Disculpa, no pude escuchar bien tu audio 😊 ¿Me lo escribes por aquí?'
+        : ev.messageType === 'document'
+          ? mediaAssetId
+            ? 'Recibí tu documento 🙌 No puedo leerlo automáticamente. ¿Qué necesitas saber sobre él?'
+            : 'Llegó tu documento, pero no pude guardarlo. ¿Puedes enviarlo de nuevo?'
+          : 'Recibí tu video 🙌 ¿Me cuentas por escrito qué necesitas?'
+    const r = await d.enviarTexto({ canal: leadInfo.channel, telefono: leadInfo.telefono, texto: respuesta })
+    if (r.ok) {
+      console.log('[CloudRouter] acuse de ' + ev.messageType + ' aceptado por Meta')
+      await d.prisma.message.create({ data: { leadId: leadInfo.leadId, origen: 'BOT', texto: respuesta } })
+    } else {
+      console.error('[CloudRouter] acuse de ' + ev.messageType + ' no enviado: ' + (r.error || 'sin detalle'))
+    }
   } catch (err) {
-    console.error(`[CloudRouter] acuse de no-texto lead ${leadInfo.leadId}:`, err.message)
+    console.error('[CloudRouter] acuse de no-texto lead ' + leadInfo.leadId + ':', err.message)
   }
 }
-
-export const CLOUD_ROUTER_VERSION = 'v2_multitenant_mismo_turno'
+export const CLOUD_ROUTER_VERSION = 'v3_documentos_y_media_con_comentario'

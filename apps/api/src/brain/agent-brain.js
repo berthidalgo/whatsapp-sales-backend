@@ -155,22 +155,28 @@ export async function pensarYResponder({
     const saludo = /^(?:hola|buenas(?:\s+(?:tardes|noches|d[ií]as))?|buenos\s+d[ií]as)(?:[!,\.\s]+(?:quiero|deseo|busco)\s+informaci[oó]n)?[!?.\s]*$/i.test(String(mensajeActual).trim())
     const pedirProducto = !yaRespondio && saludo
     const mencionaFoto = /\b(foto|imagen|fotograf[ií]a)\b/i.test(String(mensajeActual))
+    const mencionaPdf = /\b(pdf|documento)\b/i.test(String(mensajeActual))
+    const pdfEnHistorial = Array.isArray(historial) && historial.some(m => String(m?.texto || '').includes('[📄 el lead envió un documento]'))
     const nombreAgente = campaignConfig?.agente?.nombre || vendorNombre || 'asesor'
     const nombreEmpresa = campaignConfig?.agente?.empresa || 'la tienda'
     return {
       ok: true,
       mensaje: pedirProducto
         ? '¡Hola! Soy ' + nombreAgente + ', de ' + nombreEmpresa + ' 😊 ¿Qué producto viste en el anuncio?'
-        : mencionaFoto
-          ? 'Recibí tu mensaje. No puedo confirmar qué muestra la foto ni los detalles del producto sin revisarlos. El equipo te responde por este chat.'
-          : 'Gracias por escribir. Para darte datos exactos del producto, necesito revisar su ficha. El equipo te confirma precio y características por este chat.',
+        : mencionaPdf
+          ? pdfEnHistorial
+            ? 'Sí, recibimos tu documento 🙌 No puedo leer su contenido automáticamente. ¿Qué necesitas saber sobre él?'
+            : 'No tengo confirmado un PDF en este chat. ¿Puedes enviarlo de nuevo?'
+          : mencionaFoto
+            ? 'Recibí tu mensaje. No puedo confirmar qué muestra la foto ni los detalles del producto sin revisarlos. Dejo tu consulta registrada para que el equipo la revise.'
+            : 'Gracias por escribir. Para darte datos exactos del producto, necesito revisar su ficha. Dejo tu consulta registrada para que el equipo la revise.',
       razonamiento: 'Campaña general sin ficha de producto.',
       slots_detectados: {},
       momento_actual: pedirProducto ? 'M1' : 'M2',
       stage_sugerido: pedirProducto ? 'first_contact' : 'discovery',
-      debe_escalar_humano: !pedirProducto,
-      razon_escalamiento: pedirProducto ? null : 'consulta de producto sin ficha',
-      como_cerrarlo: pedirProducto ? null : 'Identificar producto y confirmar sus datos antes de responder.',
+      debe_escalar_humano: !pedirProducto && !mencionaPdf,
+      razon_escalamiento: (pedirProducto || mencionaPdf) ? null : 'consulta de producto sin ficha',
+      como_cerrarlo: (pedirProducto || mencionaPdf) ? null : 'Identificar producto y confirmar sus datos antes de responder.',
       temperatura_lead: 'warm',
       compromiso: null,
       cierre: null,

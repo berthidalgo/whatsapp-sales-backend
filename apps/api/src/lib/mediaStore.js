@@ -6,7 +6,7 @@
 
 const MAX_BYTES = 8 * 1024 * 1024  // 8MB: las imágenes de WhatsApp son chicas; evita
                                    // meter blobs gigantes en la BD compartida con prod.
-const TIPOS_OK = new Set(['image', 'audio'])
+const TIPOS_OK = new Set(['image', 'audio', 'document', 'video'])
 
 // Valida sin guardar (pura, exportada para test). { ok, error? }.
 export function validarMedia({ tipo, base64 }) {

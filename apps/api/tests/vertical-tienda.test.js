@@ -71,6 +71,14 @@ test('campaña general: una foto con pie se deriva sin describirla ni inventar a
   assert.doesNotMatch(r.mensaje, /BMX|kit de seguridad|te mandé/i)
 })
 
+test('campaña general: confirma el PDF solo si existe su marcador', async () => {
+  const historial = [{ rol: 'lead', texto: '[📄 el lead envió un documento]' }]
+  const recibido = await pensarYResponder({ mensajeActual: '¿Recibieron el PDF?', historial, campaignConfig: GENERAL, estadoLead: { tenantId: 'hidata' } })
+  assert.match(recibido.mensaje, /Sí, recibimos tu documento/)
+  assert.equal(recibido.debe_escalar_humano, false)
+  const ausente = await pensarYResponder({ mensajeActual: '¿Recibieron el PDF?', campaignConfig: GENERAL, estadoLead: { tenantId: 'hidata' } })
+  assert.doesNotMatch(ausente.mensaje, /Sí, recibimos/)
+})
 test('campaña general: consulta de producto sin ficha se deriva', async () => {
   const r = await pensarYResponder({ mensajeActual: '¿Cuánto cuesta el BMX?', campaignConfig: GENERAL, estadoLead: { tenantId: 'hidata' } })
   assert.equal(r.debe_escalar_humano, true)

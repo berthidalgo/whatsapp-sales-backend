@@ -21,7 +21,7 @@ import { verifySignature } from '../src/whatsapp/cloud/webhook.js'
 import { transporteDe, credencialesCloud } from '../src/whatsapp/transporte.js'
 import { resolveIdentity } from '../src/webhook/lead-resolver.js'
 import { politicaEnvio } from '../src/motor/followupEngine.js'
-import { procesarMensajeCloud } from '../src/whatsapp/cloud/router.js'
+import { procesarMensajeCloud, responderNoTexto } from '../src/whatsapp/cloud/router.js'
 import { registrarJsonConCuerpoCrudo } from '../src/lib/json-crudo.js'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -135,8 +135,11 @@ function depsFalsas(extra = {}) {
     resolveLead: async (a) => { llamadas.resolveLead.push(a); return { ok: true, leadId: 42, telefono: a.senderPn ? '51987654321' : 'PE.8f3a2b', isArchived: false } },
     enqueueMessage: (a) => { llamadas.enqueue.push(a); return { queued: true } },
     procesarTurno: async (leadInfo, texto) => { llamadas.turno.push({ leadInfo, texto }) },
-    convertirMediaATexto: async () => { llamadas.media++; return 'texto de la nota de voz' },
-    responderNoTexto: async () => { llamadas.noTexto++ },
+    manejarMedia: async ({ ev, hayTexto }) => {
+      llamadas.media++
+      return { texto: !hayTexto && ev.messageType === 'audio' ? 'texto de la nota de voz' : null, mediaAssetId: 99 }
+    },
+    responderNoTexto: async (a) => { llamadas.noTexto++; llamadas.ultimoNoTexto = a },
     ...extra
   }
   return { deps, llamadas }
@@ -202,6 +205,70 @@ test('router: una nota de voz se transcribe y entra como texto; un sticker no', 
   assert.equal(llamadas.noTexto, 1)
 })
 
+test('router: un PDF sin comentario conserva la media y entra al acuse neutro', async () => {
+  const { deps, llamadas } = depsFalsas()
+  const r = await procesarMensajeCloud({ ...evTexto, messageType: 'document', text: null, mediaId: 'M-PDF' }, deps)
+  assert.equal(r.queued, false)
+  assert.equal(r.reason, 'sin_texto (document)')
+  assert.equal(llamadas.media, 1)
+  assert.equal(llamadas.ultimoNoTexto.mediaAssetId, 99)
+})
+
+test('router: una foto con comentario se guarda y el comentario entra al turno', async () => {
+  const { deps, llamadas } = depsFalsas()
+  const r = await procesarMensajeCloud({ ...evTexto, messageType: 'image', text: 'Te comparto esta foto', mediaId: 'M-IMG' }, deps)
+  assert.equal(r.queued, true)
+  assert.equal(llamadas.media, 1)
+  assert.equal(llamadas.enqueue[0].text, 'Te comparto esta foto')
+})
+test('acuse real: un PDF sin comentario se guarda, se vincula y recibe respuesta', async () => {
+  const creados = []
+  const enlaces = []
+  const envios = []
+  const db = {
+    message: { create: async ({ data }) => { creados.push(data); return { id: creados.length } } },
+    mediaAsset: { update: async (args) => { enlaces.push(args); return {} } },
+    leadState: { findUnique: async () => ({ currentMode: 'AUTO_CONSULTIVO' }) }
+  }
+  await responderNoTexto(
+    { ev: { messageType: 'document' }, leadInfo: { leadId: 42, telefono: '51987654321', channel: canalHidata }, mediaAssetId: 99 },
+    { prisma: db, enviarTexto: async (args) => { envios.push(args); return { ok: true } } }
+  )
+  assert.match(creados[0].texto, /el lead envió un documento/)
+  assert.deepEqual(enlaces[0], { where: { id: 99 }, data: { messageId: 1 } })
+  assert.match(envios[0].texto, /Recibí tu documento/)
+  assert.equal(creados[1].origen, 'BOT')
+})
+
+test('acuse real: si falla el guardado no afirma haber conservado el documento', async () => {
+  const creados = []
+  let respuesta = ''
+  const db = {
+    message: { create: async ({ data }) => { creados.push(data); return { id: creados.length } } },
+    mediaAsset: { update: async () => { throw new Error('no debe vincularse') } },
+    leadState: { findUnique: async () => ({ currentMode: 'AUTO_CONSULTIVO' }) }
+  }
+  await responderNoTexto(
+    { ev: { messageType: 'document' }, leadInfo: { leadId: 42, telefono: '51987654321', channel: canalHidata } },
+    { prisma: db, enviarTexto: async ({ texto }) => { respuesta = texto; return { ok: true } } }
+  )
+  assert.match(creados[0].texto, /no se pudo guardar/)
+  assert.match(respuesta, /no pude guardarlo/)
+  assert.doesNotMatch(respuesta, /Recibí tu documento/)
+})
+test('acuse real: en modo humano el PDF queda registrado sin interrumpir al vendedor', async () => {
+  let envios = 0
+  const db = {
+    message: { create: async () => ({ id: 1 }) },
+    mediaAsset: { update: async () => ({}) },
+    leadState: { findUnique: async () => ({ currentMode: 'HUMAN_ACTIVE' }) }
+  }
+  await responderNoTexto(
+    { ev: { messageType: 'document' }, leadInfo: { leadId: 42, telefono: '51987654321', channel: canalHidata } },
+    { prisma: db, enviarTexto: async () => { envios++; return { ok: true } } }
+  )
+  assert.equal(envios, 0)
+})
 // ── Firma de Meta sobre el cuerpo crudo ─────────────────────────────────
 
 async function appDePrueba() {
