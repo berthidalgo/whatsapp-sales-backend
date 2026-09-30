@@ -21,12 +21,15 @@ import { getVertical } from '../brain/verticals/index.js'
 // del PROPIO bot. En ambos casos el WhatsApp "salía" y nadie lo leía: 5 escalamientos
 // sin atender, uno de ellos un pedido. Mejor fallar ruidosamente que avisar al vacío.
 const RX_PLACEHOLDER = /^51(9{3}0{3}\d{3}|9{9}|0{9}|900000\d{3})$/
-export function destinoInvalido(destino, { numerosDelBot = [] } = {}) {
+export function destinoInvalido(destino, { numerosDelBot = [], numeroLead = null } = {}) {
   const d = String(destino || '').replace(/\D/g, '')
   if (!d || d.length < 9) return 'sin teléfono'
   if (RX_PLACEHOLDER.test(d)) return 'teléfono de relleno (placeholder del seed)'
   if (numerosDelBot.map(n => String(n || '').replace(/\D/g, '')).filter(Boolean).includes(d)) {
     return 'es el número del propio bot (el aviso se lo manda a sí mismo)'
+  }
+  if (d === String(numeroLead || '').replace(/\D/g, '')) {
+    return 'el vendedor y el lead usan el mismo teléfono; aviso interno solo en CRM'
   }
   return null
 }
@@ -73,7 +76,7 @@ export function lineasPerfil(slots = {}, campos = []) {
  * Ahora el aviso viaja por el CANAL DEL TENANT hacia el VENDEDOR del lead. Las env
  * vars quedan solo como red de compatibilidad para el deploy single-tenant.
  */
-async function destinoDeNotificacion(vendorId) {
+async function destinoDeNotificacion(vendorId, numeroLead) {
   let vendor = null
   try {
     if (vendorId) {
@@ -104,7 +107,8 @@ async function destinoDeNotificacion(vendorId) {
   if (!instancia && transporteDe(canal) === 'evolution') instancia = process.env.EVOLUTION_INSTANCE_NAME || null
 
   const motivoInvalido = destinoInvalido(destino, {
-    numerosDelBot: [numeroCanal, process.env.NUMERO_BOT]
+    numerosDelBot: [numeroCanal, process.env.NUMERO_BOT],
+    numeroLead
   })
 
   return { destino, canal, instancia, motivoInvalido, tenantId: vendor?.tenantId || null, vendorNombre: vendor?.nombre || null }
@@ -132,7 +136,7 @@ export async function notificarEscalamiento({
 }) {
   // El vendedor se resuelve ANTES de armar el texto: su tenant define el vertical
   // (y con él qué datos le sirven al humano para cerrar o despachar).
-  const { destino, canal, instancia, motivoInvalido, tenantId: tenantVendor, vendorNombre } = await destinoDeNotificacion(vendorId)
+  const { destino, canal, instancia, motivoInvalido, tenantId: tenantVendor, vendorNombre } = await destinoDeNotificacion(vendorId, telefono)
   const vertical = getVertical(verticalId ? { vertical: verticalId } : null, tenantId || tenantVendor)
 
   // Formato RICO (recuperado del sistema viejo): perfil del lead + sus palabras +
@@ -179,7 +183,11 @@ export async function notificarEscalamiento({
   const tenantAviso = tenantId || tenantVendor
 
   if (motivoInvalido) {
-    console.error(`[Notif] ❌ Lead ${leadId} escaló pero el aviso NO sale: el destino del vendedor ${vendorNombre || vendorId} (${tenantAviso}) es inválido — ${motivoInvalido}. Carga su WhatsApp personal (vendors.whatsappNumber) o el aviso nunca llega.`)
+    if (motivoInvalido.includes('mismo teléfono')) {
+      console.log(`[Notif] Lead ${leadId}: prueba con el número del vendedor; aviso interno solo en CRM`)
+    } else {
+      console.error(`[Notif] ❌ Lead ${leadId} escaló pero el aviso NO sale: el destino del vendedor ${vendorNombre || vendorId} (${tenantAviso}) es inválido — ${motivoInvalido}. Carga su WhatsApp personal (vendors.whatsappNumber) o el aviso nunca llega.`)
+    }
   } else if (destino && (instancia || transporteDe(canal) === 'cloud')) {
     try {
       // Con la API oficial de Meta, este aviso es un mensaje que INICIA el negocio: solo

@@ -29,6 +29,8 @@ test('aviso: detecta el teléfono de relleno del seed y el número del propio bo
   assert.match(destinoInvalido('51900000002'), /relleno/, 'placeholders de Perú Exporta')
   assert.match(destinoInvalido('+51 924 104 066', { numerosDelBot: ['51924104066'] }), /propio bot/)
   assert.match(destinoInvalido(null), /sin teléfono/)
+  assert.match(destinoInvalido('51987654321', { numeroLead: '+51 987 654 321' }), /mismo teléfono/)
+  assert.equal(destinoInvalido('51987654321', { numeroLead: '51912345678' }), null)
   assert.equal(destinoInvalido('51987654321', { numerosDelBot: ['51924104066', null] }), null)
 })
 
