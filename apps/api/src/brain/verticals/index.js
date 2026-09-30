@@ -14,11 +14,13 @@
 
 import * as exportacion from './exportacion.js'
 import * as colageno from './colageno.js'
+import * as tienda from './tienda.js'
 import { verticalPorTenant } from '../../lib/tenant.js'
 
 const REGISTRY = {
   exportacion,
-  colageno
+  colageno,
+  tienda
 }
 
 export function getVertical(campaignConfig = null, tenantId = null) {

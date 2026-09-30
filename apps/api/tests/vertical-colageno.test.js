@@ -16,8 +16,8 @@ import { construirUserPrompt } from '../src/brain/agent-brain.js'
 
 // ═══════════════ 1. REGISTRY ═══════════════
 
-test('registry: exporta ambos verticales', () => {
-  assert.deepEqual(VERTICALES_DISPONIBLES.sort(), ['colageno', 'exportacion'])
+test('registry: exporta los tres verticales', () => {
+  assert.deepEqual([...VERTICALES_DISPONIBLES].sort(), ['colageno', 'exportacion', 'tienda'])
 })
 
 test('registry: default histórico = exportacion (sin config ni tenant)', () => {

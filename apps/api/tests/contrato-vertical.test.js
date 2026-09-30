@@ -150,7 +150,8 @@ test('contrato: los verticales no se contaminan entre sí', () => {
   // ese fue el bug del 23-jul (una clienta de colágeno oyó hablar de exportación).
   const MARCAS = {
     exportacion: [/colágeno/i, /DIGEMID/i, /contraentrega/i],
-    colageno: [/exportar/i, /exportación/i, /aduana/i]
+    colageno: [/exportar/i, /exportación/i, /aduana/i],
+    tienda: [/colágeno/i, /DIGEMID/i, /exportar/i, /exportación/i, /aduana/i]
   }
 
   for (const id of VERTICALES_DISPONIBLES) {

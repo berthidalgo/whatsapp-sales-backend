@@ -28,9 +28,11 @@ export const ACTIVE_TENANT = process.env.ACTIVE_TENANT || 'peru_exporta'
 // sobreescribirlo con config.vertical (gana la campaña sobre el tenant).
 //   exportacion → edtech consultiva, meta = agendar llamada (Perú Exporta)
 //   colageno    → e-commerce nutracéutico, meta = cerrar pedido por chat (BIOAYUR)
+//   tienda      → e-commerce de producto ganador, contraentrega (Hidata Importaciones)
 const VERTICAL_POR_TENANT = {
   peru_exporta: 'exportacion',
-  bioayur: 'colageno'
+  bioayur: 'colageno',
+  hidata: 'tienda'
 }
 
 export function verticalPorTenant(tenantId) {
