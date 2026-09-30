@@ -29,6 +29,7 @@ import { loginVendor, getVendorNames, cambiarPin } from './routes/auth.js'
 import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
 import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2 } from './api/inbox-actions.js'
 import { listCampaignsV2, getAgentConfigV2, saveAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
+import { paginaInicio, paginaPrivacidad } from './api/sitio-publico.js'
 import { verifyJwt, requireAdmin, scopeWhere } from './lib/auth-guard.js'
 
 import { verificarCadena, resumenSalud, estadoDetallado, construirCadena, describirCadena } from './lib/llm-cadena.js'
@@ -130,6 +131,12 @@ app.get('/health', async () => ({
   cerebro: resumenSalud(),
   timestamp: new Date().toISOString()
 }))
+
+// ── Web pública del negocio ──────────────────────────────────
+// `/` es la web que va en el portafolio de Meta (su revisor la lee para aprobar la cuenta de
+// WhatsApp) y `/privacidad` la exige Meta para publicar la app. Texto fijo, sin datos de leads.
+app.get('/', paginaInicio)
+app.get('/privacidad', paginaPrivacidad)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENDPOINTS /debug/* — CERRADOS CON JWT (auditoría pre-producción, jul 2026)
