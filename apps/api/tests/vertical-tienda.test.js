@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { getVertical } from '../src/brain/verticals/index.js'
 import * as tienda from '../src/brain/verticals/tienda.js'
 import { flattenFactSheet } from '../src/response/factsheet-loader.js'
+import { pensarYResponder } from '../src/brain/agent-brain.js'
 
 const CONFIG = {
   vertical: 'tienda',
@@ -43,6 +44,39 @@ test('tienda: sin ficha no hay precio y el bot deriva', () => {
   assert.doesNotMatch(prompt, /S\/\s?\d/)
 })
 
+const GENERAL = { vertical: 'tienda', agente: { nombre: 'Joan', empresa: 'Hidata Importaciones' }, atribucion: { esCampanaDefault: true } }
+
+test('campaña general: saluda sin inventar producto', async () => {
+  const r = await pensarYResponder({ mensajeActual: 'Hola', campaignConfig: GENERAL, estadoLead: { tenantId: 'hidata' } })
+  assert.equal(r.debe_escalar_humano, false)
+  assert.match(r.mensaje, /¿Qué producto viste/)
+  assert.equal(r.audit.proveedor, 'regla')
+})
+
+test('campaña general: usa la identidad de cada tenant', async () => {
+  const campaignConfig = { ...GENERAL, agente: { nombre: 'Ana', empresa: 'Tienda Ejemplo' } }
+  const r = await pensarYResponder({ mensajeActual: 'Hola', campaignConfig, estadoLead: { tenantId: 'otro' } })
+  assert.match(r.mensaje, /Ana, de Tienda Ejemplo/)
+  assert.doesNotMatch(r.mensaje, /Hidata|Joan/)
+})
+test('campaña general: una foto con pie se deriva sin describirla ni inventar accesorios', async () => {
+  const r = await pensarYResponder({
+    mensajeActual: 'Que ves en la foto ?',
+    historial: [{ rol: 'agente', texto: '¿Qué producto viste?' }],
+    campaignConfig: GENERAL,
+    estadoLead: { tenantId: 'hidata' }
+  })
+  assert.equal(r.debe_escalar_humano, true)
+  assert.match(r.mensaje, /No puedo confirmar qué muestra la foto/)
+  assert.doesNotMatch(r.mensaje, /BMX|kit de seguridad|te mandé/i)
+})
+
+test('campaña general: consulta de producto sin ficha se deriva', async () => {
+  const r = await pensarYResponder({ mensajeActual: '¿Cuánto cuesta el BMX?', campaignConfig: GENERAL, estadoLead: { tenantId: 'hidata' } })
+  assert.equal(r.debe_escalar_humano, true)
+  assert.match(r.razon_escalamiento, /sin ficha/)
+  assert.doesNotMatch(r.mensaje, /BMX|S\/\s*\d/)
+})
 test('guardrail de pagos: neutraliza cuentas, Yape a un número y adelantos', () => {
   const casos = [
     'Perfecto. Yapéame al 987 654 321 y te lo envío hoy.',

@@ -148,6 +148,39 @@ export async function pensarYResponder({
   const vertical = getVertical(campaignConfig, estadoLead?.tenantId)
   const usarSchema = overrides?.sinSchema ? null : vertical.RESPONSE_SCHEMA
 
+  // La campaña general de Hidata describe el negocio, pero no un producto.
+  // Una mención vaga o una foto sin analizar no puede convertirse en atributos inventados.
+  if (vertical.VERTICAL_ID === 'tienda' && campaignConfig?.atribucion?.esCampanaDefault === true) {
+    const yaRespondio = Array.isArray(historial) && historial.some(m => m?.rol === 'agente')
+    const saludo = /^(?:hola|buenas(?:\s+(?:tardes|noches|d[ií]as))?|buenos\s+d[ií]as)(?:[!,\.\s]+(?:quiero|deseo|busco)\s+informaci[oó]n)?[!?.\s]*$/i.test(String(mensajeActual).trim())
+    const pedirProducto = !yaRespondio && saludo
+    const mencionaFoto = /\b(foto|imagen|fotograf[ií]a)\b/i.test(String(mensajeActual))
+    const nombreAgente = campaignConfig?.agente?.nombre || vendorNombre || 'asesor'
+    const nombreEmpresa = campaignConfig?.agente?.empresa || 'la tienda'
+    return {
+      ok: true,
+      mensaje: pedirProducto
+        ? '¡Hola! Soy ' + nombreAgente + ', de ' + nombreEmpresa + ' 😊 ¿Qué producto viste en el anuncio?'
+        : mencionaFoto
+          ? 'Recibí tu mensaje. No puedo confirmar qué muestra la foto ni los detalles del producto sin revisarlos. El equipo te responde por este chat.'
+          : 'Gracias por escribir. Para darte datos exactos del producto, necesito revisar su ficha. El equipo te confirma precio y características por este chat.',
+      razonamiento: 'Campaña general sin ficha de producto.',
+      slots_detectados: {},
+      momento_actual: pedirProducto ? 'M1' : 'M2',
+      stage_sugerido: pedirProducto ? 'first_contact' : 'discovery',
+      debe_escalar_humano: !pedirProducto,
+      razon_escalamiento: pedirProducto ? null : 'consulta de producto sin ficha',
+      como_cerrarlo: pedirProducto ? null : 'Identificar producto y confirmar sus datos antes de responder.',
+      temperatura_lead: 'warm',
+      compromiso: null,
+      cierre: null,
+      enviar_imagen: null,
+      guardrail_flags: ['campana_general_sin_ficha_producto'],
+      via_fallback: false,
+      audit: { model: 'regla_tienda_general', fallback: false, proveedor: 'regla', tokens: 0, cost_usd: 0, latency_ms: Date.now() - startTime }
+    }
+  }
+
   // Guard: si el banco pidió Developer API pero no hay key en ENV, fallar CLARO
   // (no caer en silencio a Vertex y dar números engañosos). La key JAMÁS viaja en el
   // request HTTP — el banco solo manda el flag; el servidor la lee del entorno.
