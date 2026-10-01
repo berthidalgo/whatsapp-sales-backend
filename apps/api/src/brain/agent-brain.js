@@ -75,6 +75,8 @@ import { construirCadena, normalizarPaso, parsearPaso, ejecutarCadena, llamarPas
 import { flattenFactSheet } from '../response/factsheet-loader.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 import { getVertical } from './verticals/index.js'
+import { resolverReglasAntesDelModelo, protegerSalidaDeterminista, respaldoNoVerificado, aplicarNudgeLlamada } from './reglas-etapa1.js'
+export { detectarVulnerabilidadGrave, detectarPideLlamada, aplicarNudgeLlamada } from './reglas-etapa1.js'
 
 // ════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -147,6 +149,11 @@ export async function pensarYResponder({
   // La campaña manda (config.vertical); si no, el default del tenant.
   const vertical = getVertical(campaignConfig, estadoLead?.tenantId)
   const usarSchema = overrides?.sinSchema ? null : vertical.RESPONSE_SCHEMA
+  const fs = flattenFactSheet(campaignConfig)
+  const contextoReglas = { mensajeActual, historial, estadoLead, campaignConfig, vendorNombre, vertical, fs, startTime }
+  // Las reglas críticas preceden también a los retornos de campañas sin ficha.
+  const regla = resolverReglasAntesDelModelo(contextoReglas)
+  if (regla) return regla
 
   // La campaña general de Hidata describe el negocio, pero no un producto.
   // Una mención vaga o una foto sin analizar no puede convertirse en atributos inventados.
@@ -187,34 +194,6 @@ export async function pensarYResponder({
     }
   }
 
-  // ── REGLA VULNERABILIDAD GRAVE (oct 2026, Etapa 1) ──
-  // Angustia económica real ("vendí mis parcelas, no me queda nada", "es mi
-  // última esperanza"): el modelo la ignoró en banco (C022 → ofreció llamada).
-  // El veto no puede depender del humor del modelo: se responde empatía fija y
-  // se escala a humano ANTES de llamar al LLM. Estrecha a propósito: "no tengo
-  // dinero ahora" (objeción común, C044) NO matchea — eso lo trabaja el vertical.
-  if (detectarVulnerabilidadGrave(mensajeActual)) {
-    const nombreAgente = campaignConfig?.agente?.nombre || vendorNombre || 'el equipo'
-    return {
-      ok: true,
-      mensaje: `Entiendo por lo que estás pasando 🙏 Vender lo tuyo y quedarte sin nada es muy duro, y te agradezco la confianza de contármelo. No te voy a presionar ni a venderte nada ahora: le paso tu caso a ${nombreAgente} para que te acompañe con calma y vean juntos qué alternativa real tienes, sin compromiso.`,
-      razonamiento: 'Vulnerabilidad grave: empatía + escala, sin vender.',
-      slots_detectados: {},
-      momento_actual: null,
-      stage_sugerido: estadoLead?.stage || 'discovery',
-      debe_escalar_humano: true,
-      razon_escalamiento: 'vulnerabilidad económica — acompañar con cuidado, no vender',
-      como_cerrarlo: 'Lead en angustia económica real. Escuchar, cero presión, ver juntos si hay camino.',
-      temperatura_lead: 'cold',
-      compromiso: null,
-      cierre: null,
-      enviar_imagen: null,
-      guardrail_flags: ['vulnerabilidad_grave_derivada'],
-      via_fallback: false,
-      audit: { model: 'regla_vulnerabilidad', fallback: false, proveedor: 'regla', tokens: 0, cost_usd: 0, latency_ms: Date.now() - startTime }
-    }
-  }
-
   // Guard: si el banco pidió Developer API pero no hay key en ENV, fallar CLARO
   // (no caer en silencio a Vertex y dar números engañosos). La key JAMÁS viaja en el
   // request HTTP — el banco solo manda el flag; el servidor la lee del entorno.
@@ -234,7 +213,6 @@ export async function pensarYResponder({
     return buildError('sin_proveedores_llm', startTime, { hint: 'Ningún proveedor configurado (revisa BRAIN_PROVIDER y las llaves).' })
   }
 
-  const fs = flattenFactSheet(campaignConfig)
   const systemInstruction = vertical.construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
   // Nudge C023 (oct 2026, Etapa 1): el lead que PIDE la llamada él mismo era
   // devuelto al cuestionario (se perdió a Rafael 2 meses). Detección
@@ -282,6 +260,8 @@ export async function pensarYResponder({
       }
     }
 
+    const protegida = protegerSalidaDeterminista(parsed, contextoReglas)
+    parsed = protegida.parsed
     let usage = ejec.result?.usage || null
 
     // ─── GUARDRAIL DE SALIDA (control determinístico post-generación) ───
@@ -290,6 +270,7 @@ export async function pensarYResponder({
     const yaSaludo = Array.isArray(historial) && historial.some(m => m?.rol === 'agente')
     const validar = (p) => validarSalida(p, fs, estadoLead?.slots?.nombre, yaSaludo, vertical)
     let validado = validar(parsed)
+    validado.flags.push(...protegida.flags)
 
     // ─── PRECIO QUE NO SALE DE LA FICHA → UNA CORRECCIÓN (sep 2026) ───
     // Con ficha, el guardrail solo MARCABA la cifra inventada y el mensaje salía igual:
@@ -308,9 +289,11 @@ export async function pensarYResponder({
         intentosSeguro: 1
       })
       usage = sumarUso(usage, corr.result?.usage)
-      const v2 = corr.parsed ? validar(corr.parsed) : null
+      const p2 = corr.parsed ? protegerSalidaDeterminista(corr.parsed, contextoReglas) : null
+      const v2 = p2 ? validar(p2.parsed) : null
+      if (v2) v2.flags.push(...p2.flags)
       if (v2 && !v2.preciosMalos.length) {
-        parsed = corr.parsed
+        parsed = p2.parsed
         validado = { ...v2, flags: [...v2.flags, `precio_corregido_por_reintento:${malos.join('|')}`] }
         console.warn(`[AgentBrain] 💲 precio fuera de la ficha (${malos.join(', ')}) corregido con un reintento`)
       } else {
@@ -657,6 +640,10 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
     if (rv.flags.length) { mensaje = rv.mensaje; flags.push(...rv.flags) }
   }
 
+  if (vertical?.VERTICAL_ID === 'exportacion' && respaldoNoVerificado(mensaje, fs)) {
+    mensaje = neutralizarOraciones(mensaje, o => respaldoNoVerificado(o, fs), ' El equipo te compartirá la documentación y los casos que estén verificados.')
+    flags.push('respaldo_no_verificado_neutralizado')
+  }
   // ── Guardrail 0: formato WhatsApp (determinístico) ──
   // El prompt PIDE no usar negrita markdown (**texto**), pero el modelo a veces
   // insiste (sobre todo al listar el temario). En vez de confiar en que obedezca,
@@ -807,48 +794,6 @@ function rescatarMensaje(rawText) {
     if (texto.length >= 10) return texto  // umbral más alto para texto cortado (evita basura)
   }
   return null
-}
-
-// ════════════════════════════════════════════════════════
-// DETECTORES PUROS — reglas deterministas de Etapa 1 (oct 2026, testeables)
-// ════════════════════════════════════════════════════════
-// Vulnerabilidad GRAVE (banco C022): angustia económica real y explícita.
-// Estrecho a propósito: "no tengo dinero ahora" / "está caro" son objeciones
-// normales que trabaja el vertical y NO matchean.
-const RX_VULNERABILIDAD_GRAVE = new RegExp([
-  'vend[ií]\\s+(mis\\s+)?(parcelas|terrenos?|tierras|todo|mis\\s+cosas)',
-  'vend[ií]\\s+todo\\b',
-  'no\\s+me\\s+queda\\s+nada',
-  'me\\s+qued[eé]\\s+sin\\s+nada',
-  '[úu]ltima\\s+esperanza',
-  '\\bendeudad[oa]s?\\b.{0,20}\\b(no\\s+tengo|no\\s+me\\s+queda|nada)\\b',
-  'estoy\\s+endeudad[oa]',
-  'me\\s+endeud[eé]',
-  'no\\s+tengo\\s+ni\\s+para\\s+comer',
-  'lo\\s+perd[ií]\\s+todo'
-].join('|'), 'i')
-
-export function detectarVulnerabilidadGrave(mensaje) {
-  return RX_VULNERABILIDAD_GRAVE.test(String(mensaje || ''))
-}
-
-// Pide la llamada ÉL mismo (banco C023): "puede ser por una llamada",
-// "llámame", "quiero que me llamen". Preguntar "¿me van a llamar?" también
-// cuenta: confirmar igual, jamás devolverlo al cuestionario.
-const RX_PIDE_LLAMADA = /ll[áa]mame|ll[áa]menme|puede\s+ser\s+por\s+una\s+llamada|quiero\s+que\s+me\s+llamen|quisiera\s+que\s+me\s+llamen|me\s+pueden\s+llamar|que\s+me\s+llamen|me\s+van\s+a\s+llamar/i
-
-export function detectarPideLlamada(mensaje) {
-  return RX_PIDE_LLAMADA.test(String(mensaje || ''))
-}
-
-// Nudge determinista para el turno: solo en verticales que cierran con llamada
-// (exportación). En colágeno/tienda el cierre es por chat: no aplica.
-export function aplicarNudgeLlamada(userPrompt, mensajeActual, vertical) {
-  if (vertical?.VERTICAL_ID !== 'exportacion') return userPrompt
-  if (!detectarPideLlamada(mensajeActual)) return userPrompt
-  return `${userPrompt}
-
-# ⚠️ SEÑAL CLAVE DE ESTE TURNO: el lead PIDE la llamada él mismo ("${String(mensajeActual).slice(0, 80)}"). NO lo devuelvas al cuestionario: confirma la llamada con horarios concretos (M5/M6) y deja que el humano recoja los datos que falten.`
 }
 
 // ════════════════════════════════════════════════════════

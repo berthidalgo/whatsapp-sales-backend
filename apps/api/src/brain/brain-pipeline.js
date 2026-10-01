@@ -1,3 +1,4 @@
+import { fusionarSlotsConReglas } from './reglas-etapa1.js'
 // src/brain/brain-pipeline.js — Hidata v20 · Sprint 3
 //
 // ════════════════════════════════════════════════════════════════════════
@@ -581,13 +582,7 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // ─── 6. Fusionar slots (los nuevos del cerebro sobre los existentes) ───
     const slotsExistentes = leadState?.slotsFilled || {}
     const slotsNuevos = brainResult.slots_detectados || {}
-    const slotsFusionados = { ...slotsExistentes }
-    for (const [k, v] of Object.entries(slotsNuevos)) {
-      // Solo guardamos slots con valor real (no vacíos ni explicaciones raras)
-      if (v && typeof v === 'string' && v.trim() && !v.toLowerCase().includes('vacío')) {
-        slotsFusionados[k] = v
-      }
-    }
+    const slotsFusionados = fusionarSlotsConReglas(slotsExistentes, slotsNuevos, brainResult.guardrail_flags)
 
     // Acumular el estado de cierre del closer (v5_5). _cierre ya viene copiado en
     // slotsFusionados (del spread de slotsExistentes); solo lo ACTUALIZAMOS si el

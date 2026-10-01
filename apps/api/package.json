@@ -8,6 +8,7 @@
     "dev": "node --watch src/server.js",
     "start": "prisma generate && node --import ./instrument.mjs src/server.js",
     "test": "node --test --test-isolation=none",
+    "test:offline": "node --import ./tests/helpers/offline-guard.mjs --test --test-isolation=none",
     "build": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
