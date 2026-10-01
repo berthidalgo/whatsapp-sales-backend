@@ -6,7 +6,7 @@ Fecha: 2026-10-01. Base desplegada: 7150220. Refactor revisado: 8e53906, integra
 
 - Identidad, producto, precio, oferta, ingredientes, dosis, respaldo, garantías y logística: campaigns.config.agente/factSheet en BD.
 - Altas y compatibilidad: apps/api/data/tenants/*.json; imágenes legacy registradas por dueño en assets-legacy.json.
-- Sitio público, seguimiento genérico, catálogo de plantillas y defaults del deploy: JSON en apps/api/data.
+- Sitio público completo (contenido comercial y política), seguimiento genérico, catálogo de plantillas y defaults del deploy: JSON en apps/api/data.
 - Casos de evaluación y personas del harness: JSON de fixtures históricos; no constituyen una oferta vigente.
 - Branding y claves de sesión del frontend: apps/web/src/config/producto.json.
 
@@ -41,3 +41,5 @@ El código conserva contratos, etapas, validaciones, guardrails y límites opera
 - Build del frontend: TypeScript + Vite aprobado.
 - Los tres seeds se validaron en simulación, sin conectar a la BD.
 - git diff --check y sintaxis de server/seed aprobados.
+
+La extracción final de inicio y privacidad a JSON conservó sus HTML idénticos (SHA-256 comprobado antes/después).

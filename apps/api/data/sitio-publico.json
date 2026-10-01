@@ -11,8 +11,30 @@
   },
   "actualizada": "29 de septiembre de 2026",
   "rubros": [
-    { "titulo": "Juguetes", "texto": "Juguetes importados para niños y para regalar." },
-    { "titulo": "Hogar", "texto": "Productos importados prácticos para la casa: cocina, limpieza, orden y decoración." },
-    { "titulo": "Tecnología", "texto": "Gadgets y accesorios de tecnología para el día a día." }
-  ]
+    {
+      "titulo": "Juguetes",
+      "texto": "Juguetes importados para niños y para regalar."
+    },
+    {
+      "titulo": "Hogar",
+      "texto": "Productos importados prácticos para la casa: cocina, limpieza, orden y decoración."
+    },
+    {
+      "titulo": "Tecnología",
+      "texto": "Gadgets y accesorios de tecnología para el día a día."
+    }
+  ],
+  "paginas": {
+    "inicio": {
+      "titulo": "{{negocio.nombre}} · Tienda online de productos importados",
+      "descripcion": "Tienda online de productos importados en Perú: juguetes, hogar y tecnología. Pedidos online y por WhatsApp, envíos a todo el Perú y pago contraentrega.",
+      "cuerpo": "<h1>{{negocio.nombre}}</h1>\n<p>Tienda online de <strong>productos importados</strong> en Perú: juguetes, artículos para el hogar y tecnología.\nVendemos online y por WhatsApp, enviamos a todo el Perú y pagas al recibir.</p>\n<a class=\"boton\" href=\"https://wa.me/{{negocio.whatsapp}}\">Escríbenos por WhatsApp</a>\n\n<h2>Qué vendemos</h2>\n<div class=\"rubros\">\n{{rubrosHtml}}\n</div>\n<p class=\"suave\" style=\"margin-top:12px\">Renovamos el catálogo con frecuencia: seleccionamos productos importados y vamos sumando novedades.\nEscríbenos para conocer lo que tenemos disponible hoy.</p>\n\n<h2>Cómo comprar</h2>\n<ol>\n  <li>Haz tu pedido desde nuestras páginas de venta, o escríbenos por WhatsApp y cuéntanos qué producto te interesa.</li>\n  <li>Te confirmamos el precio, la disponibilidad y los datos de envío.</li>\n  <li>Enviamos tu pedido a cualquier parte del Perú.</li>\n  <li>Pagas contraentrega, al recibirlo: en efectivo, Yape, Plin o transferencia.</li>\n</ol>\n<p>Si tu pedido llega con algún problema, escríbenos por el mismo WhatsApp y lo resolvemos.</p>\n\n<h2>Datos del negocio</h2>\n<dl>\n  <dt>Nombre comercial</dt><dd>{{negocio.nombre}}</dd>\n  <dt>Titular</dt><dd>{{negocio.titular}}</dd>\n  <dt>RUC</dt><dd>{{negocio.ruc}}</dd>\n  <dt>Dirección</dt><dd>{{negocio.direccion}}</dd>\n  <dt>Correo</dt><dd><a href=\"mailto:{{negocio.correo}}\">{{negocio.correo}}</a></dd>\n  <dt>Teléfono y WhatsApp</dt><dd>{{negocio.telefono}}</dd>\n</dl>"
+    },
+    "privacidad": {
+      "titulo": "Política de privacidad · {{negocio.nombre}}",
+      "descripcion": "Cómo {{negocio.nombre}} trata los datos personales de quienes le escriben por WhatsApp.",
+      "cuerpo": "<h1>Política de privacidad</h1>\n<p class=\"suave\">{{negocio.nombre}} · Última actualización: {{actualizada}}</p>\n<p>Esta política explica cómo tratamos los datos personales de las personas que nos escriben por WhatsApp,\nconforme a la Ley N.° 29733, Ley de Protección de Datos Personales del Perú, y su reglamento.</p>\n\n<h2>1. Quién es responsable de tus datos</h2>\n<p>{{negocio.titular}}, con nombre comercial <strong>{{negocio.nombre}}</strong>, RUC {{negocio.ruc}},\ncon domicilio en {{negocio.direccion}}. Contacto: <a href=\"mailto:{{negocio.correo}}\">{{negocio.correo}}</a>.</p>\n\n<h2>2. Qué datos tratamos</h2>\n<ul>\n  <li>Tu número de teléfono y el nombre de tu perfil de WhatsApp.</li>\n  <li>Lo que nos envías por el chat: mensajes de texto, notas de voz, fotos y documentos.</li>\n  <li>Los datos que nos das para un pedido: nombre, dirección de entrega y lo necesario para entregarlo.</li>\n  <li>Si llegaste desde un anuncio, la referencia del anuncio que te trajo.</li>\n</ul>\n<p>No te pedimos datos sensibles.</p>\n\n<h2>3. Para qué los usamos</h2>\n<ul>\n  <li>Responder tus consultas y asesorarte.</li>\n  <li>Tomar y coordinar tus pedidos y sus entregas.</li>\n  <li>Hacer seguimiento a tu consulta por WhatsApp, respetando las reglas de WhatsApp. Si nos pides que no te escribamos, dejamos de hacerlo.</li>\n  <li>Mejorar nuestra atención con estadísticas internas.</li>\n</ul>\n<p>No vendemos ni alquilamos tus datos.</p>\n\n<h2>4. Respuestas automáticas</h2>\n<p>Parte de las respuestas las prepara un asistente automático con inteligencia artificial.\nEn cualquier momento puedes pedir que te atienda una persona.</p>\n\n<h2>5. Con quién los compartimos</h2>\n<p>Solo con los proveedores que necesitamos para operar, que los tratan por encargo nuestro:</p>\n<ul>\n  <li>Meta Platforms (WhatsApp Business Platform), para enviar y recibir los mensajes.</li>\n  <li>Proveedores de servidores y base de datos en la nube (hoy Render y Supabase).</li>\n  <li>Proveedores de inteligencia artificial que procesan el texto, las notas de voz o las fotos para ayudarnos a responder\n  (por ejemplo Mistral AI, Groq, OpenRouter o Google).</li>\n  <li>Empresas de reparto, solo con lo necesario para entregar tu pedido.</li>\n</ul>\n<p>Varios de estos proveedores están fuera del Perú (Estados Unidos, la Unión Europea o Brasil), así que tus datos pueden\ntransferirse a esos países con el único fin de atenderte.</p>\n\n<h2>6. Cuánto tiempo los guardamos</h2>\n<p>Mientras sea necesario para atenderte y para cumplir obligaciones legales, como las tributarias.\nPuedes pedir que los eliminemos antes (punto 8).</p>\n\n<h2>7. Tus derechos</h2>\n<p>Puedes ejercer tus derechos de acceso, rectificación, cancelación y oposición, y revocar tu consentimiento,\nescribiéndonos a <a href=\"mailto:{{negocio.correo}}\">{{negocio.correo}}</a> o por el mismo WhatsApp.\nTe respondemos dentro de los plazos de la Ley N.° 29733. Si no estás conforme con la respuesta, puedes acudir a la\nAutoridad Nacional de Protección de Datos Personales del Ministerio de Justicia y Derechos Humanos.</p>\n\n<h2 id=\"eliminar\">8. Cómo eliminar tus datos</h2>\n<p>Escríbenos «ELIMINAR MIS DATOS» por WhatsApp, o envía un correo a\n<a href=\"mailto:{{negocio.correo}}\">{{negocio.correo}}</a> con tu número de teléfono.\nBorramos tus datos de nuestros sistemas y te confirmamos cuando esté hecho, salvo lo que la ley nos obligue a conservar.</p>\n\n<h2>9. Menores de edad</h2>\n<p>Nuestros servicios no están dirigidos a menores de edad.</p>\n\n<h2>10. Cambios</h2>\n<p>Si cambiamos esta política, publicaremos aquí la nueva versión con su fecha.</p>"
+    }
+  },
+  "copyrightYear": 2026
 }
