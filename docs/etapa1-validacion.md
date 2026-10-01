@@ -7,7 +7,7 @@ Fecha de revisión: 1 de octubre de 2026. Base: `81c45fe`.
 - Vulnerabilidad económica grave: comprobación antes de cualquier retorno temprano en Perú Exporta, BIOAYUR e Hidata. Respuesta empática sin añadir hechos; deriva al humano sin LLM, tokens ni costo.
 - No derivar por «no estoy endeudado», venta normal de inventario, o «no tengo dinero ahora mismo». Venta de bienes o deuda requieren también una señal explícita de angustia; la falta de alimento o pérdida personal total se atiende directamente.
 - Perú Exporta: una petición de llamada pasa a coordinación sin cuestionario. Una petición inmediata deriva al humano. Un horario propuesto por el bot no se guarda como aceptación; se conserva el día solicitado y el equipo confirma disponibilidad.
-- Rechazo de llamada: respetarlo también cuando el modelo devuelve JSON válido o corrige un precio. Borrar la cita anterior al cancelar y avisar al equipo por chat cuando corresponda.
+- Rechazo de llamada: respetarlo también cuando el modelo devuelve JSON válido o corrige un precio. Borrar la cita anterior al cancelar y avisar al equipo por chat cuando corresponda. Guardar la preferencia de contacto aunque se recorte el historial; una nueva solicitud expresa puede cambiarla.
 - Hidata H07: pedido explícito con producto de campaña, cantidad, nombre, ubicación y dirección va al equipo. La referencia no es obligatoria. No asumir datos faltantes ni convertir otro producto en el de la ficha.
 - C010: compartir evidencia literal de la ficha; neutralizar el aval estatal y el caso «don Luis» si no están documentados. Este control cubre los fallos observados, no valida cualquier afirmación factual imaginable.
 
@@ -17,7 +17,7 @@ Las reglas de solicitudes de llamada y evidencia se limitan a exportación; la r
 
 Desde `apps/api`: `npm run test:offline`.
 
-Resultado: 390/390 pruebas aprobadas, incluidas 69 nuevas pruebas de integración. El guard de pruebas bloquea HTTP, HTTPS y fetch externos; permite servidores simulados locales. No se repitió el banco de modelos ni se enviaron mensajes de WhatsApp.
+Resultado: 393/393 pruebas aprobadas, incluidas 72 nuevas pruebas de integración. El guard de pruebas bloquea HTTP, HTTPS y fetch externos; permite servidores simulados locales. No se repitió el banco de modelos ni se enviaron mensajes de WhatsApp.
 
 ## Qué muestran los bancos anteriores
 

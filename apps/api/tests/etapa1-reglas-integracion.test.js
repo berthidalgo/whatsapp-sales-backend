@@ -62,7 +62,7 @@ test('conserva el día solicitado y no convierte «no ahora» en llamada inmedia
  assert.equal(r.slots_detectados.fecha_hora,'mañana a las 11am');assert.match(r.mensaje,/confirm.*disponibilidad/i);assert.ok(r.guardrail_flags.includes('llamada_horario_derivado'))
 })
 test('una propuesta del bot no se guarda como aceptación del lead',async()=>{
- const r=await sinRed(args('quiero una llamada'));assert.deepEqual(r.slots_detectados,{})
+ const r=await sinRed(args('quiero una llamada'));assert.equal(r.slots_detectados.fecha_hora,undefined)
 })
 test('una hora posterior conserva el día que dio el lead',async()=>{
  const r=await sinRed(args('a las 11am',exportacion,{stage:'call_scheduling'},[{rol:'lead',texto:'llámame mañana'},{rol:'agente',texto:'¿A qué hora?'}]))
@@ -151,4 +151,19 @@ test('cambio a llamada inmediata de una cita existente escala sin horario frío'
 test('«ya» dentro de una solicitud futura no adelanta la llamada',async()=>{
  const r=await sinRed(args('ya quiero una llamada mañana a las 11am'))
  assert.ok(r.guardrail_flags.includes('llamada_horario_derivado'));assert.equal(r.slots_detectados.fecha_hora,'mañana a las 11am')
+})
+test('la preferencia de chat persiste aunque el historial no incluya el rechazo',async()=>{
+ const {r}=await modeloSimulado(args('necesito otra consulta',exportacion,{slots:{_canal_contacto:'chat'}}),{mensaje:'Te llamo hoy a las 4pm.',slots_detectados:{_canal_contacto:'llamada',fecha_hora:'hoy 4pm'}})
+ assert.ok(r.guardrail_flags.includes('llamada_rechazada'));assert.doesNotMatch(r.mensaje,/4pm/)
+ const slots=fusionarSlotsConReglas({_canal_contacto:'chat'},r.slots_detectados,r.guardrail_flags)
+ assert.equal(slots._canal_contacto,'chat');assert.equal(slots.fecha_hora,undefined)
+})
+test('una nueva solicitud expresa permite volver a coordinar una llamada',async()=>{
+ const r=await sinRed(args('ahora sí quiero una llamada mañana a las 11am',exportacion,{slots:{_canal_contacto:'chat'}}))
+ const slots=fusionarSlotsConReglas({_canal_contacto:'chat'},r.slots_detectados,r.guardrail_flags)
+ assert.equal(slots._canal_contacto,'llamada');assert.equal(slots.fecha_hora,'mañana a las 11am')
+})
+test('el modelo no puede crear preferencias internas ni una marca de pedido',()=>{
+ const slots=fusionarSlotsConReglas({_cierre:{intentos:1}},{_canal_contacto:'llamada',_pedido:'confirmado',nombre:'Rosa'},[])
+ assert.equal(slots._canal_contacto,undefined);assert.equal(slots._pedido,undefined);assert.deepEqual(slots._cierre,{intentos:1})
 })

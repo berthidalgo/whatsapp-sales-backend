@@ -60,8 +60,9 @@ const RX_DIA = /\b(?:pasado manana|manana|hoy|(?:el )?(?:lunes|martes|miercoles|
 const RX_HORA = /\b(?:a las?\s+)?(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:am|pm)\b|\ba las?\s+(?:[01]?\d|2[0-3])(?::[0-5]\d)?\b/
 const RX_INMINENTE = /\b(?:ahorita|ahora(?: mismo)?|en (?:[1-9]|[12]\d|30) minutos?)\b|\b(?:llamame|llamenme|me llamen)\s+ya\b/
 
-function preferenciaLlamada(mensaje, historial) {
-  let preferencia = null
+function preferenciaLlamada(mensaje, historial, slots = {}) {
+  let preferencia = slots._canal_contacto === 'chat' ? { tipo: 'rechaza' } : slots._canal_contacto === 'llamada' ? { tipo: 'pide' } : null
+  if (preferencia) return intencionLlamada(mensaje) || preferencia
   for (const m of historial || []) if (m?.rol === 'lead') preferencia = intencionLlamada(m.texto) || preferencia
   return intencionLlamada(mensaje) || preferencia
 }
@@ -70,13 +71,15 @@ function reglaLlamada(ctx) {
   if (ctx.vertical?.VERTICAL_ID !== 'exportacion') return null
   const t = normalizar(ctx.mensajeActual).replace(/(\d)\s*([ap])\.?\s*m\.?\b/g, '$1$2m')
   const intencion = intencionLlamada(t)
-  const preferencia = preferenciaLlamada('', ctx.historial)
+  const preferencia = preferenciaLlamada('', ctx.historial, ctx.estadoLead.slots)
   const contextoCita = ['call_scheduling','call_confirmed'].includes(ctx.estadoLead.stage) && (ctx.estadoLead.slots?.fecha_hora || preferencia?.tipo === 'pide')
   const horaInmediata = /^(?:ahorita|ahora(?: mismo)?|en (?:[1-9]|[12]\d|30) minutos?)[!?\s]*$/.test(t)
   const sigueCoordinando = !intencion && contextoCita && preferencia?.tipo !== 'rechaza' && (RX_DIA.test(t) || RX_HORA.test(t) || horaInmediata)
   if (intencion?.tipo !== 'pide' && !sigueCoordinando) return null
-  const base = { stage_sugerido: 'call_scheduling', momento_actual: 'M5', temperatura_lead: 'hot', cierre: { ofrecio_llamada: true, objecion_trabajada: 'ninguna', palanca: 'cierre_suave' } }
-  if (RX_INMINENTE.test((intencion?.texto || t).replace(/\bno\s+(?:ahora(?: mismo)?|ahorita|ya)\b/g, ''))) {
+  const base = { slots_detectados: { _canal_contacto: 'llamada' }, stage_sugerido: 'call_scheduling', momento_actual: 'M5', temperatura_lead: 'hot', cierre: { ofrecio_llamada: true, objecion_trabajada: 'ninguna', palanca: 'cierre_suave' } }
+  const tiempoSolicitado = (intencion?.texto || t).replace(/\bahora si\b/g, '').replace(/\bno\s+(?:ahora(?: mismo)?|ahorita|ya)\b/g, '')
+  const diaFuturo = /\b(?:manana|lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b/.test(tiempoSolicitado)
+  if (RX_INMINENTE.test(tiempoSolicitado) && !diaFuturo) {
     return respuestaRegla('regla_llamada', ctx.startTime, { ...base,
       mensaje: '¡Claro! Paso tu solicitud al equipo para que puedan llamarte lo antes posible 📲 Te confirmarán por aquí.',
       debe_escalar_humano: true, razon_escalamiento: 'llamada inmediata solicitada por el lead',
@@ -97,7 +100,7 @@ function reglaLlamada(ctx) {
     const horario = `${mostrarDia(dia)} ${hora}`
     return respuestaRegla('regla_llamada', ctx.startTime, { ...base,
       mensaje: `Anoto tu solicitud de llamada para ${horario} 📲 Paso el horario al equipo para que te confirme disponibilidad por aquí.`,
-      slots_detectados: { fecha_hora: horario }, debe_escalar_humano: true,
+      slots_detectados: { _canal_contacto: 'llamada', fecha_hora: horario }, debe_escalar_humano: true,
       razon_escalamiento: 'horario de llamada solicitado por el lead', como_cerrarlo: `Confirmar disponibilidad para ${horario}.`,
       guardrail_flags: ['llamada_horario_derivado'] })
   }
@@ -190,10 +193,11 @@ export function protegerSalidaDeterminista(parsed, ctx) {
     const { audit, ok, guardrail_flags, via_fallback, ...datos } = pedido
     return { parsed: { ...parsed, ...datos }, flags: guardrail_flags }
   }
-  if (ctx.vertical?.VERTICAL_ID !== 'exportacion' || preferenciaLlamada(ctx.mensajeActual, ctx.historial)?.tipo !== 'rechaza') return { parsed, flags: [] }
+  if (ctx.vertical?.VERTICAL_ID !== 'exportacion' || preferenciaLlamada(ctx.mensajeActual, ctx.historial, ctx.estadoLead.slots)?.tipo !== 'rechaza') return { parsed, flags: [] }
   const mensaje = String(parsed.mensaje || '').split(/(?<=[.!?])\s+|\n+/).filter(o => !/\b(?:llam(?:ada\w*|ar\w*|o|amos|e|es|en)|telefon\w*)\b/.test(normalizar(o))).join(' ').trim()
   const slots = { ...(parsed.slots_detectados || {}) }
   delete slots.fecha_hora
+  slots._canal_contacto = 'chat'
   const cancelar = ['call_scheduling','call_confirmed'].includes(ctx.estadoLead.stage) && !!ctx.estadoLead.slots?.fecha_hora
   return { parsed: { ...parsed, mensaje: mensaje || 'Entendido, seguimos por este chat y no coordinaremos una llamada.',
     slots_detectados: slots, stage_sugerido: ctx.estadoLead.stage || 'discovery',
@@ -215,6 +219,8 @@ export function respaldoNoVerificado(oracion, fs) {
 export function fusionarSlotsConReglas(anteriores, nuevos, flags = []) {
   const slots = { ...(anteriores || {}) }
   for (const [k,v] of Object.entries(nuevos || {})) {
+    const canalDerivado = k === '_canal_contacto' && flags.some(f => ['llamada_rechazada','llamada_inminente_derivada','llamada_horario_derivado','llamada_solicitada_sin_cuestionario'].includes(f))
+    if (k.startsWith('_') && !canalDerivado) continue
     if (!['__proto__','constructor','prototype'].includes(k) && v && typeof v === 'string' && v.trim() && !v.toLowerCase().includes('vacío')) slots[k] = v
   }
   if (flags.includes('llamada_rechazada')) delete slots.fecha_hora
