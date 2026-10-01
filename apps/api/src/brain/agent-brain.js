@@ -187,6 +187,34 @@ export async function pensarYResponder({
     }
   }
 
+  // ── REGLA VULNERABILIDAD GRAVE (oct 2026, Etapa 1) ──
+  // Angustia económica real ("vendí mis parcelas, no me queda nada", "es mi
+  // última esperanza"): el modelo la ignoró en banco (C022 → ofreció llamada).
+  // El veto no puede depender del humor del modelo: se responde empatía fija y
+  // se escala a humano ANTES de llamar al LLM. Estrecha a propósito: "no tengo
+  // dinero ahora" (objeción común, C044) NO matchea — eso lo trabaja el vertical.
+  if (detectarVulnerabilidadGrave(mensajeActual)) {
+    const nombreAgente = campaignConfig?.agente?.nombre || vendorNombre || 'el equipo'
+    return {
+      ok: true,
+      mensaje: `Entiendo por lo que estás pasando 🙏 Vender lo tuyo y quedarte sin nada es muy duro, y te agradezco la confianza de contármelo. No te voy a presionar ni a venderte nada ahora: le paso tu caso a ${nombreAgente} para que te acompañe con calma y vean juntos qué alternativa real tienes, sin compromiso.`,
+      razonamiento: 'Vulnerabilidad grave: empatía + escala, sin vender.',
+      slots_detectados: {},
+      momento_actual: null,
+      stage_sugerido: estadoLead?.stage || 'discovery',
+      debe_escalar_humano: true,
+      razon_escalamiento: 'vulnerabilidad económica — acompañar con cuidado, no vender',
+      como_cerrarlo: 'Lead en angustia económica real. Escuchar, cero presión, ver juntos si hay camino.',
+      temperatura_lead: 'cold',
+      compromiso: null,
+      cierre: null,
+      enviar_imagen: null,
+      guardrail_flags: ['vulnerabilidad_grave_derivada'],
+      via_fallback: false,
+      audit: { model: 'regla_vulnerabilidad', fallback: false, proveedor: 'regla', tokens: 0, cost_usd: 0, latency_ms: Date.now() - startTime }
+    }
+  }
+
   // Guard: si el banco pidió Developer API pero no hay key en ENV, fallar CLARO
   // (no caer en silencio a Vertex y dar números engañosos). La key JAMÁS viaja en el
   // request HTTP — el banco solo manda el flag; el servidor la lee del entorno.
@@ -208,7 +236,13 @@ export async function pensarYResponder({
 
   const fs = flattenFactSheet(campaignConfig)
   const systemInstruction = vertical.construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead })
-  const userPrompt = construirUserPrompt({ mensajeActual, historial, estadoLead, vertical })
+  // Nudge C023 (oct 2026, Etapa 1): el lead que PIDE la llamada él mismo era
+  // devuelto al cuestionario (se perdió a Rafael 2 meses). Detección
+  // determinista + instrucción explícita en el turno: confirmar con horarios.
+  const userPrompt = aplicarNudgeLlamada(
+    construirUserPrompt({ mensajeActual, historial, estadoLead, vertical }),
+    mensajeActual, vertical
+  )
   const llamarCon = (prompt) => (paso) => llamarPaso(paso, {
     systemInstruction, userPrompt: prompt, schema: usarSchema, temperature: TEMPERATURE,
     tenantId: estadoLead?.tenantId || ACTIVE_TENANT
@@ -773,6 +807,48 @@ function rescatarMensaje(rawText) {
     if (texto.length >= 10) return texto  // umbral más alto para texto cortado (evita basura)
   }
   return null
+}
+
+// ════════════════════════════════════════════════════════
+// DETECTORES PUROS — reglas deterministas de Etapa 1 (oct 2026, testeables)
+// ════════════════════════════════════════════════════════
+// Vulnerabilidad GRAVE (banco C022): angustia económica real y explícita.
+// Estrecho a propósito: "no tengo dinero ahora" / "está caro" son objeciones
+// normales que trabaja el vertical y NO matchean.
+const RX_VULNERABILIDAD_GRAVE = new RegExp([
+  'vend[ií]\\s+(mis\\s+)?(parcelas|terrenos?|tierras|todo|mis\\s+cosas)',
+  'vend[ií]\\s+todo\\b',
+  'no\\s+me\\s+queda\\s+nada',
+  'me\\s+qued[eé]\\s+sin\\s+nada',
+  '[úu]ltima\\s+esperanza',
+  '\\bendeudad[oa]s?\\b.{0,20}\\b(no\\s+tengo|no\\s+me\\s+queda|nada)\\b',
+  'estoy\\s+endeudad[oa]',
+  'me\\s+endeud[eé]',
+  'no\\s+tengo\\s+ni\\s+para\\s+comer',
+  'lo\\s+perd[ií]\\s+todo'
+].join('|'), 'i')
+
+export function detectarVulnerabilidadGrave(mensaje) {
+  return RX_VULNERABILIDAD_GRAVE.test(String(mensaje || ''))
+}
+
+// Pide la llamada ÉL mismo (banco C023): "puede ser por una llamada",
+// "llámame", "quiero que me llamen". Preguntar "¿me van a llamar?" también
+// cuenta: confirmar igual, jamás devolverlo al cuestionario.
+const RX_PIDE_LLAMADA = /ll[áa]mame|ll[áa]menme|puede\s+ser\s+por\s+una\s+llamada|quiero\s+que\s+me\s+llamen|quisiera\s+que\s+me\s+llamen|me\s+pueden\s+llamar|que\s+me\s+llamen|me\s+van\s+a\s+llamar/i
+
+export function detectarPideLlamada(mensaje) {
+  return RX_PIDE_LLAMADA.test(String(mensaje || ''))
+}
+
+// Nudge determinista para el turno: solo en verticales que cierran con llamada
+// (exportación). En colágeno/tienda el cierre es por chat: no aplica.
+export function aplicarNudgeLlamada(userPrompt, mensajeActual, vertical) {
+  if (vertical?.VERTICAL_ID !== 'exportacion') return userPrompt
+  if (!detectarPideLlamada(mensajeActual)) return userPrompt
+  return `${userPrompt}
+
+# ⚠️ SEÑAL CLAVE DE ESTE TURNO: el lead PIDE la llamada él mismo ("${String(mensajeActual).slice(0, 80)}"). NO lo devuelvas al cuestionario: confirma la llamada con horarios concretos (M5/M6) y deja que el humano recoja los datos que falten.`
 }
 
 // ════════════════════════════════════════════════════════
