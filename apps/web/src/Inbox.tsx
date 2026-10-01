@@ -1,3 +1,4 @@
+import producto from './config/producto.json'
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
@@ -47,7 +48,7 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
 
   // Aviso en la pestaña del navegador aunque no esté enfocada.
   useEffect(() => {
-    document.title = noLeidos > 0 ? `(${noLeidos}) Hidata Inbox` : 'Hidata Inbox'
+    document.title = noLeidos > 0 ? `(${noLeidos}) ${producto.inbox}` : producto.inbox
   }, [noLeidos])
 
   // Notificación in-app: toast cuando un lead PASA a no-leído entre polls (= el lead

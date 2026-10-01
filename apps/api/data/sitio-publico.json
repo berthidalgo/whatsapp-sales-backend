@@ -1,0 +1,18 @@
+{
+  "_nota": "Datos del negocio para la web pública (Meta la compara con el portafolio). Si cambian allá, cambiarlos aquí. F2 forense: antes vivían cosidos en src/api/sitio-publico.js.",
+  "negocio": {
+    "nombre": "Hidata Importaciones",
+    "titular": "Joan Alberth Cornelio Hidalgo Tacas",
+    "ruc": "10721689421",
+    "direccion": "Av. Flor de Amancaes N.° 10, Mz. 1, Lt. 6, Rímac, Lima 15011, Perú",
+    "correo": "albert.hidata@gmail.com",
+    "telefono": "+51 923 913 984",
+    "whatsapp": "51923913984"
+  },
+  "actualizada": "29 de septiembre de 2026",
+  "rubros": [
+    { "titulo": "Juguetes", "texto": "Juguetes importados para niños y para regalar." },
+    { "titulo": "Hogar", "texto": "Productos importados prácticos para la casa: cocina, limpieza, orden y decoración." },
+    { "titulo": "Tecnología", "texto": "Gadgets y accesorios de tecnología para el día a día." }
+  ]
+}

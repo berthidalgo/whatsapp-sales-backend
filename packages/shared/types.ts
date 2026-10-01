@@ -135,6 +135,7 @@ export interface Flow {
 }
 
 export interface AgentConfig {
+  version: number
   campaignId: number | null
   nombrePrograma: string
   factSheet: Record<string, any>

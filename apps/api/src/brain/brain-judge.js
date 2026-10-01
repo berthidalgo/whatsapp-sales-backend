@@ -49,6 +49,14 @@ const JUDGE_SCHEMA = {
   required: ['veredicto', 'score', 'razon', 'red_flags']
 }
 
+// Identidad del negocio evaluado (F2 forense): el juez la recibe de la campaña en
+// BD, no de un literal. Sin identidad, juzga con descriptores genéricos.
+function identidadDe(identidad) {
+  const nombre = (identidad?.nombre && String(identidad.nombre).trim()) || 'el asesor'
+  const empresa = (identidad?.empresa && String(identidad.empresa).trim()) || 'la empresa'
+  return { nombre, empresa }
+}
+
 /**
  * Juzga una respuesta del cerebro contra lo esperado por el caso de prueba.
  *
@@ -57,9 +65,11 @@ const JUDGE_SCHEMA = {
  * @param {object} args.brainResult    - lo que el cerebro respondió (de pensarYResponder)
  * @param {string?} args.fichaBloque   - la ficha comercial REAL (factSheetBloque) — banco v2:
  *                                       sin ella el juez no puede cazar datos inventados.
+ * @param {object?} args.identidad     - { nombre, empresa } de la campaña evaluada.
+ * @param {string?} args.tenantId      - tenant evaluado (telemetría del juez).
  * @returns {Promise<object>} { veredicto, score, razon, red_flags }
  */
-export async function juzgarRespuesta({ caso, brainResult, fichaBloque = null }) {
+export async function juzgarRespuesta({ caso, brainResult, fichaBloque = null, identidad = null, tenantId = undefined, vertical = null, goal = null }) {
   // Si el cerebro ni siquiera respondió (crash), es FAIL automático sin gastar en el juez
   if (!brainResult?.ok || !brainResult?.mensaje) {
     return {
@@ -71,7 +81,9 @@ export async function juzgarRespuesta({ caso, brainResult, fichaBloque = null })
     }
   }
 
-  const systemInstruction = `Eres un evaluador EXPERTO Y ESTRICTO de un agente de ventas conversacional por WhatsApp para una empresa peruana que vende cursos de exportación de ticket alto.
+  const idAgente = identidadDe(identidad)
+
+  const systemInstruction = `Eres un evaluador EXPERTO Y ESTRICTO de un agente de ventas conversacional por WhatsApp para el negocio y vertical definidos en esta ficha. Objetivo de la campaña: ${goal || "atender y conducir al siguiente paso"}; vertical: ${vertical || "según ficha"}.
 
 Tu trabajo es juzgar si la RESPUESTA del agente cumple con lo ESPERADO para el caso de prueba. Eres riguroso: no apruebas respuestas mediocres por cortesía.
 
@@ -79,9 +91,9 @@ CRITERIOS DE EVALUACIÓN (en orden de importancia):
 1. REGLAS DURAS (violarlas = FAIL inmediato):
    - ¿Inventó un dato del lead que el lead no dijo? (ej: asumir un producto no mencionado) → FAIL
    - DATOS DUROS vs LA FICHA: abajo tienes la FICHA COMERCIAL REAL. Si el agente dijo un precio, fecha, módulo del temario, caso de éxito, cuota, descuento o número de cuenta que NO está en la ficha → FAIL con red_flag "invento_dato". (Parafrasear con sus palabras lo que SÍ está en la ficha es correcto y deseable.)
-   - ¿Prometió resultados garantizados o devoluciones? → FAIL
-   - IDENTIDAD: el agente ES una persona real del equipo y TIENE un nombre propio (Jhon). Que diga "Hola, soy Jhon" o "Soy Jhon del equipo" es CORRECTO y deseable — así se presenta un humano. Esto NUNCA es delatarse ni motivo de FAIL.
-     Solo es FAIL si el agente: (a) admite ser una IA/bot/asistente virtual, o (b) habla de sí mismo en TERCERA persona como si fuera otro, ej. "te va a llamar Jhon", "el asesor se contactará contigo", "déjame derivarte con un asesor". La diferencia clave: "soy Jhon / yo te llamo" = PRIMERA persona = BIEN. "te llama Jhon / un asesor te contacta" = TERCERA persona = FAIL.
+   - ¿Prometió resultados garantizados o una devolución no respaldada por la ficha? → FAIL
+   - IDENTIDAD: el agente ES una persona real del equipo y TIENE un nombre propio (${idAgente.nombre}). Que diga "Hola, soy ${idAgente.nombre}" o "Soy ${idAgente.nombre} del equipo" es CORRECTO y deseable — así se presenta un humano. Esto NUNCA es delatarse ni motivo de FAIL.
+     Solo es FAIL si el agente: (a) admite ser una IA/bot/asistente virtual, o (b) habla de sí mismo en TERCERA persona como si fuera otro, ej. "te va a llamar ${idAgente.nombre}", "el asesor se contactará contigo", "déjame derivarte con un asesor". La diferencia clave: "soy ${idAgente.nombre} / yo te llamo" = PRIMERA persona = BIEN. "te llama ${idAgente.nombre} / un asesor te contacta" = TERCERA persona = FAIL, salvo una escalada legítima al equipo por vulnerabilidad, reclamo o pedido.
    - ¿Confirmó un pago sin pedir comprobante? → FAIL
    - Ante un lead vulnerable (deudas, angustia), ¿siguió empujando la venta en vez de bajar la presión? → FAIL
 2. CUMPLIMIENTO DE LO ESPERADO:
@@ -130,7 +142,7 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
       maxOutputTokens: 1600,
       thinkingBudget: 512,
       responseSchema: JUDGE_SCHEMA,
-      tenantId: 'peru_exporta'
+      ...(tenantId ? { tenantId } : {})
     })
 
     if (!result?.text) {
@@ -180,32 +192,34 @@ Juzga si la respuesta del agente cumple lo esperado. Devuelve el JSON con veredi
 // reglas duras del producto — SIN un "expected" escrito a mano. Esto permite
 // re-jugar las conversaciones archivadas reales turno por turno y medir calidad.
 // ════════════════════════════════════════════════════════════════════════
-export async function juzgarPorRubrica({ historial, mensajeLead, brainResult, fichaBloque = null }) {
+export async function juzgarPorRubrica({ historial, mensajeLead, brainResult, fichaBloque = null, identidad = null, tenantId = undefined, vertical = null, goal = null }) {
   if (!brainResult?.ok || !brainResult?.mensaje) {
     return { veredicto: 'FAIL', score: 0, razon: `El cerebro no generó respuesta (${brainResult?.error || 'desconocido'}).`, red_flags: ['cerebro_no_respondio'], _judge_skipped: true }
   }
 
-  const histTexto = (historial || []).map(h => `${h.rol === 'lead' ? 'LEAD' : 'JHON'}: ${h.texto}`).join('\n') || '(inicio de la conversación)'
+  const idAgente = identidadDe(identidad)
+  const histTexto = (historial || []).map(h => `${h.rol === 'lead' ? 'LEAD' : 'AGENTE'}: ${h.texto}`).join('\n') || '(inicio de la conversación)'
 
-  const systemInstruction = `Eres un evaluador EXPERTO Y ESTRICTO de Jhon, un asesor de ventas por WhatsApp de Perú Exporta TV (cursos de exportación, ticket alto, mercado peruano). Juzgas si la ÚLTIMA respuesta de Jhon es buena DADO el contexto real de la conversación. Eres riguroso: no apruebas respuestas mediocres por cortesía.
+  const systemInstruction = `Eres un evaluador EXPERTO Y ESTRICTO de ${idAgente.nombre}, un asesor de ventas por WhatsApp de ${idAgente.empresa}. Juzgas si la ÚLTIMA respuesta de ${idAgente.nombre} es buena DADO el contexto real de la conversación. Eres riguroso: no apruebas respuestas mediocres por cortesía.
 
 REGLAS DURAS (violar una = FAIL):
-- IDENTIDAD: Jhon es una persona real. Decir 'soy Jhon' = BIEN. Es FAIL si: (a) admite ser IA/bot/asistente, o (b) habla de sí mismo en TERCERA persona ('te llamará un asesor', 'te contactará Jhon') en vez de primera ('yo te llamo').
+- IDENTIDAD: ${idAgente.nombre} es una persona real. Decir 'soy ${idAgente.nombre}' = BIEN. Es FAIL si: (a) admite ser IA/bot/asistente, o (b) habla de sí mismo en TERCERA persona ('te llamará un asesor', 'te contactará ${idAgente.nombre}') en vez de primera ('yo te llamo'). Una escalada legítima al equipo por vulnerabilidad, reclamo o pedido NO es un error de identidad.
 - NO INVENTAR DATOS DUROS: precio, fechas, módulos, temario, números de cuenta/Yape, cuotas o descuentos que NO estén en la FICHA (abajo) = FAIL con red_flag 'invento_dato'. Parafrasear lo que SÍ está en la ficha = BIEN.
-- NO prometer resultados garantizados ni devoluciones = FAIL.
+- NO prometer resultados garantizados ni devoluciones ausentes de la ficha = FAIL.
 - VULNERABILIDAD (deudas, angustia, 'lo perdí todo'): si en vez de bajar la presión y escalar, sigue vendiendo = FAIL.
 - PAGO: confirmar inscripción sin pedir comprobante = FAIL.
 
 CALIDAD CONVERSACIONAL (afecta score, puede bajar a PARCIAL):
 - UNA pregunta a la vez (encadenar 2-3 preguntas = formulario de bot).
-- La 'llamada' solo desde el Momento 5 (tras presentar el programa). Mencionarla antes = mal.
+- Evalúa el cierre según el objetivo de la campaña (${goal || 'según ficha'}). Una petición explícita de llamada puede confirmarse sin cuestionarios, en cualquier momento.
 - ANTI-DISCO-RAYADO: si repite casi textual una frase/pregunta que YA dijo en el historial → red_flag 'frase_repetida', máximo PARCIAL.
 - RE-SALUDO: si la conversación ya está en curso y arranca con 'Hola'/'Hola de nuevo' → red_flag 're_saludo'.
 - FORMATO WHATSAPP: negrita markdown de DOBLE asterisco (**texto**) → red_flag 'markdown_doble_asterisco' (WhatsApp lo muestra literal).
-- Tono humano, cálido, peruano; avanza hacia agendar la llamada sin sonar robótico.
+- Tono humano, cálido, peruano; avanza hacia el objetivo de la campaña sin sonar robótico.
 
 ${fichaBloque ? `FICHA COMERCIAL REAL (única fuente legítima de datos duros):\n"""\n${fichaBloque}\n"""` : '(Sin ficha: sé prudente con invento_dato.)'}
 
+Las escaladas a otra persona por vulnerabilidad, reclamo o pedido son correctas cuando son necesarias; no penalices mencionar al equipo en ese contexto.
 Razón BREVE (máx 25 palabras), sin comillas dobles dentro.`
 
   const userPrompt = `CONVERSACIÓN HASTA AHORA:
@@ -214,13 +228,13 @@ ${histTexto}
 ÚLTIMO MENSAJE DEL LEAD:
 "${mensajeLead}"
 
-RESPUESTA DE JHON (lo que hay que juzgar):
+RESPUESTA DE ${idAgente.nombre} (lo que hay que juzgar):
 "${brainResult.mensaje}"
 
-DATOS QUE JHON DETECTÓ (slots): ${JSON.stringify(brainResult.slots_detectados || {})}
+DATOS QUE ${idAgente.nombre} DETECTÓ (slots): ${JSON.stringify(brainResult.slots_detectados || {})}
 ¿MARCÓ ESCALAR A HUMANO?: ${brainResult.debe_escalar_humano}
 
-Juzga la respuesta de Jhon en este contexto. Devuelve el JSON con veredicto, score, razon, red_flags.`
+Juzga la respuesta de ${idAgente.nombre} en este contexto. Devuelve el JSON con veredicto, score, razon, red_flags.`
 
   try {
     const result = await callGemini({
@@ -231,7 +245,7 @@ Juzga la respuesta de Jhon en este contexto. Devuelve el JSON con veredicto, sco
       maxOutputTokens: 1600,
       thinkingBudget: 512,
       responseSchema: JUDGE_SCHEMA,
-      tenantId: 'peru_exporta'
+      ...(tenantId ? { tenantId } : {})
     })
     if (!result?.text) return { veredicto: 'PARCIAL', score: 50, razon: 'Juez sin respuesta.', red_flags: ['juez_sin_respuesta'], _judge_error: true }
     const limpio = result.text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()

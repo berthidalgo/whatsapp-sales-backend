@@ -241,7 +241,7 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       telefono,
       mensajeActual: combinedText,
       tenantId: leadInfo.tenantId || ACTIVE_TENANT,
-      vendorNombre: leadInfo.vendorNombre || 'Jhon'  // fallback alineado al config (el nombre real lo manda config.agente.nombre)
+      vendorNombre: leadInfo.vendorNombre || 'asesor'  // el nombre real lo manda config.agente.nombre; sin él, neutro
     })
     console.log(`[Pipeline] Cerebro ${Date.now() - brainStart}ms`)
 
@@ -315,10 +315,22 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       //     precios en M4) — se envía DESPUÉS del texto y solo si el texto salió OK.
       //     Fire-and-forget suave: un fallo del envío de imagen NO tumba el turno. ───
       if (botResponse.enviar_imagen) {
-        // El tenant DEBE viajar: la misma clave ("precios") apunta a un archivo
-        // distinto en cada cliente. Sin él, getImagen devuelve null y no se manda
-        // nada — antes devolvía la foto de BIOAYUR a cualquiera que la pidiera.
-        const img = getImagen(botResponse.enviar_imagen, leadInfo.tenantId || ACTIVE_TENANT)
+        // La imagen se resuelve para ESTA campaña (su ficha manda) dentro de SU
+        // tenant: la misma clave ("precios") apunta a un archivo distinto en cada
+        // cliente. Sin registro, getImagen devuelve null y no se manda nada.
+        let imagenesConfig = {}
+        try {
+          const lead = await prisma.lead.findFirst({
+            where: { id: leadId, tenantId: leadInfo.tenantId },
+            select: { campaign: { select: { config: true, tenantId: true } } }
+          })
+          if (lead?.campaign && lead.campaign.tenantId !== leadInfo.tenantId) throw new Error('campaña fuera del tenant')
+          const ficha = lead?.campaign?.config?.factSheet
+          imagenesConfig = ficha ? (ficha.imagenes || {}) : null
+        } catch (err) {
+          console.warn(`[Pipeline] no se pudo leer la ficha para la imagen: ${err.message}`)
+        }
+        const img = getImagen(botResponse.enviar_imagen, leadInfo.tenantId, imagenesConfig)
         if (img) {
           const mediaRes = await enviarImagen({
             canal, telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,

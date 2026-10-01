@@ -416,7 +416,7 @@ async function cargarMemoriaEpisodica(prisma, telefono, leadIdActual, tenantId, 
  * @param {string} args.vendorNombre - nombre del agente/vendedor (la identidad del bot)
  * @returns {Promise<object>} { ok, botResponse, brainResult, stateAfter }
  */
-export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = ACTIVE_TENANT, vendorNombre = 'Jhon' }) {
+export async function procesarConCerebro({ leadId, telefono, mensajeActual, tenantId = ACTIVE_TENANT, vendorNombre = 'asesor' }) {
   const startTime = Date.now()
 
   try {

@@ -27,7 +27,8 @@
   },
   "devDependencies": {
     "pg": "^8.21.0",
-    "prisma": "^5.22.0"
+    "prisma": "^5.22.0",
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=20.0.0"

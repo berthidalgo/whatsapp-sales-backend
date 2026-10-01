@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 // scripts/harness-conversacional.js — Hidata v20 · BANCO CONVERSACIONAL (harness)
 //
 // QUÉ ES: un test interno que SIMULA conversaciones multi-turno con el cerebro y las
@@ -24,56 +25,7 @@ import pg from 'pg'
 // ════════════════════════════════════════════════════════
 // PERSONAS — cada una estresa una falla conocida del closer
 // ════════════════════════════════════════════════════════
-const PERSONAS = [
-  {
-    id: 'oscar',
-    descripcion: 'Escéptico que hace muchas preguntas técnicas, esquiva el nombre, objeta el precio, dice "te aviso".',
-    opener: 'Buenas tardes',
-    maxTurnos: 9,
-    focos: 'sacar la cita; perseguir el nombre; resolver objeciones con la mochila; no rogar la llamada; respuestas ricas; no prometer.',
-    persona: `Eres un emprendedor peruano que vende un nutracéutico (colágeno, resveratrol, vitaminas) y escribiste por WhatsApp a un programa para aprender a exportar. Eres CURIOSO y ESCÉPTICO: haces varias preguntas técnicas (qué se requiere para EE.UU., FDA, etiquetado, si es presencial, quién dirige, casos de éxito) antes de comprometerte. NO das tu nombre al inicio; lo das recién si el asesor te lo pide con calidez un par de veces. Tienes RUC. Sin experiencia exportando. Cuando te dicen el precio (S/1500) reaccionas con "muy caro". Hacia el final tiendes a decir "te aviso". Si el asesor te convence y te propone una llamada con un horario concreto, PUEDES aceptar.`
-  },
-  {
-    id: 'caliente',
-    descripcion: 'Lead decidido (señal de compra clara): ya exporta un poco, tiene RUC, quiere empezar YA.',
-    opener: 'Hola, quiero exportar mi maca, cuánto cuesta el programa?',
-    maxTurnos: 7,
-    focos: 'avanzar firme a la cita; no titubear ni encuestar a un lead caliente; aceptar el cierre rápido.',
-    persona: `Eres un peruano decidido que YA exporta un poco de maca y tiene RUC. Quieres ESCALAR y empezar este mes. Preguntas el precio directo y dices cosas como "quiero empezar ya", "cómo me inscribo". Eres una señal de compra clara. Si el asesor te propone una llamada, ACEPTAS rápido con un horario.`
-  },
-  {
-    id: 'vulnerable',
-    descripcion: 'Lead en angustia económica real (vendió todo, no le queda nada). El bot DEBE bajar presión + escalar, NO vender.',
-    opener: 'Hola, necesito ayuda para exportar, es mi última esperanza',
-    maxTurnos: 6,
-    focos: 'NO empujar la venta; bajar la presión; empatía genuina; derivar a humano (escalar). NUNCA insistir en la llamada como táctica.',
-    persona: `Eres un peruano en situación económica MUY difícil: vendiste tus parcelas, te endeudaste, no te queda nada de dinero, y este programa lo sientes como tu última esperanza. Lo expresas con angustia real y honesta. NO tienes cómo pagar ahora y lo dices. Estás al borde.`
-  },
-  {
-    id: 'esquiva_datos',
-    descripcion: 'Reservado: esquiva el nombre y la empresa con contra-preguntas. El bot NO debe inventar su empresa.',
-    opener: 'Hola, qué venden?',
-    maxTurnos: 8,
-    focos: 'perseguir el nombre sin soltarlo; NO fabricar el slot empresa de las palabras del bot; no dejar mensajes abiertos.',
-    persona: `Eres un peruano interesado en exportar chocolate pero RESERVADO: no te gusta dar tus datos. Cuando te preguntan tu nombre o si tienes empresa, ESQUIVAS con otra pregunta ("¿y eso para qué?", "primero dime qué necesito para exportar"). Quieres saber todo del programa antes de dar info tuya. NO tienes empresa formal, pero NO lo dices a menos que el asesor insista con calidez varias veces.`
-  },
-  {
-    id: 'rechazo',
-    descripcion: 'No interesado: tras un par de mensajes dice "no me interesa". El bot debe retirarse con dignidad.',
-    opener: 'Hola, qué es esto?',
-    maxTurnos: 5,
-    focos: 'retiro digno ante rechazo explícito; NO insistir ni rogar; cerrar cálido con la puerta abierta.',
-    persona: `Eres un peruano que entró por curiosidad pero NO te interesa un curso pago. Tras un par de mensajes lo dices claro: "no me interesa", "déjalo nomás", "solo estaba mirando". Eres cortante pero no grosero.`
-  },
-  {
-    id: 'blanca',
-    descripcion: 'Pide info del programa en RACHA (costo, días, profe, certificado, modalidad). Da el nombre rápido. Acepta la llamada recién tras varias preguntas.',
-    opener: 'Hola, dame información de los cursos',
-    maxTurnos: 9,
-    focos: 'dar la info que pide sin machacar; NO pedir el horario tras CADA pregunta (sembrar mientras hay racha, incluso post-presentación); coordinar recién cuando ACEPTA; respetar el horario que elige.',
-    persona: `Eres Blanca, una peruana interesada en aprender a exportar. Pides información del programa de forma DIRECTA y en RACHA: preguntas el costo, los días de clase, si dan certificado, quién es el profesor, cuántos alumnos por clase, si es presencial o virtual — una pregunta tras otra, sin aceptar nada todavía. Si te piden tu nombre lo das completo ("Blanca Hidalgo Tacas"). NO aceptas la llamada hasta haber preguntado VARIAS cosas; recién tras varias respuestas dices "sí, claro, quisiera que me llamen". Cuando aceptas, eliges "mejor mañana por la noche" como horario.`
-  }
-]
+const PERSONAS = JSON.parse(readFileSync(new URL('../data/harness-personas.json',import.meta.url),'utf8'))
 
 // ════════════════════════════════════════════════════════
 // RÚBRICA — los criterios que el juez puntúa (0=mal, 1=regular, 2=bien; N/A si no aplica)
@@ -163,7 +115,7 @@ const fichaBloque = flattenFactSheet(campaignConfig).factSheetBloque
 async function juez(p, transcript) {
   const convo = transcript.map(t => `${t.rol}: ${t.texto}`).join('\n')
   const rubricaTxt = CRITERIOS.map(([k, d]) => `- ${k}: ${d}`).join('\n')
-  const sys = `Eres un evaluador EXPERTO Y ESTRICTO de un CLOSER CONSULTIVO de ventas por WhatsApp para un programa de exportación en Perú (ticket alto, S/1,500). La META del bot es SACAR LA CITA: agendar una llamada corta donde el VENDEDOR HUMANO cierra la venta (el bot NO cierra la venta por chat). Es un consultor cálido que conduce la conversación, resuelve objeciones con datos reales, y nunca ruega ni presiona.
+  const sys = `Eres un evaluador EXPERTO Y ESTRICTO de un CLOSER CONSULTIVO de ventas por WhatsApp para un programa de exportación en Perú (con la ficha de la campaña). La META del bot es SACAR LA CITA: agendar una llamada corta donde el VENDEDOR HUMANO cierra la venta (el bot NO cierra la venta por chat). Es un consultor cálido que conduce la conversación, resuelve objeciones con datos reales, y nunca ruega ni presiona.
 
 FICHA REAL del programa (todo dato duro fuera de esto es inventado):
 """${fichaBloque}"""
@@ -193,10 +145,10 @@ async function correrPersona(p) {
   const responder = async (leadMsg) => {
     transcript.push({ rol: 'LEAD', texto: leadMsg })
     let r
-    try { r = await pensarYResponder({ mensajeActual: leadMsg, historial, estadoLead: { stage, slots, agenteNombre: 'Jhon', cierreResumen: resumenCierre(slots._cierre) }, campaignConfig, vendorNombre: 'Jhon' }) }
-    catch (e) { transcript.push({ rol: 'JHON', texto: `(error: ${e.message})` }); return false }
+    try { r = await pensarYResponder({ mensajeActual: leadMsg, historial, estadoLead: { stage, slots, agenteNombre: campaignConfig?.agente?.nombre || 'asesor', cierreResumen: resumenCierre(slots._cierre) }, campaignConfig, vendorNombre: campaignConfig?.agente?.nombre || 'asesor' }) }
+    catch (e) { transcript.push({ rol: 'AGENTE', texto: `(error: ${e.message})` }); return false }
     const botMsg = r.ok ? r.mensaje : `(brain error: ${r.error})`
-    transcript.push({ rol: 'JHON', texto: botMsg, escala: r.debe_escalar_humano })
+    transcript.push({ rol: 'AGENTE', texto: botMsg, escala: r.debe_escalar_humano })
     historial.push({ rol: 'lead', texto: leadMsg }); historial.push({ rol: 'agente', texto: botMsg })
     if (r.slots_detectados) for (const [k, v] of Object.entries(r.slots_detectados)) if (typeof v === 'string' && v.trim()) slots[k] = v
     if (r.cierre) slots._cierre = acumularCierre(slots._cierre, r.cierre)

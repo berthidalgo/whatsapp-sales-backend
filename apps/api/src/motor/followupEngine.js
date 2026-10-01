@@ -24,6 +24,8 @@
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
 import { enviarTexto, enviarPlantilla, transporteDe } from '../whatsapp/transporte.js'
+import { textoDePlantilla } from '../whatsapp/cloud/plantillas-catalogo.js'
+import { readFileSync } from 'node:fs'
 import { ACTIVE_TENANT, verticalPorTenant } from '../lib/tenant.js'
 import { defaultChannelForTenant } from '../webhook/channel-resolver.js'
 
@@ -43,21 +45,15 @@ const PAUSA_ENTRE_MS  = 1500      // cadencia humana entre envíos (anti-baneo s
 const PISO_2H  = 2,  TECHO_2H  = 6
 const PISO_24H = 24, TECHO_24H = 48
 
-// ── Plantillas POR VERTICAL (fix forense jul 2026) ──
+// ── Plantillas POR VERTICAL (defaults genéricos) + override POR CAMPAÑA ──
 // El motor de followups tenía copy de EXPORTACIÓN hardcodeado → le hablaba de
-// "exportar tu producto" a leads de colágeno (bug real cazado con Gabriel). Ahora
-// las plantillas se eligen por el vertical del tenant activo. {{nombre}} = PRIMER
-// nombre (ver primerNombre); las de colágeno no dependen de slots frágiles.
-const PLANTILLAS_POR_VERTICAL = {
-  exportacion: {
-    followup_2h:  'Hola {{nombre}} 👋 Quedé pensando en lo que conversamos sobre exportar {{producto}}. Si te quedó alguna duda, aquí estoy para ayudarte 😊',
-    followup_24h: 'Hola {{nombre}}, no quiero que dejes pasar la oportunidad con {{curso}}. Si te animas, coordinamos una llamada corta y resolvemos todo. ¿Te parece? 🙌'
-  },
-  colageno: {
-    followup_2h:  'Hola {{nombre}} 👋 Quedé pensando en lo que conversábamos del ELIXIR 💜 Si te quedó alguna duda sobre la fórmula o la promo de hoy, aquí estoy para ayudarte 😊',
-    followup_24h: 'Hola {{nombre}} 😊 No quiero que se te pase la promo del ELIXIR. Si te animas, coordino tu pedido con envío a tu puerta y pagas al recibir 📦 ¿Lo vemos?'
-  }
-}
+// "exportar tu producto" a leads de colágeno (bug real cazado con Gabriel). Luego
+// tuvo el defecto espejo: el producto ("ELIXIR") quemado en la plantilla de colágeno.
+// Ahora: (1) las plantillas del vertical son genéricas — el producto viaja en
+// {{producto}}/{{curso}} y se resuelve de la campaña del lead; (2) cada campaña
+// puede traer su propio copy en config.followups (editable por API, sin deploy),
+// que GANA sobre el default del vertical. {{nombre}} = PRIMER nombre.
+const FOLLOWUPS = JSON.parse(readFileSync(new URL('../../data/followups.json',import.meta.url),'utf8'))
 
 // ── Plantillas POR TENANT, resueltas EN CADA LEAD (fix forense jul 2026) ──
 //
@@ -70,30 +66,59 @@ const PLANTILLAS_POR_VERTICAL = {
 // multitenant se implementó en el webhook y no en los motores de fondo.
 //
 // Ahora el vertical se deduce del TENANT DEL LEAD, en cada envío.
-function plantillasDe(tenantId) {
-  const vertical = verticalPorTenant(tenantId)
-  return PLANTILLAS_POR_VERTICAL[vertical] || PLANTILLAS_POR_VERTICAL.exportacion
+export function plantillasDe(tenantId, vertical = null) {
+  return { ...FOLLOWUPS.default, ...FOLLOWUPS.verticales[vertical || verticalPorTenant(tenantId)] }
 }
 
-const NOMBRE_CURSO = 'Mi Primera Exportación'
+// ── Datos comerciales POR LEAD, desde su campaña en BD (F2 forense) ──
+// El producto y el copy pertenecen a la campaña, no al código: se cargan en UN
+// query para todos los candidatos del ciclo (sin N+1). Sin campaña o sin
+// config, los placeholders caen a genéricos neutros (jamás a otra marca).
+export async function datosComercialesPorLead(leadIds, db = prisma) {
+  const mapa = new Map()
+  const ids = [...new Set(leadIds)].filter(Boolean)
+  if (!ids.length) return mapa
+  let filas = []
+  try {
+    filas = await db.lead.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, tenantId: true, campaign: { select: { nombre: true, config: true, tenantId: true } } }
+    })
+  } catch (err) {
+    console.warn(`[Followup] no se pudo cargar campañas de ${ids.length} leads: ${err.message}`)
+    return mapa
+  }
+  for (const f of filas) {
+    const config = (f.campaign?.config && typeof f.campaign.config === 'object') ? f.campaign.config : {}
+    const followups = (config.followups && typeof config.followups === 'object') ? config.followups : null
+    if (!f.tenantId || f.campaign?.tenantId !== f.tenantId) continue
+    mapa.set(f.id, {
+      tenantId: f.tenantId, vertical: config.vertical || verticalPorTenant(f.tenantId),
+      producto: config.agente?.nombreProducto || null,
+      curso: f.campaign?.nombre || null,
+      followups
+    })
+  }
+  return mapa
+}
 
 // ── Instancia de salida POR TENANT, con caché por ciclo ──
 // Un followup no nace de un webhook entrante, así que no hay instancia que heredar:
 // se busca el canal por defecto del tenant (para eso existe defaultChannelForTenant).
-// El fallback a EVOLUTION_INSTANCE_NAME se conserva para el deploy single-tenant de
-// hoy, pero ya NO hay literal 'peru-exporta-test': mandar el followup de un cliente
+// No se utiliza una instancia global cuando falta el canal del cliente. Antes había un literal 'peru-exporta-test': mandar el followup de un cliente
 // por el número de otro es peor que no mandarlo.
-async function canalDeTenant(tenantId, cache) {
+export async function canalDeTenant(tenantId, cache, resolver = defaultChannelForTenant) {
   if (cache.has(tenantId)) return cache.get(tenantId)
   let canal = null
   try {
-    canal = await defaultChannelForTenant(tenantId)
+    canal = await resolver(tenantId)
   } catch (err) {
     console.warn(`[Followup] no se pudo resolver canal de ${tenantId}: ${err.message}`)
   }
-  // Evolution: la instancia es la llave del canal (o la del entorno, deploy de un cliente).
+  if (!canal || canal.tenantId !== tenantId) canal = null
+  // Evolution: la instancia pertenece al canal del cliente.
   const instancia = transporteDe(canal) === 'evolution'
-    ? (canal?.externalKey || process.env.EVOLUTION_INSTANCE_NAME || null)
+    ? (canal?.externalKey || null)
     : null
   const r = { canal, instancia }
   cache.set(tenantId, r)
@@ -108,11 +133,14 @@ async function canalDeTenant(tenantId, cache) {
 //   followup_24h → cae fuera (24-48 h): solo con CLOUD_TEMPLATE_FOLLOWUP_24H.
 //   compromiso   → la fecha prometida suele quedar fuera: solo con CLOUD_TEMPLATE_COMPROMISO.
 // Con Evolution no hay ventana: todo va como texto, igual que siempre.
-export function politicaEnvio(transporte, tipo, env = process.env) {
+export function politicaEnvio(transporte, tipo, env = process.env, canal = null) {
   if (transporte !== 'cloud') return { accion: 'texto' }
   if (tipo === 'followup_2h') return { accion: 'texto' }
-  const plantilla = tipo === 'followup_24h' ? env.CLOUD_TEMPLATE_FOLLOWUP_24H : env.CLOUD_TEMPLATE_COMPROMISO
-  return plantilla ? { accion: 'plantilla', plantilla } : { accion: 'omitir', motivo: 'fuera de la ventana de 24 h y sin plantilla aprobada' }
+  const propia = canal?.credenciales?.templates?.[tipo]
+  const plantilla = (typeof propia === 'string' ? propia : propia?.nombre) || (tipo === 'followup_24h' ? env.CLOUD_TEMPLATE_FOLLOWUP_24H : env.CLOUD_TEMPLATE_COMPROMISO)
+  const idioma = propia?.idioma || canal?.credenciales?.templateIdioma || env.CLOUD_TEMPLATE_IDIOMA || 'es'
+  const cuerpo = typeof propia === 'object' ? propia.cuerpo : null
+  return plantilla ? { accion: 'plantilla', plantilla, idioma, cuerpo } : { accion: 'omitir', motivo: 'fuera de la ventana de 24 h y sin plantilla aprobada' }
 }
 
 // ════════════════════════════════════════════════════════
@@ -138,11 +166,11 @@ function primerNombre(nombre) {
   return tok.charAt(0).toUpperCase() + tok.slice(1).toLowerCase()
 }
 
-function interpolar(plantilla, { nombre, producto }) {
+function interpolar(plantilla, { nombre, producto, curso }) {
   return plantilla
     .replace(/\{\{nombre\}\}/g, primerNombre(nombre))
     .replace(/\{\{producto\}\}/g, (producto && String(producto).trim()) || 'tu producto')
-    .replace(/\{\{curso\}\}/g, NOMBRE_CURSO)
+    .replace(/\{\{curso\}\}/g, (curso && String(curso).trim()) || 'nuestro programa')
     // Si no había nombre, "Hola  👋" / "Hola , ..." quedan feos → limpiar a "¡Hola! ..."
     .replace(/\bHola\s+([👋😊💜📦,])/g, (m, s) => s === ',' ? '¡Hola!' : `¡Hola! ${s}`)
     .replace(/ {2,}/g, ' ')
@@ -220,6 +248,7 @@ export async function ejecutarFollowups() {
   let enviados = 0, errores = 0, omitidos = 0
   const detalle = []
   const canalPorTenant = new Map()   // caché por ciclo: 1 query por tenant, no por lead
+  const datosPorLead = await datosComercialesPorLead(candidatos.map(c => c.leadId))
 
   for (const c of candidatos) {
     const horas = Number(c.horas_silencio)
@@ -234,34 +263,44 @@ export async function ejecutarFollowups() {
 
     if (!tipo) { omitidos++; continue }
 
-    // Plantilla del vertical de ESTE lead (no del tenant de una env var global).
-    const tenantId = c.tenantId || ACTIVE_TENANT
-    const texto = interpolar(plantillasDe(tenantId)[tipo], { nombre: c.nombre, producto: c.producto })
+    // Sin tenant no se envía: adivinarlo es como mandarlo por otro número.
+    const tenantId = c.tenantId || null
+    if (!tenantId) { omitidos++; continue }
+    // Copy de LA CAMPAÑA de este lead (config.followups) o default del vertical;
+    // el producto, de su campaña (o de lo que el lead dijo, o genérico neutro).
+    const datos = datosPorLead.get(c.leadId) || {}
+    if (datos.tenantId !== tenantId) { omitidos++; continue }
+    const base = plantillasDe(tenantId, datos.vertical)[tipo]
+    const plantilla = (datos.followups && datos.followups[tipo]) || base
+    const texto = interpolar(plantilla, { nombre: c.nombre, producto: datos.producto || c.producto, curso: datos.curso })
 
     // Y por el número de ESTE cliente. Sin canal resoluble no se envía: prefiero
     // perder un followup a que el lead de un cliente reciba un WhatsApp de otro.
     const { canal, instancia } = await canalDeTenant(tenantId, canalPorTenant)
     const transporte = transporteDe(canal)
-    if (transporte === 'evolution' && !instancia) {
+    if (!canal || (transporte === 'evolution' && !instancia)) {
       omitidos++
       console.warn(`[Followup] ⏭️ lead ${c.leadId} (${tenantId}) sin canal de salida → omitido. Sembrá un Channel para este tenant.`)
       continue
     }
-    const politica = politicaEnvio(transporte, tipo)
+    const politica = politicaEnvio(transporte, tipo, tenantId === ACTIVE_TENANT ? process.env : {}, canal)
     if (politica.accion === 'omitir') { omitidos++; continue }
 
     try {
       let r
+      // Por plantilla, lo que el cliente lee es el texto APROBADO en Meta, no `texto` (el copy
+      // del vertical). Se guarda ese: si no, la bandeja muestra algo que nunca se envió y el
+      // cerebro "recuerda" promesas (envío, pago contra entrega…) que el cliente no leyó.
+      let enviado = texto
       if (politica.accion === 'plantilla') {
+        const variables = [primerNombre(c.nombre) || 'qué tal', (datos.producto || c.producto || 'tu producto')]
+        enviado = textoDePlantilla(tipo, variables, politica)
         r = await enviarPlantilla({
           canal,
           telefono: c.telefono,
           templateName: politica.plantilla,
-          languageCode: 'es',
-          components: [{ type: 'body', parameters: [
-            { type: 'text', text: primerNombre(c.nombre) || 'qué tal' },
-            { type: 'text', text: (c.producto && String(c.producto).trim()) || 'tu producto' }
-          ]}]
+          languageCode: politica.idioma,
+          components: [{ type: 'body', parameters: variables.map(v => ({ type: 'text', text: v })) }]
         })
       } else {
         r = await enviarTexto({ canal, telefono: c.telefono, texto, instancia })
@@ -270,7 +309,7 @@ export async function ejecutarFollowups() {
 
       // Persistir el followup como mensaje BOT (queda en el historial; no afecta el
       // reloj de silencio, que se mide desde el último mensaje del LEAD).
-      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto } })
+      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto: enviado } })
 
       // Registrar el followup ejecutado (idempotencia por ciclo + auditoría).
       await prisma.$executeRaw`
@@ -303,8 +342,7 @@ export async function ejecutarFollowups() {
 // los followups: ventana horaria, solo AUTO_CONSULTIVO, no archivados, cadencia anti-baneo.
 // Distinto del followup por silencio: aquí el disparo es la FECHA del compromiso, no el silencio.
 // ════════════════════════════════════════════════════════
-const PLANTILLA_COMPROMISO =
-  'Hola {{nombre}} 👋 ¿Cómo vas? Quedó algo pendiente de lo que conversamos — sin apuro, pero aquí estoy si quieres que lo cerremos juntos 😊'
+const PLANTILLA_COMPROMISO = FOLLOWUPS.default.compromiso
 
 const SQL_COMPROMISOS_VENCIDOS = `
   SELECT c.id AS commitment_id, c.lead_id AS "leadId", l.telefono,
@@ -341,22 +379,32 @@ export async function ejecutarRecordatoriosCompromiso() {
 
   let enviados = 0, errores = 0
   const canalPorTenant = new Map()
+  const datosPorLead = await datosComercialesPorLead(vencidos.map(c => c.leadId))
   for (const c of vencidos) {
-    const texto = interpolar(PLANTILLA_COMPROMISO, { nombre: c.nombre })
-    // El copy de compromiso es NEUTRO (no nombra producto ni vertical), así que sirve
-    // a cualquier tenant. Lo que sí debe ser del tenant es el NÚMERO por el que sale.
-    const { canal, instancia } = await canalDeTenant(c.tenantId || ACTIVE_TENANT, canalPorTenant)
+    if (!c.tenantId) continue
+    // La campaña puede afinar el recordatorio (config.followups.compromiso); el
+    // default es NEUTRO (no nombra producto ni vertical) y sirve a cualquiera.
+    const datos = datosPorLead.get(c.leadId) || {}
+    if (datos.tenantId !== c.tenantId) continue
+    const texto = interpolar((datos.followups && datos.followups.compromiso) || PLANTILLA_COMPROMISO, { nombre: c.nombre, producto: datos.producto, curso: datos.curso })
+    // Lo que sí debe ser del tenant es el NÚMERO por el que sale.
+    const { canal, instancia } = await canalDeTenant(c.tenantId, canalPorTenant)
     const transporte = transporteDe(canal)
     if (transporte === 'evolution' && !instancia) {
       console.warn(`[Compromiso] ⏭️ lead ${c.leadId} (${c.tenantId}) sin canal de salida → omitido.`)
       continue
     }
-    const politica = politicaEnvio(transporte, 'compromiso')
+    const politica = politicaEnvio(transporte, 'compromiso', c.tenantId === ACTIVE_TENANT ? process.env : {}, canal)
     if (politica.accion === 'omitir') continue
     try {
-      const r = politica.accion === 'plantilla'
-        ? await enviarPlantilla({ canal, telefono: c.telefono, templateName: politica.plantilla, languageCode: 'es',
-            components: [{ type: 'body', parameters: [{ type: 'text', text: primerNombre(c.nombre) || 'qué tal' }] }] })
+      const porPlantilla = politica.accion === 'plantilla'
+      const variables = [primerNombre(c.nombre) || 'qué tal']
+      // Por plantilla se guarda el texto APROBADO en Meta (mismo motivo que en ejecutarFollowups).
+      const enviado = porPlantilla ? textoDePlantilla('compromiso', variables, politica) : texto
+      const r = porPlantilla
+        ? await enviarPlantilla({ canal, telefono: c.telefono, templateName: politica.plantilla,
+            languageCode: politica.idioma,
+            components: [{ type: 'body', parameters: variables.map(v => ({ type: 'text', text: v })) }] })
         : await enviarTexto({ canal, telefono: c.telefono, texto, instancia })
       if (!r.ok) { errores++; continue }
 
@@ -365,7 +413,7 @@ export async function ejecutarRecordatoriosCompromiso() {
       await prisma.$executeRaw`
         UPDATE commitments SET reminder_sent = true, reminder_sent_at = now(), updated_at = now()
         WHERE id = ${c.commitment_id}::uuid`
-      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto } })
+      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto: enviado } })
 
       enviados++
       console.log(`[Compromiso] ✅ recordatorio a lead ${c.leadId} (commitment ${c.commitment_id})`)
@@ -462,4 +510,4 @@ export async function rescatarEscaladosHuerfanos() {
   }
 }
 
-export const FOLLOWUP_ENGINE_VERSION = 'v8_transporte_por_canal_ventana_24h'
+export const FOLLOWUP_ENGINE_VERSION = 'v9_followups_por_campana'

@@ -223,6 +223,8 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
 
   const [factSheet, setFactSheet] = useState<any>({})
   const [agente, setAgente] = useState<any>({})
+  const [baseVersion, setBaseVersion] = useState<number>(0)
+  const [loadedCampaignId, setLoadedCampaignId] = useState<number | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [flashFields, setFlashFields] = useState<Set<string>>(new Set())
@@ -230,12 +232,14 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
   const qc = useQueryClient()
 
   useEffect(() => {
-    if (configQ.data) {
+    if (configQ.data && (loadedCampaignId !== campaignId || !dirty)) {
+      setBaseVersion(configQ.data.version)
+      setLoadedCampaignId(campaignId)
       setFactSheet(configQ.data.factSheet || {})
       setAgente(configQ.data.agente || {})
       setDirty(false)
     }
-  }, [configQ.data])
+  }, [configQ.data, campaignId, loadedCampaignId, dirty])
 
   const setFs = (key: string, val: any) => { setFactSheet((p: any) => ({ ...p, [key]: val })); setDirty(true) }
   const setFsSub = (parent: string, key: string, val: any) => {
@@ -382,14 +386,18 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
     if (!campaignId) return
     setSaving(true)
     try {
-      await api.saveAgentConfig(campaignId, factSheet, agente)
+      await api.saveAgentConfig(campaignId, factSheet, agente, baseVersion)
       toast('✅ Configuración guardada en el cerebro del agente', 'success')
       setDirty(false)
       qc.invalidateQueries({ queryKey: ['agentConfig', campaignId] })
-    } catch { toast('Error al guardar', 'error') } finally { setSaving(false) }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('409')) { toast('La ficha cambió. Tus cambios siguen aquí; descarta para cargar la versión nueva.', 'error'); qc.invalidateQueries({ queryKey: ['agentConfig', campaignId] }) }
+      else toast('Error al guardar', 'error')
+    } finally { setSaving(false) }
   }
 
   const descartar = () => {
+    setBaseVersion(configQ.data?.version || 0)
     setFactSheet(configQ.data?.factSheet || {})
     setAgente(configQ.data?.agente || {})
     setDirty(false)
@@ -544,7 +552,7 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
                   </label>
                 </div>
                 <label className="ap-label">Texto Promocional
-                  <input type="text" className={fc('fs-precio')} value={factSheet.precio?.textoExacto || ''} onChange={e => setFsSub('precio', 'textoExacto', e.target.value)} placeholder="~S/ 757~ → S/ 457" />
+                  <input type="text" className={fc('fs-precio')} value={factSheet.precio?.textoExacto || ''} onChange={e => setFsSub('precio', 'textoExacto', e.target.value)} placeholder="Precio exacto publicado en la ficha" />
                 </label>
               </div>
 
@@ -554,7 +562,7 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
                   <textarea className={fc('fs-incluye')} rows={3} value={Array.isArray(factSheet.incluye) ? factSheet.incluye.join('\n') : ''} onChange={e => setFs('incluye', e.target.value.split('\n'))} placeholder="Beneficio 1&#10;Beneficio 2..." />
                 </label>
                 <label className="ap-label">FAQ — Objeciones comunes
-                  <textarea className={fc('fs-faqs')} rows={4} value={Array.isArray(factSheet.faqs) ? factSheet.faqs.join('\n') : ''} onChange={e => setFs('faqs', e.target.value.split('\n'))} placeholder="¿Dan certificado? Sí.&#10;¿Hay devoluciones? Sí, 7 días." />
+                  <textarea className={fc('fs-faqs')} rows={4} value={Array.isArray(factSheet.faqs) ? factSheet.faqs.join('\n') : ''} onChange={e => setFs('faqs', e.target.value.split('\n'))} placeholder="¿Dan certificado? Sí.&#10;Pregunta y respuesta según tu política vigente." />
                 </label>
               </div>
 

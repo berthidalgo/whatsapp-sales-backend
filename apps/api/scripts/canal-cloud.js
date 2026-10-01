@@ -39,7 +39,7 @@ const numero = valor('--numero')
 const aplicar = flag('--aplicar')
 
 function salir(msg) { console.error(`✖ ${msg}`); process.exit(1) }
-if (!tenantId) salir('falta --tenant (ej. hidata, bioayur)')
+if (!tenantId) salir('falta --tenant (identificador del cliente)')
 if (!phoneNumberId || !/^\d{8,20}$/.test(phoneNumberId)) salir('falta --phone-number-id (el ID numérico que muestra Meta, NO el teléfono)')
 
 const prisma = new PrismaClient({ log: ['error'] })

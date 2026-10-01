@@ -103,7 +103,7 @@ async function main() {
           state.current_stage || null, state.current_mode || null,
           JSON.stringify(state.slots_filled || {}),
           JSON.stringify(mensajes), JSON.stringify(traces), MOTIVO,
-          lead.tenant_id || 'peru_exporta'
+          lead.tenant_id
         ]
       )
 

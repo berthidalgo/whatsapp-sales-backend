@@ -1,0 +1,8 @@
+{
+  "default": {
+    "followup_2h": "Hola {{nombre}} 👋 Si te quedó alguna duda sobre {{producto}}, aquí estoy para ayudarte.",
+    "followup_24h": "Hola {{nombre}} 😊 ¿Quieres que retomemos lo de {{producto}}? Sin apuro, puedo ayudarte con tus dudas.",
+    "compromiso": "Hola {{nombre}} 👋 Quedó algo pendiente de lo que conversamos sobre {{producto}}. Si quieres retomarlo, aquí estoy."
+  },
+  "verticales": {}
+}

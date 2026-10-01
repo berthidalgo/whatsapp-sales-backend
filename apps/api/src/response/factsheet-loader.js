@@ -134,7 +134,7 @@ export function flattenFactSheet(config) {
   // tiene QUÉ regalar cuando el lead pide material o esquiva una pregunta
   // (reciprocidad). Si no existe, no aparece en el bloque y nada cambia.
   const temarioTexto = typeof fs.temarioResumen === 'string' ? fs.temarioResumen.trim() : ''
-  const casoExitoTexto = typeof fs.casoExito === 'string' ? fs.casoExito.trim() : ''
+  const casoExitoTexto = typeof (fs.casoExito || config?.pruebaSocial?.casoExito) === 'string' ? (fs.casoExito || config.pruebaSocial.casoExito).trim() : ''
   const faqsTexto = Array.isArray(fs.faqs) && fs.faqs.length
     ? fs.faqs.map(f => typeof f === 'string' ? f : `${f.p || ''} → ${f.r || ''}`).join(' | ')
     : ''
@@ -175,6 +175,7 @@ export function flattenFactSheet(config) {
   if (duracionTexto) lineas.push(`Duración: ${duracionTexto}`)
   if (metodosPagoTexto) lineas.push(`Métodos de pago: ${metodosPagoTexto}`)
   if (temarioTexto) lineas.push(`Temario resumido (compártelo si el lead pide el temario/material): ${temarioTexto}`)
+  if (config?.pruebaSocial?.cifraSocial) lineas.push('Prueba social documentada: '+config.pruebaSocial.cifraSocial)
   if (casoExitoTexto) lineas.push(`Caso de éxito real (úsalo si el lead duda o pide pruebas): ${casoExitoTexto}`)
   if (faqsTexto) lineas.push(`Preguntas frecuentes con su respuesta: ${faqsTexto}`)
   if (pildorasTexto) lineas.push(`Píldoras de valor (datos útiles para REGALAR uno a la vez cuando aporte): ${pildorasTexto}`)

@@ -1,0 +1,9 @@
+{
+  "activeTenant": "peru_exporta",
+  "defaultVertical": "exportacion",
+  "corsOrigins": [
+    "https://testing1-crm.vercel.app",
+    "https://peru-exporta-crm.vercel.app"
+  ],
+  "serviceName": "WhatsApp Sales ERP"
+}

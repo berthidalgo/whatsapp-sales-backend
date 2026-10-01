@@ -1,3 +1,4 @@
+import ts from 'typescript'
 // tests/anti-contaminacion-tenant.test.js — EL GUARDIÁN ANTI-CONTAMINACIÓN (jul 2026)
 //
 // POR QUÉ EXISTE (incidente 2026-07-23, peritaje forense):
@@ -33,10 +34,16 @@ const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
 // Quita comentarios: solo nos importa el CÓDIGO. Los comentarios SÍ pueden (y deben)
 // nombrar a Perú Exporta o BIOAYUR para explicar la historia de cada fix.
 function soloCodigo(fuente) {
-  return fuente
-    .replace(/\/\*[\s\S]*?\*\//g, '')   // bloque
-    .replace(/^\s*\/\/.*$/gm, '')       // línea completa
-    .replace(/\s\/\/.*$/gm, '')         // trailing
+  const ast=ts.createSourceFile('source.js',fuente,ts.ScriptTarget.Latest,true)
+  const rangos=new Map()
+  function visitar(n) {
+    for(const c of [...(ts.getLeadingCommentRanges(fuente,n.pos)||[]),...(ts.getTrailingCommentRanges(fuente,n.end)||[])]) rangos.set(c.pos,c)
+    ts.forEachChild(n,visitar)
+  }
+  visitar(ast)
+  let out=fuente
+  for(const c of [...rangos.values()].sort((a,b)=>b.pos-a.pos)) out=out.slice(0,c.pos)+out.slice(c.pos,c.end).replace(/[^\n\r]/g,' ')+out.slice(c.end)
+  return out
 }
 
 function listarJs(dir, acc = []) {
@@ -51,24 +58,21 @@ function listarJs(dir, acc = []) {
 // Los ÚNICOS lugares donde un cliente concreto puede nombrarse. Cada exención es una
 // decisión consciente, no un "lo dejamos pasar":
 //
-//   · brain/verticals/*        el manual de venta de cada negocio; su razón de ser ES la marca
+//   · brain/verticals/*        el manual de venta de cada negocio; su razón de ser ES la marca.
+//                              La prosa se interpola con el producto de la campaña en BD.
 //   · lib/tenant.js            el registro que mapea tenant → vertical
 //   · brain-evals-dataset.js   casos de prueba históricos de Perú Exporta (no corre en prod)
-//   · brain-judge.js           el juez de evals; evalúa contra la rúbrica de Perú Exporta.
-//                              DEUDA: al 3er cliente hay que parametrizarlo por vertical.
-//   · motor/followupEngine.js  PLANTILLAS_POR_VERTICAL: el copy sí nombra el producto, pero
-//                              está INDEXADO por vertical y se elige con el tenant del lead.
-//                              DEUDA: mudarlo a brain/verticals/ para que el motor quede limpio.
-//   · lib/assets.js            nombres de ARCHIVO de imágenes por cliente (precios-bioayur.png).
-//                              DEUDA: pasar a assets por tenant en BD.
 //   · server.js                la URL del CRM en la allowlist de CORS: infraestructura, no discurso.
+//
+// DEUDAS PAGADAS (F2 forense, ya no exentas — el barrido las vigila):
+//   · brain-judge.js           identidad + tenant por parámetros desde la campaña.
+//   · motor/followupEngine.js  plantillas genéricas + copy por campaña (config.followups).
+//   · lib/assets.js            ficha de la campaña primero, JSON legacy después.
+//   · api/sitio-publico.js     datos del negocio en data/sitio-publico.json.
 const EXENTOS = [
   ['brain', 'verticals'],
   ['lib', 'tenant.js'],
   ['brain', 'brain-evals-dataset.js'],
-  ['brain', 'brain-judge.js'],
-  ['motor', 'followupEngine.js'],
-  ['lib', 'assets.js'],
   ['server.js']
 ]
 

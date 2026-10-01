@@ -77,12 +77,12 @@ const VISION_SCHEMA = {
       description: 'true SOLO si la imagen es un comprobante/constancia de pago real (Yape, Plin, transferencia, depósito, voucher bancario). false si es una foto cualquiera, meme, captura no relacionada, screenshot de otra cosa, etc.'
     },
     metodo: { type: 'string', description: 'Medio de pago detectado: "Yape", "Plin", "Transferencia", "Depósito", "Tarjeta", o "" si no se distingue.' },
-    monto: { type: 'string', description: 'Monto del pago tal cual aparece, con moneda. Ej: "S/ 1,500.00". "" si no se ve.' },
+    monto: { type: 'string', description: 'Monto del pago tal cual aparece, con moneda. Conserva el formato del comprobante. "" si no se ve.' },
     fecha: { type: 'string', description: 'Fecha (y hora si aparece) de la operación tal cual. "" si no se ve.' },
     numero_operacion: { type: 'string', description: 'Código/número de operación o constancia. "" si no aparece.' },
     nombre_origen: { type: 'string', description: 'Nombre de quien ENVÍA el pago, si aparece. "" si no.' },
     nombre_destino: { type: 'string', description: 'Nombre de quien RECIBE el pago (titular de la cuenta destino), si aparece. Importante para validar que el pago fue a la cuenta correcta. "" si no.' },
-    resumen: { type: 'string', description: 'Resumen en UNA línea para el vendedor. Si es comprobante: "Yape S/1,500 a Cesar Laines, op 12345678, 13/jun". Si NO es comprobante: describe brevemente qué es la imagen ("parece una foto de un producto", "meme", etc).' }
+    resumen: { type: 'string', description: 'Resumen en UNA línea para el vendedor. Si es comprobante: "[método] [monto] a [destinatario], [operación], [fecha]". Si NO es comprobante: describe brevemente qué es la imagen ("parece una foto de un producto", "meme", etc).' }
   },
   required: ['es_comprobante', 'resumen']
 }

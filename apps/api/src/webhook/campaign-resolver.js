@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import prisma from '../db/prisma.js'
+import { normalizarTrigger } from '../config/campaign-schema.js'
 
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 const DEFAULT_TENANT_ID = ACTIVE_TENANT   // switch de tenant (jul 2026): perilla ACTIVE_TENANT en Render
@@ -32,14 +33,7 @@ const DEFAULT_TENANT_ID = ACTIVE_TENANT   // switch de tenant (jul 2026): perill
 // Normalización (IDÉNTICA a src/routes/campaigns.js para coherencia)
 // minúsculas + sin tildes (NFD) + sin símbolos
 // ════════════════════════════════════════════════════════
-export function normalizeText(s) {
-  if (!s || typeof s !== 'string') return ''
-  return s
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, '')
-    .trim()
-}
+export const normalizeText = normalizarTrigger
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — resolveCampaign()

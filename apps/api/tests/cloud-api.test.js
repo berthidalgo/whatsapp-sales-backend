@@ -118,7 +118,7 @@ test('ventana 24 h: con Meta, fuera de ventana solo sale con plantilla; con Evol
   assert.deepEqual(politicaEnvio('evolution', 'followup_24h', {}), { accion: 'texto' })
   assert.deepEqual(politicaEnvio('cloud', 'followup_2h', {}), { accion: 'texto' })
   assert.equal(politicaEnvio('cloud', 'followup_24h', {}).accion, 'omitir')
-  assert.deepEqual(politicaEnvio('cloud', 'followup_24h', { CLOUD_TEMPLATE_FOLLOWUP_24H: 'seguimiento' }), { accion: 'plantilla', plantilla: 'seguimiento' })
+  assert.deepEqual(politicaEnvio('cloud', 'followup_24h', { CLOUD_TEMPLATE_FOLLOWUP_24H: 'seguimiento' }), { accion: 'plantilla', plantilla: 'seguimiento', idioma: 'es', cuerpo: null })
   assert.equal(politicaEnvio('cloud', 'compromiso', {}).accion, 'omitir')
 })
 

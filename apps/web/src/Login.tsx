@@ -1,3 +1,4 @@
+import producto from './config/producto.json'
 import { useEffect, useState } from 'react'
 import { api, saveSession, type VendorLite } from './api'
 import type { AuthUser } from '@shared/types'
@@ -31,7 +32,7 @@ export default function Login({ onLogin }: { onLogin: (u: AuthUser) => void }) {
     <div className="login-wrap">
       <div className="login-card">
         <div className="login-logo">H</div>
-        <h1 className="login-title">Hidata — Sales OS</h1>
+        <h1 className="login-title">{producto.titulo}</h1>
 
         {!sel ? (
           <>

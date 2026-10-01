@@ -33,7 +33,8 @@ try {
 
 const args = process.argv.slice(2)
 const valor = (k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : null }
-const tenantId = valor('--tenant') || process.env.ACTIVE_TENANT || 'bioayur'
+const tenantId = valor('--tenant') || process.env.ACTIVE_TENANT
+if (!tenantId) throw new Error('Usa --tenant o ACTIVE_TENANT')
 const mensaje = valor('--mensaje') || 'Hola, vi su anuncio y quiero más información 😊'
 const solo = valor('--solo')
 const modelos = (valor('--modelos') || '').split(',').map(x => x.trim()).filter(Boolean)

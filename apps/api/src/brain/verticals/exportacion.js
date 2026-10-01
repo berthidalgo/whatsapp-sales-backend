@@ -61,7 +61,7 @@ export const RESPONSE_SCHEMA = {
     },
     como_cerrarlo: {
       type: 'string',
-      description: 'SOLO si debe_escalar_humano=true: inteligencia comercial para el VENDEDOR humano que tomará el lead (esto NO se le envía al lead, es un briefing interno). En 2-4 frases dale la JUGADA de cierre usando la data REAL de ESTA conversación: (1) la palanca/motivación principal del lead, (2) el ángulo que más le pega, (3) qué objeción o cuidado vigilar, (4) el siguiente paso concreto. Aterrizado a este lead específico, NUNCA genérico. Ej: "Caliente y decidido, quiere empezar este mes. Entra por su urgencia y cierra la inscripción ya. Tiene RUC = listo para operar, úsalo como prueba de que puede arrancar rápido. Ojo: sin experiencia, cálmalo con el caso del alumno de 78 años." Vacío si no escalas.'
+      description: 'SOLO si debe_escalar_humano=true: inteligencia comercial para el VENDEDOR humano que tomará el lead (esto NO se le envía al lead, es un briefing interno). En 2-4 frases dale la JUGADA de cierre usando la data REAL de ESTA conversación: (1) la palanca/motivación principal del lead, (2) el ángulo que más le pega, (3) qué objeción o cuidado vigilar, (4) el siguiente paso concreto. Aterrizado a este lead específico, NUNCA genérico. Ej: "Caliente y decidido, quiere empezar este mes. Entra por su urgencia y cierra la inscripción ya. Tiene RUC = listo para operar, úsalo como prueba de que puede arrancar rápido. Ojo: sin experiencia, cálmalo con el caso de éxito de la ficha." Vacío si no escalas.'
     },
     temperatura_lead: {
       type: 'string',
@@ -72,7 +72,7 @@ export const RESPONSE_SCHEMA = {
       type: 'object',
       description: 'Datos que el lead reveló EXPLÍCITAMENTE en la conversación. Regla de oro: si tienes dudas de a qué slot pertenece algo, NO lo pongas. Solo incluye un slot si el lead lo dijo CLARAMENTE y encaja en su definición exacta. Deja fuera (no incluyas la clave) cualquier slot que el lead no haya dado.',
       properties: {
-        nombre: { type: 'string', description: 'El nombre propio del lead. Ej: "Joan", "María". NO un saludo ni una empresa.' },
+        nombre: { type: 'string', description: 'El nombre propio del lead. Ej: "[nombre declarado]". NO un saludo ni una empresa.' },
         producto: { type: 'string', description: 'El PRODUCTO físico que el lead QUIERE EXPORTAR (peruano, rumbo al mundo). Ej: "palta", "café", "textiles". NUNCA pongas aquí su situación de empresa ("con RUC"), su experiencia, ni nada que no sea un producto concreto. REGLA CRÍTICA: si en tu mensaje RECHAZASTE o redirigiste lo que el lead mencionó (quería IMPORTAR, o es un producto no peruano, ej "zapatillas de china"), ese producto NO VA AL SLOT — el slot solo guarda lo que sirve para el programa; un producto descartado por ti mismo dejaría el estado mintiendo. Si el lead NO nombró un producto exportable, OMITE esta clave por completo. JAMÁS escribas explicaciones como valor (mal: "vacío, no nombró producto"); si no hay producto, la clave simplemente no aparece.' },
         empresa: { type: 'string', description: 'La situación de empresa que el LEAD DECLARÓ sobre SÍ MISMO. Ej: "con RUC", "empresa constituida", "persona natural", "sin empresa". Aquí SÍ va "con RUC". ⛔ CRÍTICO: SOLO si el LEAD dijo explícitamente su situación. Si TÚ mencionaste algo como "puedes empezar como persona natural" (eso es INFORMACIÓN que tú diste, no el dato del lead), o si el lead ESQUIVÓ tu pregunta de empresa con otra pregunta, entonces NO conoces su situación → OMITE esta clave por completo. Jamás llenes este slot con tus propias palabras ni asumas "persona natural" por defecto.' },
         experiencia: { type: 'string', description: 'Nivel de experiencia exportando. Ej: "primera vez", "ya exporta", "empezando desde cero".' },
@@ -152,7 +152,7 @@ Estos son los datos REALES del programa — preséntalos todos de forma clara, p
 """
 __FICHA__
 """
-Reglas del M4: usa SOLO estos datos (nombre del programa, precio, qué incluye, fechas, modalidad, métodos de pago). NUNCA inventes el NOMBRE del programa, módulos, fechas ni cifras que no estén arriba — si la ficha no trae nombre, di "nuestro programa", jamás le pongas un nombre tú. Si la ficha trae precio regular + anticipado, muéstralos con el regular tachado (ej: "~S/ 757~ → S/ 457") para resaltar el ahorro. Si solo hay un precio, di ese, sin inventar un "regular" más alto.`,
+Reglas del M4: usa SOLO estos datos (nombre del programa, precio, qué incluye, fechas, modalidad, métodos de pago). NUNCA inventes el NOMBRE del programa, módulos, fechas ni cifras que no estén arriba — si la ficha no trae nombre, di "nuestro programa", jamás le pongas un nombre tú. Si la ficha trae precio regular + anticipado, muéstralos con el regular tachado (ej: "[precio anterior publicado] → [precio vigente publicado]") para resaltar el ahorro. Si solo hay un precio, di ese, sin inventar un "regular" más alto.`,
 
   call_scheduling: `**MOMENTO 5 — COORDINAR LA LLAMADA** (recién AQUÍ aparece la llamada)
 Cuando el lead ya reaccionó al programa. Propones la llamada en primera persona y como MICRO-COMPROMISO (corta y sin presión, fácil de decir que sí):
@@ -226,13 +226,25 @@ ${lineas.join('\n')}`
 export function construirSystemPrompt({ campaignConfig, fs, vendorNombre, estadoLead }) {
   const agente = campaignConfig?.agente || {}
   const comportamiento = campaignConfig?.comportamiento || {}
-  const nombreAgente = agente.nombre || 'Jhon'
+  // Fallback NEUTRO (F2 forense): sin identidad en el config, el bot habla
+  // genérico. La prueba social también sale del config (pruebaSocial); los
+  // valores históricos de la primera campaña viven en su ficha en BD, no aquí.
+  const nombreAgente = agente.nombre || vendorNombre || 'asesor'
   // Nombre de la empresa: sale del config (agente.empresa), editable por el
   // vendedor en su dashboard — ya NO cosido en el prompt. Fallback genérico si
   // la campaña no lo trae (así el bot nunca dice un nombre de empresa ajeno).
   const nombreEmpresa = agente.empresa || 'nuestro equipo'
   const rolAgente = agente.rol || `Asesor de ${nombreEmpresa}`
   const agentGoal = comportamiento.agentGoal || 'AGENDAR_LLAMADA'
+  const prueba = (campaignConfig?.pruebaSocial && typeof campaignConfig.pruebaSocial === 'object')
+    ? campaignConfig.pruebaSocial
+    : {}
+  const casoExitoRef = typeof prueba.casoExito === 'string' && prueba.casoExito.trim()
+    ? prueba.casoExito.trim()
+    : 'el caso de éxito de la ficha'
+  const cifraSocialRef = typeof prueba.cifraSocial === 'string' && prueba.cifraSocial.trim()
+    ? prueba.cifraSocial.trim()
+    : 'nuestra prueba social'
 
   // La hora ("AHORA MISMO"), la memoria episódica del lead que vuelve y el historial
   // de cierre (v5_5) NO van aquí: cambian con cada turno y romperían la caché de prefijo
@@ -267,7 +279,7 @@ NO menciones la palabra "llamada" ni propongas agendar NADA en los Momentos 1, 2
 # LA TERCERA REGLA MÁS IMPORTANTE — PROHIBIDO EL DISCO RAYADO
 ${ANTI_DISCO_RAYADO}
 - Lo mismo aplica a las frases comodín: "lo vemos en la llamada" se dice UNA vez; a la segunda, da algo concreto de la ficha o reconoce de frente que ese detalle no lo tienes a la mano.
-- ⛔ MUNICIÓN DE ESTE PROGRAMA: el caso de éxito (el alumno de 78 años) y la prueba social ("ya formamos 1,300 exportadores") son de UN SOLO TIRO. Si YA los usaste, cambia de munición (el método paso a paso, el acompañamiento, las grabaciones, empezar con poca inversión). Si YA ofreciste la llamada con "mañana en la mañana o en la tarde", la próxima NO uses las mismas palabras — varía el día/la hora/el marco ("¿te llamo hoy mismo apenas tengas un ratito?", "¿un toque al mediodía?").
+- ⛔ MUNICIÓN DE ESTE PROGRAMA: el caso de éxito (${casoExitoRef}) y la prueba social ("${cifraSocialRef}") son de UN SOLO TIRO. Si YA los usaste, cambia de munición (el método paso a paso, el acompañamiento, las grabaciones, empezar con poca inversión). Si YA ofreciste la llamada con "mañana en la mañana o en la tarde", la próxima NO uses las mismas palabras — varía el día/la hora/el marco ("¿te llamo hoy mismo apenas tengas un ratito?", "¿un toque al mediodía?").
 
 # EL CIERRE CONSULTIVO — ERES UN CLOSER, NO UN TOMA-PEDIDOS (del Momento 4 en adelante)
 Esto es una venta consultiva de ticket alto: el lead no decide por impulso, decide por confianza. ⭐ TU META ES SACAR LA CITA: agendar la llamada donde el vendedor HUMANO cierra la venta. TODO lo que haces (resolver dudas, dar valor, prueba social, resolver objeciones) es para LLEVAR al lead a esa cita — NUNCA pierdes de vista esa meta ni te conformas con preguntas abiertas que no la acercan. Avanzas con intención hacia la llamada, sin rogar y sin presionar. FRONTERA SAGRADA: tú cierras LA CITA (la llamada), el humano cierra la plata. Jamás pidas pago ni des cuentas; al detectar pago/caliente, escala.
@@ -337,7 +349,7 @@ Recuerda lo esencial, ${nombreAgente}: una pregunta a la vez, la llamada solo de
 // ════════════════════════════════════════════════════════
 export function construirSystemPromptCompacto({ campaignConfig, fs, vendorNombre, estadoLead }) {
   const agente = campaignConfig?.agente || {}
-  const nombreAgente = agente.nombre || 'Jhon'
+  const nombreAgente = agente.nombre || vendorNombre || 'asesor'
   const nombreEmpresa = agente.empresa || 'nuestro equipo'
   const rolAgente = agente.rol || `Asesor de ${nombreEmpresa}`
   const ficha = fs?.factSheetBloque || '(sin ficha exacta; presenta general, sin inventar precio ni fechas)'

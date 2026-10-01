@@ -1,3 +1,4 @@
+import producto from './config/producto.json'
 // Cliente HTTP fino del front. Adjunta el JWT en cada request y maneja la sesión.
 // Tipado contra el contrato compartido (@shared/types) = una sola fuente de verdad.
 import type {
@@ -5,8 +6,8 @@ import type {
 } from '@shared/types'
 
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3999'
-const TOKEN_KEY = 'hidata_token'
-const USER_KEY = 'hidata_user'
+const TOKEN_KEY = producto.tokenKey
+const USER_KEY = producto.userKey
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -57,8 +58,8 @@ export const api = {
   leads: () => req<LeadListItem[]>('/v2/leads'),
   campaigns: () => req<CampaignLite[]>('/v2/campaigns'),
   agentConfig: (campaignId?: number) => req<AgentConfig>(`/v2/agent-config${campaignId ? `?campaignId=${campaignId}` : ''}`),
-  saveAgentConfig: (campaignId: number, factSheet: any, agente: any) =>
-    req<{ ok: true; campaignId: number }>('/v2/agent-config', { method: 'PUT', body: JSON.stringify({ campaignId, factSheet, agente }) }),
+  saveAgentConfig: (campaignId: number, factSheet: any, agente: any, version: number) =>
+    req<{ ok: true; campaignId: number }>('/v2/agent-config', { method: 'PUT', body: JSON.stringify({ campaignId, factSheet, agente, version }) }),
   flowCopilot: (campaignId: number, mensaje: string, historial: { rol: string; texto: string }[]) =>
     req<CopilotResponse>('/v2/flow/copilot', { method: 'POST', body: JSON.stringify({ campaignId, mensaje, historial }) }),
   transcribe: (audioBase64: string, mimeType: string) =>

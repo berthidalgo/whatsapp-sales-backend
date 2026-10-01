@@ -61,11 +61,11 @@ test('prompt colágeno: identidad BIOAYUR + reglas clave del .md', () => {
   assert.match(p, /EL PRECIO NO EXISTE HASTA EL MOMENTO 4/)          // espejo de "la llamada no existe hasta M5"
   assert.match(p, /PROHIBIDO "CURAR"/)                                // regla legal DIGEMID
   assert.match(p, /apoya.*favorece.*contribuye/i)                     // lenguaje permitido
-  assert.match(p, /CONTRAENTREGA/i)                                   // modelo de pago
-  assert.match(p, /piel.*energía.*articulaciones/is)                  // el riel del dolor
-  assert.match(p, /pack de 3/i)                                       // el ancla del cierre
-  assert.match(p, /UNA PREGUNTA A LA VEZ/)                            // regla universal heredada
-  assert.match(p, /PROHIBIDO EL DISCO RAYADO/)                        // regla universal heredada
+  assert.match(p, /Pago, cobertura y plazos SOLO de la ficha/)                                   // modelo de pago
+  assert.match(p, /objetivos respaldados por la ficha/)                  // el riel del dolor
+  assert.match(p, /No asumas número de envases/)                                       // el ancla del cierre
+  assert.match(p, /UNA sola pregunta por mensaje/)                            // regla universal heredada
+  assert.match(p, /NO la repitas/)                        // regla universal heredada
   assert.match(p, /1 envase S\/139/)                                  // la ficha real inyectada en M4
 })
 

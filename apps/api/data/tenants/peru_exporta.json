@@ -1,0 +1,164 @@
+{
+  "_nota": "Ficha PERÚ EXPORTA (F3 forense). Espejo de prisma/seed.cjs: todo dato que estaba en ese archivo vive aquí. configFuente=dashboard en las 3 campañas: el seed NUNCA pisa el config en BD (la ficha la lleva el equipo por CRM); solo crea lo que falta y agrega triggers ausentes. Los steps solo se crean con la campaña nueva, jamás se reescriben.",
+  "tenant": {
+    "tenantId": "peru_exporta",
+    "displayName": "Perú Exporta TV",
+    "numVendedoresPagados": 3,
+    "estadoSuscripcion": "active",
+    "notas": "Edtech de exportación (vertical exportacion). Programas MPX / E1K / CCI."
+  },
+  "vendors": [
+    {
+      "nombre": "Joan",
+      "telefono": "51924104066",
+      "role": "ADMIN"
+    },
+    {
+      "nombre": "Cristina",
+      "telefono": "51900000002",
+      "role": "VENDOR"
+    },
+    {
+      "nombre": "Francisco",
+      "telefono": "51900000003",
+      "role": "VENDOR"
+    }
+  ],
+  "campaigns": [
+    {
+      "slug": "MPX",
+      "nombre": "Mi Primera Exportación",
+      "activa": true,
+      "vendorTelefono": "51900000002",
+      "configFuente": "dashboard",
+      "config": {
+        "vertical": "exportacion",
+        "agente": {
+          "nombre": "Jhon",
+          "empresa": "Perú Exporta TV",
+          "rol": "asesor de exportación"
+        },
+        "pruebaSocial": {
+          "casoExito": "el caso del alumno de 78 años",
+          "cifraSocial": "ya formamos 1,300 exportadores"
+        },
+        "factSheet": {
+          "propuestaValor": "Mi Primera Exportación",
+          "reglasOro": [
+            "La ficha histórica está incompleta: confirma precio, fechas y condiciones con el equipo antes de ofrecerlos. No reutilices las fechas del guion histórico como vigentes."
+          ]
+        }
+      },
+      "triggers": [
+        "mi primera exportacion",
+        "mpx",
+        "primera expo",
+        "quiero exportar",
+        "informacion del curso"
+      ],
+      "steps": [
+        {
+          "tipo": "MSG",
+          "mensaje": "Hola 🙋🏽‍♀️ te saluda Perú Exporta TV 🇵🇪\n\nDéjame tu nombre y edad para poder brindarte mayor información\n¿Tienes algún producto en mente que te gustaría exportar o recién estás explorando? 👇"
+        },
+        {
+          "tipo": "MSG",
+          "mensaje": "Muchas gracias.\nPara orientarte mejor, coméntame:\n\n👉 ¿Ya tienes experiencia exportando o estás empezando desde cero?"
+        },
+        {
+          "tipo": "MSG",
+          "mensaje": "Genial 🙌 entonces este programa es justo para ti.\n\nMI PRIMERA EXPORTACIÓN está pensado para personas que nunca han exportado y quieren hacerlo de forma ordenada, sin improvisar.\n\n📆 Inicio: 14 de Abril 2026 · Duración 3 meses · Online\n⏰ 2 sesiones por semana: martes y jueves\n⏰ Horario: 8:30 pm – 10:00 pm\n📡 Transmisión vía Zoom (todas las sesiones son grabadas)\n\n🔥 Precio de apertura\n💰 INVERSIÓN: 1,500 soles\n\n¿Te gustaría conocer el temario completo?"
+        },
+        {
+          "tipo": "NOTIFY",
+          "mensaje": "🔔 Nuevo lead en MPX\n📱 Teléfono: {{telefono}}\n💬 Historial adjunto\n\nContactar hoy 👆"
+        },
+        {
+          "tipo": "FOLLOWUP",
+          "followupHrs": 2,
+          "mensaje": "Hola 😊\nPara ayudarte mejor, coméntame:\n¿Tienes algún producto que te gustaría exportar o solo estás explorando la idea?"
+        }
+      ]
+    },
+    {
+      "slug": "E1K",
+      "nombre": "Exporta 1K",
+      "activa": true,
+      "vendorTelefono": "51924104066",
+      "configFuente": "dashboard",
+      "config": {
+        "vertical": "exportacion",
+        "agente": {
+          "nombre": "Joan",
+          "empresa": "Perú Exporta TV",
+          "rol": "asesor de exportación"
+        },
+        "factSheet": {
+          "propuestaValor": "Exporta 1K",
+          "reglasOro": [
+            "La ficha histórica está incompleta: confirma precio, fechas y condiciones con el equipo antes de ofrecerlos. No reutilices las fechas del guion histórico como vigentes."
+          ]
+        }
+      },
+      "triggers": [
+        "exporta 1k",
+        "e1k",
+        "mil dolares exportando"
+      ],
+      "steps": [
+        {
+          "tipo": "MSG",
+          "mensaje": "¡Hola! 👋 Te saluda Perú Exporta TV 🇵🇪\n\n¿Cuéntame, ya tienes experiencia exportando o estás empezando?"
+        },
+        {
+          "tipo": "NOTIFY",
+          "mensaje": "🔔 Nuevo lead en E1K\n📱 Teléfono: {{telefono}}\n\nContactar hoy 👆"
+        },
+        {
+          "tipo": "FOLLOWUP",
+          "followupHrs": 3,
+          "mensaje": "Hola 😊 ¿Pudiste revisar la información sobre Exporta 1K?\n¿Tienes alguna consulta?"
+        }
+      ]
+    },
+    {
+      "slug": "CCI",
+      "nombre": "Comercio Internacional",
+      "activa": false,
+      "vendorTelefono": "51900000003",
+      "configFuente": "dashboard",
+      "config": {
+        "vertical": "exportacion",
+        "agente": {
+          "nombre": "Francisco",
+          "empresa": "Perú Exporta TV",
+          "rol": "asesor de exportación"
+        },
+        "factSheet": {
+          "propuestaValor": "Comercio Internacional",
+          "reglasOro": [
+            "La ficha histórica está incompleta: confirma precio, fechas y condiciones con el equipo antes de ofrecerlos. No reutilices las fechas del guion histórico como vigentes."
+          ]
+        }
+      },
+      "triggers": [
+        "comercio internacional",
+        "cci"
+      ],
+      "steps": [
+        {
+          "tipo": "MSG",
+          "mensaje": "Hola 🙋 te saluda Perú Exporta TV 🇵🇪\n\nBienvenido al Curso de Comercio Internacional.\n\n¿Cuéntame, cuál es tu objetivo principal?"
+        },
+        {
+          "tipo": "NOTIFY",
+          "mensaje": "🔔 Nuevo lead en CCI\n📱 Teléfono: {{telefono}}\n\nContactar hoy 👆"
+        }
+      ]
+    }
+  ],
+  "gateMarcas": [
+    "Perú Exporta",
+    "Peru Exporta"
+  ]
+}

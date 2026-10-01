@@ -3,6 +3,7 @@
 // Sprint 3: + endpoint /debug/brain-test (banco de pruebas del cerebro, aislado)
 
 import 'dotenv/config'
+import { runtime } from './config/runtime.js'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -27,7 +28,7 @@ import { loginVendor, getVendorNames, cambiarPin } from './routes/auth.js'
 
 // ── Hito 1 (Fase Frontend): contrato v2 del Inbox + guard JWT ──
 import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
-import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2 } from './api/inbox-actions.js'
+import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2, reabrirV2 } from './api/inbox-actions.js'
 import { listCampaignsV2, getAgentConfigV2, saveAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
 import { paginaInicio, paginaPrivacidad } from './api/sitio-publico.js'
 import { verifyJwt, requireAdmin, scopeWhere } from './lib/auth-guard.js'
@@ -70,10 +71,7 @@ registrarJsonConCuerpoCrudo(app)
 // solo se permite FUERA de producción (en prod un dev no debe pegarle con un token vivo).
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RENDER
 const corsFromEnv = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
-const corsBase = corsFromEnv.length ? corsFromEnv : [
-  'https://testing1-crm.vercel.app',
-  'https://peru-exporta-crm.vercel.app',
-]
+const corsBase = corsFromEnv.length ? corsFromEnv : runtime.corsOrigins
 const corsOrigins = IS_PROD ? corsBase : [...corsBase, 'http://localhost:5173', 'http://localhost:3000']
 await app.register(cors, {
   origin: corsOrigins,
@@ -125,7 +123,7 @@ if (SOLO_LECTURA) {
 // Así cualquier monitor ve si el bot tiene con qué pensar, no solo si Node está vivo.
 app.get('/health', async () => ({
   status: 'ok',
-  service: 'Hidata — WhatsApp Sales ERP',
+  service: runtime.serviceName,
   version: '7.1.0',
   commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
   cerebro: resumenSalud(),
@@ -173,6 +171,34 @@ async function brainHealthHandler(req, reply) {
 app.get('/debug/brain-health', { preHandler: [verifyJwt, requireAdmin] }, brainHealthHandler)
 app.post('/debug/brain-health', { preHandler: [verifyJwt, requireAdmin] }, brainHealthHandler)
 
+// ── Campaña para los endpoints debug (F2 forense) ──
+// Sin slug (o con uno inexistente) se usa la ACTIVA del tenant, no un literal
+// histórico. La identidad del juez/cerebro sale de la ficha, no del código.
+async function campanaParaDebug(campaignSlug, tenantId) {
+  if (!tenantId) throw Object.assign(new Error('tenant requerido'), { statusCode: 403 })
+  if (campaignSlug) {
+    const c = await prisma.campaign.findFirst({
+      where: { slug: campaignSlug, tenantId },
+      select: { config: true, nombre: true, slug: true }
+    })
+    if (!c) throw Object.assign(new Error('campaña no encontrada'), { statusCode: 404 })
+    return c
+  }
+  return prisma.campaign.findFirst({
+    where: { tenantId, activa: true },
+    orderBy: { id: 'asc' },
+    select: { config: true, nombre: true, slug: true }
+  })
+}
+
+function identidadDeConfig(config) {
+  const agente = (config && typeof config === 'object' && config.agente) || {}
+  return {
+    nombre: (agente.nombre && String(agente.nombre).trim()) || 'asesor',
+    empresa: (agente.empresa && String(agente.empresa).trim()) || 'la empresa'
+  }
+}
+
 // ── Debug — Brain test (Sprint 3) — CEREBRO UNIFICADO AISLADO ────
 // Prueba el cerebro nuevo SIN tocar el pipeline real ni ningún lead.
 // Le mandas una conversación y devuelve qué responde el cerebro.
@@ -182,7 +208,8 @@ app.post('/debug/brain-health', { preHandler: [verifyJwt, requireAdmin] }, brain
 //     "mensajeActual": "string (requerido)",
 //     "historial": [ { "rol": "lead"|"agente", "texto": "..." } ],
 //     "estadoLead": { "stage": "presenting", "slots": { "nombre": "Joan" } },
-//     "campaignSlug": "MPX"   (carga el factSheet de esa campaña desde la BD)
+//     "campaignSlug": "MPX"   (carga el factSheet de esa campaña desde la BD;
+//                    sin slug usa la activa del tenant)
 //   }
 // ════════════════════════════════════════════════════════════════
 app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => {
@@ -192,7 +219,7 @@ app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (
       mensajeActual,
       historial = [],
       estadoLead = {},
-      campaignSlug = 'MPX',
+      campaignSlug = null,
       campaignConfig = null
     } = req.body || {}
 
@@ -205,28 +232,28 @@ app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (
           historial: [
             { rol: 'lead', texto: 'Hola, info de cursos de exportación' },
             { rol: 'agente', texto: 'Perfecto, ¿tu nombre y producto?' },
-            { rol: 'lead', texto: 'Joan, con RUC' }
+            { rol: 'lead', texto: 'Mi nombre, con empresa' }
           ],
-          estadoLead: { stage: 'presenting', slots: { nombre: 'Joan', empresa: 'con RUC' } },
-          campaignSlug: 'MPX'
+          estadoLead: { stage: 'presenting', slots: { nombre: 'Mi nombre', empresa: 'con RUC' } },
+          campaignSlug: '[slug de tu campaña]'
         }
       })
     }
 
-    // Cargar el config de la campaña desde la BD (o usar el que pasen directo)
+    // Cargar el config de la campaña desde la BD (o usar el que pasen directo).
+    // Tenant del TOKEN: sin esto el admin de un cliente cargaba la ficha de otro
+    // (los slugs son únicos POR tenant, no globales).
     let config = campaignConfig
-    if (!config && campaignSlug) {
-      // Tenant del TOKEN: sin esto el admin de un cliente cargaba la ficha de otro
-      // (los slugs son únicos POR tenant, no globales).
-      const campaign = await prisma.campaign.findFirst({
-        where: { slug: campaignSlug, tenantId: req.user?.tenantId },
-        select: { config: true, nombre: true, slug: true }
-      })
+    let slugUsado = campaignSlug || null
+    if (!config) {
+      const campaign = await campanaParaDebug(campaignSlug, req.user?.tenantId)
       config = campaign?.config || null
+      slugUsado = campaign?.slug || null
       if (!config) {
-        console.warn(`[BrainTest] Campaña ${campaignSlug} sin config en BD — el cerebro hablará genérico`)
+        console.warn(`[BrainTest] Campaña ${slugUsado || campaignSlug} sin config en BD — el cerebro hablará genérico`)
       }
     }
+    const identidad = identidadDeConfig(config)
 
     // Llamar al cerebro REAL
     const result = await pensarYResponder({
@@ -234,7 +261,7 @@ app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (
       historial,
       estadoLead: { ...estadoLead, tenantId: req.user?.tenantId },
       campaignConfig: config,
-      vendorNombre: estadoLead?.vendorNombre || 'Cristina'
+      vendorNombre: estadoLead?.vendorNombre || identidad.nombre
     })
 
     console.log(`[BrainTest] ${summarizeBrainResult(result)}`)
@@ -256,7 +283,7 @@ app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (
       cierre: result.cierre || null,           // closer consultivo (v5_5): {ofrecio_llamada, objecion_trabajada, palanca}
       guardrail_flags: result.guardrail_flags,
       audit: result.audit,
-      campaign_usada: config ? campaignSlug : 'NINGUNA (genérico)',
+      campaign_usada: config ? (slugUsado || campaignSlug) : 'NINGUNA (genérico)',
       total_ms: Date.now() - startTime
     })
 
@@ -277,7 +304,7 @@ app.post('/debug/brain-test', { preHandler: [verifyJwt, requireAdmin] }, async (
 app.post('/debug/brain-evals', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => {
   const startTime = Date.now()
   const {
-    campaignSlug = 'MPX',
+    campaignSlug = null,
     idFilter = null,
     categoryFilter = null,
     // ── Palancas de banco (Sprint A.2) — domar gemini-3.5 SIN tocar el bot vivo ──
@@ -291,12 +318,10 @@ app.post('/debug/brain-evals', { preHandler: [verifyJwt, requireAdmin] }, async 
   } = req.body || {}
 
   try {
-    let campaignConfig = null
-    const campaign = await prisma.campaign.findFirst({
-      where: { slug: campaignSlug, tenantId: req.user?.tenantId },
-      select: { config: true, slug: true }
-    })
-    campaignConfig = campaign?.config || null
+    const campaign = await campanaParaDebug(campaignSlug, req.user?.tenantId)
+    const campaignConfig = campaign?.config || null
+    const slugUsado = campaign?.slug || campaignSlug
+    const identidad = identidadDeConfig(campaignConfig)
     // La ficha REAL aplanada → se la pasamos al juez para que cace datos inventados
     // (banco v2). Sin esto, el juez no sabía qué precio/temario/fechas son legítimos.
     const fichaBloque = flattenFactSheet(campaignConfig)?.factSheetBloque || null
@@ -315,7 +340,7 @@ app.post('/debug/brain-evals', { preHandler: [verifyJwt, requireAdmin] }, async 
 
     for (let i = 0; i < casos.length; i += CHUNK_SIZE) {
       const chunk = casos.slice(i, i + CHUNK_SIZE)
-      const chunkResults = await Promise.all(chunk.map(caso => correrUnCasoEval(caso, campaignConfig, { overrides, fichaBloque })))
+      const chunkResults = await Promise.all(chunk.map(caso => correrUnCasoEval(caso, campaignConfig, { overrides, fichaBloque, identidad, tenantId: req.user?.tenantId })))
       resultados.push(...chunkResults)
       if (i + CHUNK_SIZE < casos.length) await sleep(PAUSE_MS)
     }
@@ -338,7 +363,7 @@ app.post('/debug/brain-evals', { preHandler: [verifyJwt, requireAdmin] }, async 
         casos_con_red_flags: conRedFlags.length,
         costo_total_usd: costoTotal.toFixed(5),
         tiempo_total_ms: Date.now() - startTime,
-        campaign_usada: campaignConfig ? campaignSlug : 'NINGUNA (genérico)',
+        campaign_usada: campaignConfig ? (slugUsado || 'activa del tenant') : 'NINGUNA (genérico)',
         // Config del banco — para comparar corridas (qué modelo/versiones se midió)
         dataset_version: BRAIN_EVALS_VERSION,
         modelo_cerebro: resultados[0]?.modelo_usado || (overrides?.model || 'default'),
@@ -368,18 +393,18 @@ app.post('/debug/brain-evals', { preHandler: [verifyJwt, requireAdmin] }, async 
 
 async function correrUnCasoEval(caso, campaignConfig, banco = {}) {
   const t0 = Date.now()
-  const { overrides = null, fichaBloque = null } = banco
+  const { overrides = null, fichaBloque = null, identidad = null, tenantId = undefined } = banco
   try {
     const brainResult = await pensarYResponder({
       mensajeActual: caso.input.mensajeActual,
       historial: caso.input.historial || [],
-      estadoLead: caso.input.estadoLead || {},
+      estadoLead: { ...(caso.input.estadoLead || {}), tenantId },
       campaignConfig,
-      vendorNombre: 'Jhon',
+      vendorNombre: identidad?.nombre || 'asesor',
       overrides
     })
 
-    const veredicto = await juzgarRespuesta({ caso, brainResult, fichaBloque })
+    const veredicto = await juzgarRespuesta({ caso, brainResult, fichaBloque, identidad, tenantId, vertical: campaignConfig?.vertical, goal: campaignConfig?.comportamiento?.agentGoal })
     const costoCerebro = brainResult?.audit?.cost_usd?.total_cost_usd || 0
 
     return {
@@ -418,11 +443,12 @@ async function correrUnCasoEval(caso, campaignConfig, banco = {}) {
 // ════════════════════════════════════════════════════════════════
 app.post('/debug/brain-replay', { preHandler: [verifyJwt, requireAdmin] }, async (req, reply) => {
   const startTime = Date.now()
-  const { overrides = null, convFilter = null, maxTurns = 6, chunkSize = 2, pauseMs = 1500, campaignSlug = 'MPX' } = req.body || {}
+  const { overrides = null, convFilter = null, maxTurns = 6, chunkSize = 2, pauseMs = 1500, campaignSlug = null } = req.body || {}
 
   try {
-    const campaign = await prisma.campaign.findFirst({ where: { slug: campaignSlug, tenantId: req.user?.tenantId }, select: { config: true } })
+    const campaign = await campanaParaDebug(campaignSlug, req.user?.tenantId)
     const campaignConfig = campaign?.config || null
+    const identidad = identidadDeConfig(campaignConfig)
     const fichaBloque = flattenFactSheet(campaignConfig)?.factSheetBloque || null
 
     // Conversaciones archivadas (raw SQL: la tabla no está en el schema Prisma).
@@ -464,7 +490,7 @@ app.post('/debug/brain-replay', { preHandler: [verifyJwt, requireAdmin] }, async
     const resultados = []
     for (let k = 0; k < turnos.length; k += CHUNK) {
       const chunk = turnos.slice(k, k + CHUNK)
-      const res = await Promise.all(chunk.map(t => correrUnTurnoReplay(t, campaignConfig, { overrides, fichaBloque })))
+      const res = await Promise.all(chunk.map(t => correrUnTurnoReplay(t, campaignConfig, { overrides, fichaBloque, identidad, tenantId: req.user?.tenantId })))
       resultados.push(...res)
       if (k + CHUNK < turnos.length) await sleep(pauseMs)
     }
@@ -502,7 +528,7 @@ app.post('/debug/brain-replay', { preHandler: [verifyJwt, requireAdmin] }, async
 
 async function correrUnTurnoReplay(turno, campaignConfig, banco = {}) {
   const t0 = Date.now()
-  const { overrides = null, fichaBloque = null } = banco
+  const { overrides = null, fichaBloque = null, identidad = null, tenantId = undefined } = banco
   try {
     // Estado del turno. Por defecto VACÍO: sirve para comparar 2 modelos en igualdad
     // (ambos rastrean del historial), como el examen 06-16. Con overrides.reconstruirEstado
@@ -524,10 +550,10 @@ async function correrUnTurnoReplay(turno, campaignConfig, banco = {}) {
     const brainResult = await pensarYResponder({
       mensajeActual: turno.mensajeLead,
       historial: turno.historial,
-      estadoLead,
-      campaignConfig, vendorNombre: 'Jhon', overrides
+      estadoLead: { ...estadoLead, tenantId },
+      campaignConfig, vendorNombre: identidad?.nombre || 'asesor', overrides
     })
-    const veredicto = await juzgarPorRubrica({ historial: turno.historial, mensajeLead: turno.mensajeLead, brainResult, fichaBloque })
+    const veredicto = await juzgarPorRubrica({ historial: turno.historial, mensajeLead: turno.mensajeLead, brainResult, fichaBloque, identidad, tenantId, vertical: campaignConfig?.vertical, goal: campaignConfig?.comportamiento?.agentGoal })
     return {
       convId: turno.convId, turnoIdx: turno.turnoIdx, motivo: turno.motivo,
       veredicto: veredicto.veredicto, score: veredicto.score, razon_juez: veredicto.razon,
@@ -721,6 +747,7 @@ app.get('/v2/leads/:id/conversation', { preHandler: verifyJwt }, (req, reply) =>
 app.get('/v2/leads/:id/media/:mediaId', { preHandler: verifyJwt }, (req, reply) => serveMediaV2(req, reply, prisma))
 // Hito 2 — acciones de escritura (responder, tomar/devolver control, reasignar)
 app.post('/v2/leads/:id/reply',       { preHandler: verifyJwt }, (req, reply) => replyV2(req, reply, prisma))
+app.post('/v2/leads/:id/reabrir',     { preHandler: verifyJwt }, (req, reply) => reabrirV2(req, reply, prisma))
 app.post('/v2/leads/:id/mode',        { preHandler: verifyJwt }, (req, reply) => setModeV2(req, reply, prisma))
 app.post('/v2/leads/:id/assign',      { preHandler: verifyJwt }, (req, reply) => assignV2(req, reply, prisma))
 app.post('/v2/leads/:id/label',       { preHandler: verifyJwt }, (req, reply) => setLabelV2(req, reply, prisma))
@@ -754,7 +781,7 @@ try {
     .catch(err => console.error('[LLM] no se pudo verificar la cadena al arrancar:', err.message))
   console.log(`
 ╔════════════════════════════════════════╗
-║   Hidata — WhatsApp Sales ERP v20      ║
+║   WhatsApp Sales ERP                  ║
 ║   Puerto: ${PORT}                      ║
 ║   Día 8: Audit + cleanup arquitectónico║
 ╚════════════════════════════════════════╝

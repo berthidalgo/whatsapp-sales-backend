@@ -1,6 +1,7 @@
+import { Prisma } from '@prisma/client'
 // src/routes/campaigns.js
 
-import { ACTIVE_TENANT } from '../lib/tenant.js'
+import { validarCampaignConfig, fusionarConfig, validarTriggers, normalizarTrigger, contieneBorrado } from '../config/campaign-schema.js'
 
 // ── MURO MULTITENANT (auditoría pre-producción, jul 2026) ──
 // Estos handlers operaban por `id` a secas y listaban SIN filtro. Con varios
@@ -10,9 +11,10 @@ import { ACTIVE_TENANT } from '../lib/tenant.js'
 //     vendedores, que viene en el include)
 //   · editar el prompt del bot de otro cliente
 //   · BORRAR la campaña de otro cliente (`DELETE /campaigns/:id`)
-// El tenant sale del JWT; sin token, del deploy (compat single-tenant).
+// Las escrituras y lecturas administrativas exigen el tenant del JWT.
 function tenantDe(req) {
-  return req?.user?.tenantId || ACTIVE_TENANT
+  if (!req?.user?.tenantId) throw Object.assign(new Error('tenant requerido en el token'), { statusCode: 403 })
+  return req.user.tenantId
 }
 
 // Devuelve la campaña SOLO si es del tenant del usuario. null → el llamador 404ea.
@@ -22,11 +24,7 @@ async function campaignEnScope(prisma, req, id, extra = {}) {
   return prisma.campaign.findFirst({ where: { id, tenantId: tenantDe(req) }, ...extra })
 }
 
-function normalize(s) {
-  return s.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9\s]/g, '').trim()
-}
+const normalize = normalizarTrigger
 
 // GET /campaigns
 export async function getCampaigns(req, reply, prisma) {
@@ -58,7 +56,7 @@ export async function getCampaign(req, reply, prisma) {
 
 // POST /campaigns
 export async function createCampaign(req, reply, prisma) {
-  const { slug, nombre, vendorId, triggers = [], steps = [] } = req.body
+  const { slug, nombre, vendorId, triggers = [], steps = [], config = null, activa = true } = req.body || {}
 
   if (!slug || !nombre || !vendorId) {
     return reply.code(400).send({ error: 'slug, nombre y vendorId son requeridos' })
@@ -71,15 +69,31 @@ export async function createCampaign(req, reply, prisma) {
   })
   if (!vendor) return reply.code(400).send({ error: 'vendorId no pertenece a este tenant' })
 
+  // Triggers: normalizados y sin duplicados (una campaña sin trigger nunca dispara).
+  const vt = validarTriggers(triggers, { permitirVacios: !activa || config?.atribucion?.esCampanaDefault === true })
+  if (!vt.ok) return reply.code(400).send({ error: 'triggers inválidos', detalles: vt.errores })
+
+  // Config: si viene, debe cumplir el contrato de ficha (F1 forense).
+  if (typeof activa !== "boolean") return reply.code(400).send({ error: "activa debe ser booleano" })
+  if (activa && !config) return reply.code(400).send({ error: "Una campaña activa requiere ficha e identidad; usa activa=false para un borrador" })
+  let configValido = null
+  if (config !== undefined && config !== null) {
+    const vc = validarCampaignConfig(config, { tenantId: tenantDe(req) })
+    if (!vc.ok) return reply.code(400).send({ error: 'config inválido', detalles: vc.errores })
+    configValido = config
+  }
+
   const campaign = await prisma.campaign.create({
     data: {
       // El tenant se sella al crear (antes caía al default del schema,
       // 'peru_exporta', así que las campañas de cualquier cliente nacían allí).
       tenantId: tenantDe(req),
-      slug: slug.toUpperCase(),
+      slug: String(slug).toUpperCase(),
       nombre,
+      activa,
       vendorId: Number(vendorId),
-      triggers: { create: triggers.map(t => ({ texto: t.toLowerCase() })) },
+      ...(configValido ? { config: configValido } : {}),
+      triggers: { create: vt.valores.map(texto => ({ texto })) },
       steps: {
         create: steps.map((s, i) => ({
           orden: i + 1,
@@ -101,19 +115,50 @@ export async function createCampaign(req, reply, prisma) {
 
 // PUT /campaigns/:id
 export async function updateCampaign(req, reply, prisma) {
-  const { nombre, activa, vendorId } = req.body
+  const { nombre, activa, vendorId, config, version } = req.body || {}
   const id = Number(req.params.id)
 
-  if (!await campaignEnScope(prisma, req, id, { select: { id: true } })) {
+  const previa = await campaignEnScope(prisma, req, id, { select: { id: true, config: true, version: true, activa: true } })
+  if (!previa) {
     return reply.code(404).send({ error: 'Campaña no encontrada' })
   }
 
-  const campaign = await prisma.campaign.update({
-    where: { id },
+  if (config !== undefined && !Number.isInteger(version)) return reply.code(428).send({ error: 'version requerida: recarga la campaña' })
+  if (version !== undefined && version !== previa.version) return reply.code(409).send({ error: 'La campaña cambió; recarga antes de guardar', version: previa.version })
+  if (activa !== undefined && typeof activa !== 'boolean') return reply.code(400).send({ error: 'activa debe ser booleano' })
+  if (config !== undefined && contieneBorrado(config, previa.config) && req.body?.force !== true) return reply.code(409).send({ error: 'Borrar datos exige force=true; desactiva primero una campaña sin ficha' })
+  // El vendedor reasignado DEBE ser del mismo tenant (misma guarda que al crear).
+  if (vendorId !== undefined) {
+    const vendor = await prisma.vendor.findFirst({
+      where: { id: Number(vendorId), tenantId: tenantDe(req) }, select: { id: true }
+    })
+    if (!vendor) return reply.code(400).send({ error: 'vendorId no pertenece a este tenant' })
+  }
+
+  // Config parcial → merge por sección + contrato (omitir ≠ borrar).
+  let configFusionado = undefined
+  if (config !== undefined) {
+    if (config !== null && (typeof config !== 'object' || Array.isArray(config))) {
+      return reply.code(400).send({ error: 'config debe ser un objeto' })
+    }
+    const actual = (previa.config && typeof previa.config === 'object') ? previa.config : {}
+    try { configFusionado = config === null ? null : fusionarConfig(actual, config) } catch (e) { return reply.code(400).send({ error: e.message }) }
+    if (configFusionado !== null) {
+      const vc = validarCampaignConfig(configFusionado, { tenantId: tenantDe(req) })
+      if (!vc.ok) return reply.code(400).send({ error: 'config inválido', detalles: vc.errores })
+    }
+  }
+
+  if ((activa ?? previa.activa) && !validarCampaignConfig(configFusionado === undefined ? previa.config : configFusionado, { tenantId: tenantDe(req) }).ok) return reply.code(400).send({ error: 'No se puede activar sin ficha válida' })
+  let campaign
+  try { campaign = await prisma.campaign.update({
+    where: { id, tenantId: tenantDe(req), version: previa.version },
     data: {
       ...(nombre !== undefined && { nombre }),
       ...(activa !== undefined && { activa }),
-      ...(vendorId !== undefined && { vendorId: Number(vendorId) })
+      ...(vendorId !== undefined && { vendorId: Number(vendorId) }),
+      ...(configFusionado !== undefined && { config: configFusionado === null ? Prisma.DbNull : configFusionado }),
+      version: { increment: 1 }
     },
     include: {
       triggers: true,
@@ -121,6 +166,7 @@ export async function updateCampaign(req, reply, prisma) {
       vendor: true
     }
   })
+  } catch (e) { if (e.code === 'P2025') return reply.code(409).send({ error: 'La campaña cambió; recarga antes de guardar' }); throw e }
   return campaign
 }
 
@@ -128,8 +174,24 @@ export async function updateCampaign(req, reply, prisma) {
 export async function deleteCampaign(req, reply, prisma) {
   const id = Number(req.params.id)
   // Lo más destructivo del archivo: borrar la campaña de otro cliente le apaga el bot.
-  if (!await campaignEnScope(prisma, req, id, { select: { id: true } })) {
+  const previa = await campaignEnScope(prisma, req, id, {
+    select: { id: true, slug: true, config: true, _count: { select: { leads: true } } }
+  })
+  if (!previa) {
     return reply.code(404).send({ error: 'Campaña no encontrada' })
+  }
+  // Guarda anti-borrado accidental (F1 forense): con leads o siendo la default,
+  // el borrado exige ?force=true explícito. Borrar la ficha con historial o la
+  // campaña que atiende a los perdidos apaga ventas sin avisar.
+  const esDefault = !!(previa.config && typeof previa.config === 'object' && previa.config.atribucion?.esCampanaDefault)
+  const conLeads = (previa._count?.leads || 0) > 0
+  const force = req.query?.force === 'true' || req.body?.force === true
+  if ((conLeads || esDefault) && !force) {
+    return reply.code(409).send({
+      error: 'la campaña tiene historial o es la default: confirma con ?force=true',
+      leads: previa._count?.leads || 0,
+      esCampanaDefault: esDefault
+    })
   }
   await prisma.campaign.delete({ where: { id } })
   return { ok: true }
@@ -181,8 +243,13 @@ export async function addTrigger(req, reply, prisma) {
     return reply.code(404).send({ error: 'Campaña no encontrada' })
   }
 
+  const vt = validarTriggers([texto])
+  if (!vt.ok) return reply.code(400).send({ error: 'trigger inválido', detalles: vt.errores })
+  const yaExiste = await prisma.trigger.findFirst({ where: { campaignId, texto: vt.valores[0] }, select: { id: true } })
+  if (yaExiste) return reply.code(409).send({ error: 'ese trigger ya existe en esta campaña' })
+
   const trigger = await prisma.trigger.create({
-    data: { texto: texto.toLowerCase(), campaignId }
+    data: { texto: vt.valores[0], campaignId }
   })
   return reply.code(201).send(trigger)
 }
@@ -234,16 +301,18 @@ export async function activarCampaign(req, reply, prisma) {
   const campaign = await campaignEnScope(prisma, req, campaignId)
   if (!campaign) return reply.code(404).send({ error: 'Campaña no encontrada' })
 
+  const vc = validarCampaignConfig(campaign.config, { tenantId: tenantDe(req) })
+  if (!vc.ok) return reply.code(400).send({ error: 'No se puede activar sin ficha válida', detalles: vc.errores })
   await prisma.$transaction([
     prisma.campaign.updateMany({
       // El tenant también acota el APAGADO masivo: sin él, activar una campaña
       // desactivaba las de otro cliente que compartiera vendorId por accidente.
       where: { vendorId: campaign.vendorId, tenantId: tenantDe(req) },
-      data: { activa: false }
+      data: { activa: false, version: { increment: 1 } }
     }),
     prisma.campaign.update({
       where: { id: campaignId },
-      data: { activa: true }
+      data: { activa: true, version: { increment: 1 } }
     })
   ])
 

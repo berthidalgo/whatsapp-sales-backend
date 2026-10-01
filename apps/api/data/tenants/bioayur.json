@@ -1,0 +1,101 @@
+{
+  "_nota": "Ficha BIOAYUR (F3 forense). Antes vivía cosida en scripts/seed-bioayur.js: cambiar un precio exigía programador + deploy. Ahora es DATO: se carga con scripts/seed-generico.js --json data/tenants/bioayur.json --aplicar, o se edita por PUT /v2/agent-config. configFuente=seed: el seed es la fuente de verdad hasta que exista editor (re-correr pisa el config).",
+  "tenant": {
+    "tenantId": "bioayur",
+    "displayName": "BIOAYUR (DermaLab)",
+    "numVendedoresPagados": 1,
+    "estadoSuscripcion": "active",
+    "notas": "Cliente real #1 del vertical colágeno (e-commerce nutracéutico, Lima). Producto: ELIXIR. Contraentrega."
+  },
+  "vendors": [
+    {
+      "nombre": "Jhon",
+      "telefono": "51999000001",
+      "role": "ADMIN",
+      "nota": "Placeholder: las notificaciones salen por NUMERO_JOAN (env) = número real del dueño; cambiar al real cuando el dueño lo confirme."
+    }
+  ],
+  "campaigns": [
+    {
+      "slug": "BIOAYUR-ELIXIR",
+      "nombre": "BIOAYUR ELIXIR — Colágeno Fórmula Completa",
+      "activa": true,
+      "vendorTelefono": "51999000001",
+      "configFuente": "seed",
+      "config": {
+        "vertical": "colageno",
+        "agente": {
+          "nombre": "Jhon",
+          "empresa": "BIOAYUR",
+          "rol": "asesor comercial de BIOAYUR",
+          "nombreProducto": "BIOAYUR ELIXIR"
+        },
+        "comportamiento": {
+          "agentGoal": "CERRAR_PEDIDO_CONTRAENTREGA"
+        },
+        "factSheet": {
+          "precio": {
+            "textoExacto": "1 envase: S/ 139 · 2 envases: S/ 249 (sale S/ 124.50 c/u) · 3 envases: S/ 339 (sale S/ 113 c/u) — EL MÁS RECOMENDADO (tratamiento completo de 3 meses). Cada envase dura 1 mes.",
+            "monto": 139,
+            "moneda": "S/"
+          },
+          "ofertaHoy": "SOLO POR HOY (promo del día): 1 envase S/ 129 · 2 envases S/ 239 · 3 envases S/ 329 — ahorras S/ 10 en cualquier opción. Es el precio mínimo del día, no baja más.",
+          "testimonios": [],
+          "incluye": [
+            "Colágeno hidrolizado 10g por porción",
+            "Resveratrol 300mg",
+            "Vitamina C 500mg",
+            "Magnesio 400mg",
+            "Zinc 10mg",
+            "Antioxidantes de frutos rojos 3g"
+          ],
+          "fechasReales": {
+            "modalidad": "Envío GRATIS en Lima · pago CONTRAENTREGA (pagas al recibir; si no llega, no pagas)"
+          },
+          "metodosPago": [
+            "Contraentrega: pagas en efectivo o Yape AL RECIBIR tu pedido en tu puerta (nunca por adelantado)"
+          ],
+          "pildorasValor": [
+            "Registro Sanitario DIGEMID P2908325N · elaborado bajo BPM",
+            "Sin azúcar, sin gluten, sin lactosa — endulzado con stevia",
+            "Sabor frutos rojos · envase de 300g (~20 porciones = 1 mes)",
+            "Se toma 1 porción (15g) al día, disuelta en agua fría, jugo o batido",
+            "El colágeno funciona con CONSTANCIA: resultados se notan a partir de los 3 meses (por eso el pack de 3 es el recomendado)",
+            "PIEL: colágeno + vitamina C · CABELLO/UÑAS: zinc · ARTICULACIONES: colágeno + magnesio · ENERGÍA: magnesio + antioxidantes",
+            "Muy pocos colágenos en Perú traen la fórmula completa (la mayoría vende colágeno solo)"
+          ],
+          "publicoObjetivo": "Mujeres de 30 a 60 años, Lima (también sirve para hombres)",
+          "propuestaValor": "ELIXIR no es un colágeno más: es LA FÓRMULA COMPLETA — 5 activos en un solo vaso que reemplazan comprar colágeno, magnesio, zinc y antioxidantes por separado",
+          "reglasOro": [
+            "PROHIBIDO decir \"curar/cura/sana/trata enfermedades\" — SOLO \"apoya/favorece/contribuye/ayuda a\" (regla legal DIGEMID + Meta)",
+            "NUNCA pedir pago por adelantado ni dar cuentas/Yape: el modelo es contraentrega",
+            "NUNCA inventar descuentos, regalos ni promos fuera de esta ficha — \"la oferta de hoy\" son exactamente estos packs"
+          ],
+          "imagenes": {
+            "precios": {
+              "archivo": "precios-bioayur.png",
+              "mimetype": "image/png",
+              "fileName": "BIOAYUR-precios.png"
+            }
+          }
+        },
+        "atribucion": {
+          "esCampanaDefault": true,
+          "mensajeDescubrimiento": "¡Con gusto te cuento todo! 😊 Para dártelo exacto y no marearte con info de más — cuéntame, ¿qué es lo que más te gustaría mejorar: tu piel, tu energía o tus articulaciones? 👀"
+        }
+      },
+      "triggers": [
+        "elixir",
+        "quiero aprovechar la oferta",
+        "vi la promocion",
+        "colageno"
+      ],
+      "steps": []
+    }
+  ],
+  "gateMarcas": [
+    "BIOAYUR",
+    "DermaLab",
+    "ELIXIR"
+  ]
+}

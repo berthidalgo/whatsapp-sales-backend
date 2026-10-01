@@ -1,0 +1,69 @@
+{
+  "_nota": "Ficha HIDATA IMPORTACIONES (F3 forense). Antes en scripts/seed-hidata.js. Tienda de producto ganador que rota: cada producto escalado lleva SU campaña con su ficha; esta GENERAL solo sabe lo del negocio y deriva. configFuente=seed. El canal del número va aparte: scripts/canal-cloud.js.",
+  "tenant": {
+    "tenantId": "hidata",
+    "displayName": "Hidata Importaciones",
+    "numVendedoresPagados": 1,
+    "estadoSuscripcion": "active",
+    "notas": "Tienda online propia (producto ganador que rota). WhatsApp por API oficial de Meta, número +51 923 913 984."
+  },
+  "vendors": [
+    {
+      "nombre": "Joan",
+      "telefono": "51938188585",
+      "role": "ADMIN",
+      "nota": "Dueño. PIN de fábrica: el CRM obliga a cambiarlo al primer ingreso."
+    }
+  ],
+  "campaigns": [
+    {
+      "slug": "HIDATA-TIENDA",
+      "nombre": "Hidata Importaciones — tienda (general)",
+      "activa": true,
+      "vendorTelefono": "51938188585",
+      "configFuente": "seed",
+      "config": {
+        "vertical": "tienda",
+        "agente": {
+          "nombre": "Joan",
+          "empresa": "Hidata Importaciones",
+          "rol": "asesor de ventas de Hidata Importaciones"
+        },
+        "factSheet": {
+          "publicoObjetivo": "Personas de todo el Perú que vieron un anuncio de un producto importado (juguetes, hogar o tecnología).",
+          "propuestaValor": "Productos importados con envío a todo el Perú y pago contraentrega: pagas al recibir tu pedido.",
+          "metodosPago": [
+            "Contraentrega: pagas al recibir tu pedido, en efectivo, Yape o Plin"
+          ],
+          "faqs": [
+            {
+              "p": "¿Hacen envíos a provincia?",
+              "r": "Sí, enviamos a todo el Perú y pagas al recibir."
+            },
+            {
+              "p": "¿Tienen tienda física?",
+              "r": "Somos una tienda online: te lo llevamos a domicilio y pagas al recibir."
+            },
+            {
+              "p": "¿Cuánto demora el envío?",
+              "r": "El equipo te confirma el plazo exacto por este chat según tu ciudad."
+            }
+          ],
+          "reglasOro": [
+            "Esta es la ficha GENERAL de la tienda: si el cliente pregunta por un producto concreto y su precio no está aquí, NO lo inventes — pregúntale qué producto vio, dile que le confirmas precio y disponibilidad, y marca debe_escalar_humano=true.",
+            "Nunca pidas pagos por adelantado: siempre contraentrega."
+          ]
+        },
+        "atribucion": {
+          "esCampanaDefault": true,
+          "mensajeDescubrimiento": "¡Hola! 😊 Cuéntame, ¿qué producto viste en el anuncio? Así te ayudo con precio y disponibilidad."
+        }
+      },
+      "triggers": [],
+      "steps": []
+    }
+  ],
+  "gateMarcas": [
+    "Hidata"
+  ]
+}

@@ -469,21 +469,12 @@ export function limpiarReSaludo(mensaje, yaSaludo) {
 //   · símbolo pegado:  "S/1500"
 // Deliberadamente NO se marcan números sueltos ("12 sesiones", "1,300 alumnos"): eso
 // llenaría de falsos positivos y, sin factSheet, NEUTRALIZARÍA mensajes sanos.
-export const RX_DINERO = /(?:S\/\.?\s?\d[\d,\.]*)|(?:\$\s?\d[\d,\.]*)|(?:\d[\d,\.]*\s?(?:soles|sol|dólares|dolares|usd|pen|euros?|eur)\b)/gi
+export { RX_DINERO, montoDe } from '../config/dinero.js'
+import { RX_DINERO, montoDe } from '../config/dinero.js'
 
 const FRASE_PRECIO_DEFAULT = ' El precio exacto te lo confirmo en un momento 😊'
 
 /** "S/ 1,500" → 1500 · "S/ 124.50" → 124.5 · "124,50 soles" → 124.5 · "S/. 139" → 139 */
-export function montoDe(texto) {
-  const m = String(texto || '').match(/\d[\d.,]*/)
-  if (!m) return null
-  let s = m[0].replace(/[.,]+$/, '')                                                        // "329." al cerrar la frase
-  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '')                         // 1,500 · 1,500.50
-  else if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.') // 1.500 · 1.500,50
-  else s = s.replace(',', '.')                                                               // 124,50
-  const n = Number(s)
-  return Number.isFinite(n) ? n : null
-}
 
 // Qué cifras respalda la ficha. Antes se comparaban DÍGITOS concatenados como texto:
 // "S/ 24" pasaba porque "24" está dentro de "249", y un precio por envase bien
@@ -504,10 +495,9 @@ function montosDeLaFicha(fs) {
   const agregar = (set, n) => { if (Number.isFinite(n) && n > 0) set.add(n) }
   const camposPrecio = `${fs?.precioTexto || ''} ${fs?.ofertaHoyTexto || ''}`
   // En los campos de precio cuenta todo número (la ficha puede decir "3 envases: 339").
-  for (const m of camposPrecio.matchAll(/\d[\d.,]*/g)) agregar(exactos, montoDe(m[0]))
+  for (const m of camposPrecio.matchAll(RX_DINERO)) agregar(exactos, montoDe(m[0]))
   // El dinero de toda la ficha (garantía, píldoras, FAQ) es la base de las cuentas.
   for (const m of `${camposPrecio} ${fs?.factSheetBloque || ''}`.matchAll(RX_DINERO)) agregar(precios, montoDe(m[0]))
-  agregar(precios, fs?.precioMonto == null ? NaN : Number(fs.precioMonto))
   for (const p of precios) exactos.add(p)
   return { exactos: [...exactos], precios: [...precios] }
 }

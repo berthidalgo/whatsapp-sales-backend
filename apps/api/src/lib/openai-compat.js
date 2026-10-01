@@ -36,7 +36,7 @@ export const PROVEEDORES_COMPAT = {
     llave: 'OPENROUTER_API_KEY',
     modelo: 'google/gemma-4-31b-it:free',
     json: true,
-    headers: { 'X-Title': 'Hidata' },
+    headers: { 'X-Title': 'WhatsApp Sales' },
     // OpenRouter unifica el esfuerzo de razonamiento en su propio campo
     razonamiento: (effort) => ({ reasoning: { effort } })
   },

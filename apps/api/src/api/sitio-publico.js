@@ -8,19 +8,23 @@
 // eliminar datos" si la pide.
 //
 // Todo es texto fijo, sin scripts ni recursos externos. Los datos del negocio son los del
-// portafolio de Meta (Hidata impor): si cambian allá, cambiarlos aquí, porque Meta compara.
+// portafolio de Meta: si cambian allá, cambiarlos en data/sitio-publico.json,
+// porque Meta compara (F2 forense: antes vivían cosidos aquí).
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 
-export const NEGOCIO = {
-  nombre: 'Hidata Importaciones',
-  titular: 'Joan Alberth Cornelio Hidalgo Tacas',
-  ruc: '10721689421',
-  direccion: 'Av. Flor de Amancaes N.° 10, Mz. 1, Lt. 6, Rímac, Lima 15011, Perú',
-  correo: 'albert.hidata@gmail.com',
-  telefono: '+51 923 913 984',
-  whatsapp: '51923913984'
+function cargarSitio() {
+  const ruta = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'sitio-publico.json')
+  return JSON.parse(readFileSync(ruta, 'utf8'))
 }
 
-const ACTUALIZADA = '29 de septiembre de 2026'
+const DATOS = cargarSitio()
+
+export const NEGOCIO = DATOS.negocio
+
+const ACTUALIZADA = DATOS.actualizada
+const RUBROS = DATOS.rubros
 
 const ESTILOS = `
   :root { --fondo: #ffffff; --texto: #1f2328; --suave: #59636e; --linea: #d1d9e0; --tarjeta: #f6f8fa; --marca: #0b6b3a; --marca-texto: #ffffff; }
@@ -75,9 +79,7 @@ Vendemos online y por WhatsApp, enviamos a todo el Perú y pagas al recibir.</p>
 
 <h2>Qué vendemos</h2>
 <div class="rubros">
-  <div class="rubro"><h3>Juguetes</h3><p>Juguetes importados para niños y para regalar.</p></div>
-  <div class="rubro"><h3>Hogar</h3><p>Productos importados prácticos para la casa: cocina, limpieza, orden y decoración.</p></div>
-  <div class="rubro"><h3>Tecnología</h3><p>Gadgets y accesorios de tecnología para el día a día.</p></div>
+${RUBROS.map(r => `  <div class="rubro"><h3>${r.titulo}</h3><p>${r.texto}</p></div>`).join('\n')}
 </div>
 <p class="suave" style="margin-top:12px">Renovamos el catálogo con frecuencia: seleccionamos productos importados y vamos sumando novedades.
 Escríbenos para conocer lo que tenemos disponible hoy.</p>

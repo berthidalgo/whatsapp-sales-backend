@@ -1,0 +1,6 @@
+{
+  "_nota": "Compatibilidad legacy (F2 forense). Los clientes nuevos registran sus imágenes en campaigns.config.factSheet.imagenes (editable por API, sin deploy). Este archivo solo atiende a las campañas que aún no migraron su ficha. Formato por tenant: { clave: { archivo, mimetype, fileName } }. `archivo` es relativo a apps/api/assets.",
+  "bioayur": {
+    "precios": { "archivo": "precios-bioayur.png", "mimetype": "image/png", "fileName": "BIOAYUR-precios.png" }
+  }
+}

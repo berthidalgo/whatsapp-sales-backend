@@ -1,63 +1,28 @@
-// src/lib/assets.js — imágenes estáticas que el bot envía (jul 2026)
-// Se leen del disco UNA vez y se cachean en base64 (el archivo vive en apps/api/assets,
-// se despliega con el código en Render). El bot colágeno manda la foto de precios en M4.
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { resolve, relative, isAbsolute, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const ASSETS_DIR = join(__dirname, '..', '..', 'assets')
-const cache = new Map()
-
-function cargarB64(archivo) {
-  if (cache.has(archivo)) return cache.get(archivo)
-  let b64 = ''
-  try { b64 = readFileSync(join(ASSETS_DIR, archivo)).toString('base64') }
-  catch (e) { console.error(`[Assets] no pude leer ${archivo}:`, e.message) }
-  cache.set(archivo, b64)
-  return b64
+import { archivoPermitido, registroImagenes } from '../config/imagenes.js'
+const carpeta = fileURLToPath(new URL('../../assets/',import.meta.url))
+function dentro(base, archivo) { const r = relative(base,archivo); return r && !r.startsWith('..') && !isAbsolute(r) }
+function mimeReal(b) {
+  if (b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png'
+  if (b[0]===255 && b[1]===216 && b[2]===255) return 'image/jpeg'
+  if (/^GIF8[79]a$/.test(b.subarray(0,6).toString())) return 'image/gif'
+  if (b.subarray(0,4).toString()==='RIFF' && b.subarray(8,12).toString()==='WEBP') return 'image/webp'
+  return null
 }
-
-// ─────────────────────────────────────────────────────────────────────────
-// REGISTRO POR TENANT (fix pre-producción jul 2026)
-//
-// ANTES el registro era PLANO: la clave `precios` apuntaba a la foto de BIOAYUR
-// para todo el mundo, y `getImagen()` no sabía de qué cliente era el turno. El
-// cerebro pide la imagen por NOMBRE (enviar_imagen: "precios"), así que en cuanto
-// un segundo cliente usara esa misma clave —y va a usarla, porque el vertical de
-// colágeno es la plantilla que se copia para los clientes nuevos— sus leads
-// habrían recibido LA LISTA DE PRECIOS DE OTRA EMPRESA por WhatsApp.
-//
-// No era teórico: bastaba un vertical nuevo con `enviar_imagen: "precios"`.
-// Ahora la clave se resuelve DENTRO del tenant. Dos clientes pueden llamar
-// "precios" a su foto sin pisarse.
-//
-// FAIL-CLOSED: sin tenant, o si el tenant no tiene esa clave, se devuelve null y
-// NO se manda nada. Mandar la imagen equivocada es peor que no mandar ninguna.
-// ─────────────────────────────────────────────────────────────────────────
-const REGISTRO_POR_TENANT = {
-  bioayur: {
-    precios: { archivo: 'precios-bioayur.png', mimetype: 'image/png', fileName: 'BIOAYUR-precios.png' }
-  }
-  // Cliente nuevo → agregar su bloque aquí con SUS archivos. Nunca reutilizar el
-  // archivo de otro tenant, aunque la clave se llame igual.
-}
-
-/**
- * Imagen que el cerebro pidió adjuntar, resuelta DENTRO del tenant.
- * @param {string} clave     - lo que el cerebro puso en `enviar_imagen` (ej. "precios")
- * @param {string} tenantId  - dueño del turno. Sin él no se sirve nada.
- * @returns {{base64,mimetype,fileName}|null}
- */
-export function getImagen(clave, tenantId) {
+export function getImagen(clave, tenantId, imagenesConfig = null) {
   if (!clave || !tenantId) return null
-  const delTenant = REGISTRO_POR_TENANT[tenantId]
-  if (!delTenant) return null
-  const def = delTenant[clave]
-  if (!def) return null
-  const base64 = cargarB64(def.archivo)
-  if (!base64) return null
-  return { base64, mimetype: def.mimetype, fileName: def.fileName }
+  const def = imagenesConfig !== null ? (Object.hasOwn(imagenesConfig,clave) ? imagenesConfig[clave] : null) : registroImagenes()[tenantId]?.[clave]
+  if (!def || !archivoPermitido(def.archivo,tenantId)) return null
+  try {
+    const base = realpathSync(carpeta), archivo = realpathSync(resolve(base,def.archivo))
+    if (!dentro(base,archivo)) return null
+    // Real path also must stay in the tenant namespace (symlinks cannot change owner).
+    if (!archivoPermitido(relative(base,archivo).replaceAll('\\','/'),tenantId)) return null
+    const bytes = readFileSync(archivo), mimetype = mimeReal(bytes)
+    if (!mimetype || (def.mimetype && mimetype !== def.mimetype)) return null
+    return { base64: bytes.toString('base64'), mimetype, fileName: basename(def.fileName || def.archivo) }
+  } catch { return null }
 }
-
-export const ASSETS_VERSION = 'v2_por_tenant'
+export const ASSETS_VERSION = 'v4_tenant_y_firma'

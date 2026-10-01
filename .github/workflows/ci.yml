@@ -23,7 +23,9 @@ jobs:
       - run: npm ci
       # El cliente de Prisma se genera desde el schema; no necesita base de datos.
       - run: npx prisma generate
-      - run: npm test   # usa --test-isolation=none: requiere Node 23+
+      - run: npm run test:offline
+        env:
+          DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline?connect_timeout=1
 
   web:
     name: Frontend (tipos + build)

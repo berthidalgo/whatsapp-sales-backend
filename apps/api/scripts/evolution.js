@@ -29,10 +29,11 @@ try {
 const [, , accion = 'estado', instArg] = process.argv
 const API = (process.env.EVOLUTION_API_URL || '').replace(/\/$/, '')
 const KEY = process.env.EVOLUTION_API_KEY
-const INST = instArg || process.env.EVOLUTION_INSTANCE_NAME || 'bioayur'
+const INST = instArg || process.env.EVOLUTION_INSTANCE_NAME
 const BACKEND = (process.env.BACKEND_URL || 'https://whatsapp-sales-backend.onrender.com').replace(/\/$/, '')
 
 function salir(msg) { console.error(`✖ ${msg}`); process.exit(1) }
+if (!INST) salir('falta instancia o EVOLUTION_INSTANCE_NAME')
 if (!API) salir('falta EVOLUTION_API_URL (URL pública de la Evolution API) en el .env')
 if (!KEY) salir('falta EVOLUTION_API_KEY (la AUTHENTICATION_API_KEY global de Evolution) en el .env')
 
