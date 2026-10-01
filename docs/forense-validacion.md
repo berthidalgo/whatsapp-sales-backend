@@ -14,7 +14,7 @@ El código conserva contratos, etapas, validaciones, guardrails y límites opera
 
 ## Hallazgos corregidos
 
-1. Dependencias faltantes de arranque: catálogo mínimo incluido; retirados recibos de envío no soportados por el esquema desplegado. No hay migración de Message.
+1. Dependencias faltantes de arranque: catálogo mínimo incluido; retirados recibos de envío no soportados por el esquema desplegado. No hay migración de Message. Se retiró también el endpoint incompleto reabrirV2, introducido sin su implementación; se conserva el contrato desplegado. Una prueba ejecuta todo server.js hasta la conexión ficticia.
 2. Assets: validación del dueño, namespace por tenant, ruta real dentro de assets, rechazo de traversal/symlinks, firma de imagen y MIME coherente. Un fallo de lectura no se cachea permanentemente. Una campaña con ficha no hereda una imagen que omitió.
 3. Contrato: precios completos y moneda; no coincidencia por prefijo ni cantidades usadas como precios. Prototipos y claves peligrosas rechazados. Merge recursivo conserva los campos del precio.
 4. Escrituras: ficha requerida en altas activas; borrador explícito permitido. Borrado de datos existentes exige force=true. Ambas APIs usan versión en el predicado de escritura e incrementan version; un cambio simultáneo devuelve 409. Edición comercial sin versión devuelve 428.
@@ -34,7 +34,7 @@ El código conserva contratos, etapas, validaciones, guardrails y límites opera
 
 ## Evidencia de verificación
 
-- Suite completa con guard de red externa y DATABASE_URL ficticia: 459/459.
+- Suite completa con guard de red externa y DATABASE_URL ficticia: 460/460.
 - 100 variantes de montos parciales rechazadas, dentro de las pruebas.
 - Repros de concurrentes, borrado, prototipos, rutas/symlinks, firma/MIME, metadatos entre tenants y plantillas personalizadas incluidos en tests/forense-config.test.js.
 - Mutaciones de hardcode (comentario falso dentro de string, concatenación, templates, JSX y moneda numérica) detectadas por tests/forense-ast.test.js.
