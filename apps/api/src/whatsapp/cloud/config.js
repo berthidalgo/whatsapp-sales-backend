@@ -11,6 +11,12 @@
 //   CLOUD_APP_SECRET        - app secret (para verificar la firma X-Hub-Signature-256)
 //   CLOUD_VERIFY_TOKEN      - string que elegimos nosotros (handshake GET del webhook)
 //   CLOUD_API_VERSION       - opcional, default v23.0 (Meta versiona; se sube sin tocar código)
+//   CLOUD_GRAPH_BASE        - SOLO pruebas/instalaciones locales: reemplaza la base de Graph.
+//                              Vive en el ENTORNO y no en las credenciales del canal a
+//                              propósito: si una fila de `channels` pudiera redirigir el
+//                              envío, un cambio en la base mandaría los mensajes de un
+//                              cliente al endpoint de quien la modificó. Con env, solo una
+//              persona con acceso al despliegue puede apartar el tráfico de Meta.
 
 const DEFAULT_VERSION = 'v23.0'
 
@@ -23,7 +29,7 @@ export function cloudConfig() {
     accessToken:   process.env.CLOUD_ACCESS_TOKEN || null,
     appSecret:     process.env.CLOUD_APP_SECRET || null,
     verifyToken:   process.env.CLOUD_VERIFY_TOKEN || null,
-    graphBase:     `https://graph.facebook.com/${apiVersion}`
+    graphBase:     (process.env.CLOUD_GRAPH_BASE || `https://graph.facebook.com/${apiVersion}`).replace(/\/$/, '')
   }
 }
 

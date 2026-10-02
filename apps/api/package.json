@@ -17,6 +17,8 @@
     "test:offline": "node --import ./tests/helpers/offline-guard.mjs --test --test-isolation=none",
     "test:db": "node --import ./tests/helpers/offline-guard.mjs --test tests/integration/crm-postgres.mjs",
     "test:db:hitoa": "node --import ./tests/helpers/offline-guard.mjs --test --test-isolation=none tests/hito-a-postgres.test.js",
+    "recorrido": "node scripts/recorrido-crm.mjs",
+    "capturas": "node scripts/capturas-crm.mjs",
     "db:plan": "node scripts/preparar-db-crm.js",
     "db:prepare": "node scripts/preparar-db-crm.js --aplicar",
     "db:verify": "node scripts/verificar-db-crm.js",

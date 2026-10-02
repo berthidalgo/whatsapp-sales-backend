@@ -120,6 +120,50 @@ test('PostgreSQL: migrations and full HTTP CRM contracts', {skip:!configured,tim
       assert.equal((await prisma.campaign.findUnique({where:{id:cb.id}})).activa,true)
       assert.equal((await prisma.campaign.findUnique({where:{id:cc.id}})).activa,true)
     })
+    await t.test('bandeja filtrada y total real: el filtro va en el servidor y respeta el alcance',async()=>{
+      // El filtro se resuelve en SQL sobre TODA la bandeja; `total` es el número que cumple
+      // el filtro, no el de la página. Antes se filtraba en el navegador y una lista parcial
+      // se presentaba como resultado completo.
+      const conNombre=await request('/v2/leads?limit=1');assert.equal(conNombre.status,200)
+      assert.equal(typeof conNombre.body.page.total,'number')
+      assert.ok(conNombre.body.page.total>=conNombre.body.page.limit,'el total cubre más que la página')
+      const filtrada=await request('/v2/leads?q='+encodeURIComponent('no-existe-este-nombre')+'&limit=50')
+      assert.equal(filtrada.status,200);assert.deepEqual(filtrada.body.items,[]);assert.equal(filtrada.body.page.total,0)
+      // Un vendedor no ve los leads del otro, con o sin filtro.
+      const ajena=await request('/v2/leads?q='+encodeURIComponent('no-existe')+'&limit=50',{auth:b})
+      assert.equal(ajena.status,200);assert.equal(ajena.body.page.total,0)
+    })
+    await t.test('resultado comercial sale de call_events, no de la etapa inferida',async()=>{
+      await prisma.leadState.upsert({where:{leadId:la.id},create:{leadId:la.id,currentStage:'post_close'},update:{currentStage:'post_close'}})
+      let detalle=(await request('/v2/leads/'+la.id)).body
+      assert.equal(detalle.stage,'post_close','la etapa del bot es una inferencia')
+      assert.equal(detalle.resultado,null);assert.equal(detalle.resultadoFuente,null,'sin llamada registrada: no disponible, no inventado')
+      await prisma.callEvent.create({data:{leadId:la.id,vendorId:va.id,outcomeTag:'pagó',occurredAt:new Date()}})
+      detalle=(await request('/v2/leads/'+la.id)).body
+      assert.equal(detalle.resultado,'pagó');assert.equal(detalle.resultadoFuente,'call_events')
+      assert.equal(detalle.resultadoEtiqueta,'Venta confirmada')
+      const listado=(await request('/v2/leads?limit=200')).body.items.find(x=>x.id===la.id)
+      assert.equal(listado.resultado,'pagó','la lista también lo muestra')
+      await prisma.callEvent.deleteMany({where:{leadId:la.id}})
+    })
+    await t.test('métricas: cada número trae definición y fuente, y el alcance es el del usuario',async()=>{
+      const admin=await request('/v2/metricas?dias=30')
+      assert.equal(admin.status,200)
+      assert.equal(admin.body.alcance,'tenant')
+      for(const m of admin.body.metricas){
+        assert.equal(typeof m.definicion,'string');assert.ok(m.definicion.length>10,'la métrica '+m.clave+' explica qué cuenta')
+        assert.equal(typeof m.fuente,'string');assert.ok(m.fuente.length>0,'la métrica '+m.clave+' dice de dónde sale')
+      }
+      const ventas=admin.body.metricas.find(m=>m.clave==='ventas_confirmadas')
+      assert.match(ventas.fuente,/call_events/,'las ventas se cuentan desde call_events, no desde el stage')
+      const inciertos=admin.body.metricas.find(m=>m.clave==='envios_inciertos')
+      assert.equal(inciertos.valor,0,'sin envíos inciertos no hay ninguno')
+      // Un VENDOR ve su propio alcance y no el del tenant.
+      const vendedor=await request('/v2/metricas',{auth:b})
+      assert.equal(vendedor.status,200);assert.equal(vendedor.body.alcance,'propio')
+      assert.ok(vendedor.body.metricas.find(m=>m.clave==='conversaciones_atendidas').valor<=1,'solo sus leads')
+      assert.match(vendedor.body.nota,/inferencia/)
+    })
     await t.test('unified cursor traverses every event once even at identical timestamps',async()=>{
       const at=new Date('2026-01-01T00:00:00.000Z')
       for(let i=0;i<4;i++)await prisma.message.create({data:{leadId:la.id,origen:'LEAD',texto:'message '+i,createdAt:at}})

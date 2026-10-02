@@ -9,6 +9,10 @@ import { MODES } from '../state/stage-definitions.js'
 // en cutover a Cloud no se queda atrás como pasaba al importar webhook/sender.js).
 import { sendToWhatsApp, proveedorActivo } from '../whatsapp/send.js'
 import { persistirMensajeSaliente, enviarPlantilla } from '../whatsapp/transporte.js'
+// Hito A2: la respuesta del vendedor pasa por la outbox igual que la del bot. La
+// INTENCIÓN se escribe antes de llamar a Meta y el resultado se guarda con la misma fila,
+// para que "el vendedor respondió y la bandeja no lo sabe" sea un estado imposible.
+import { registrarIntencion, confirmarEnvio, marcarRechazado, marcarIncierto, clasificarEnvio } from '../whatsapp/outbox.js'
 import { defaultChannelForTenant } from '../webhook/channel-resolver.js'
 import { invalidarTurnoEnVuelo } from '../webhook/debounce.js'
 import { checkAndMark } from '../webhook/idempotency.js'
@@ -106,6 +110,19 @@ export async function replyV2(request, reply, prisma, deps = {}) {
         return reply.code(409).send({ error: 'este cliente no tiene un canal de WhatsApp configurado' })
       }
     }
+    // Hito A2: primero la intención durable. Si esta escritura falla, NO se envía nada: es
+    // preferible que el vendedor vea un error a mandar un mensaje que no quede registrado.
+    let outboxId
+    try {
+      const intencion = await (deps.registrarIntencion || registrarIntencion)(prisma, {
+        tenantId: lead.tenantId, leadId: id, origen: 'VENDEDOR', tipo: 'text',
+        payload: { texto }, canalRef: canal.externalKey || null,
+      })
+      outboxId = intencion.id
+    } catch (err) {
+      console.error(`[inbox-actions] reply lead ${id}: no se pudo registrar la intención; NO se envía: ${err.message}`)
+      return reply.code(503).send({ error: 'no se pudo preparar el envío; reintenta' })
+    }
     const envio = await (deps.sendToWhatsApp || sendToWhatsApp)({ telefono: lead.telefono, text: texto, instanceName: instancia, canal })
 
     // VENTANA DE 24 H (sep 2026). Meta solo deja mandar texto libre si el lead escribió
@@ -117,11 +134,33 @@ export async function replyV2(request, reply, prisma, deps = {}) {
       const propia = plantillaReapertura(canal, lead.tenantId)
       const cuerpo = cuerpoVentanaCerrada(texto, { CLOUD_TEMPLATE_REAPERTURA: propia?.nombre })
       console.log(`[inbox-actions] reply lead ${id}: ventana de 24 h cerrada (plantilla ${cuerpo.plantilla || 'NO configurada'})`)
+      // No salió nada: la intención vuelve a la cola sin marcar como enviado (es
+      // reintentable sin riesgo, porque la petición nunca llegó a Meta).
+      await prisma.outboundMessage.update({
+        where: { id: outboxId },
+        data: { estado: 'PENDING', attempts: { increment: 1 }, lastError: 'fuera_de_ventana_24h', claimId: null, claimedAt: null, updatedAt: new Date() },
+      }).catch(e => console.error('[inbox-actions] outbox PENDING:', e.message))
       return reply.code(409).send(cuerpo)
     }
 
     if (!envio?.ok) {
       console.error(`[inbox-actions] reply lead ${id}: WhatsApp no salió (${envio?.error})`)
+      // El mensaje NO se marca como enviado y el borrador del vendedor NO se borra. El
+      // estado en la outbox distingue rechazo (no reintentar) de incierto (revisar a mano).
+      const clase = clasificarEnvio(envio, proveedorActivo(canal))
+      if (clase.clase === 'rechazado') {
+        await (deps.marcarRechazado || marcarRechazado)(prisma, outboxId, {
+          resultado: envio, mensajeData: { leadId: id, origen: 'VENDEDOR', texto },
+        }).catch(e => console.error('[inbox-actions] marcar rechazo:', e.message))
+      } else if (clase.clase === 'no_enviado') {
+        await prisma.outboundMessage.update({
+          where: { id: outboxId },
+          data: { estado: 'PENDING', attempts: { increment: 1 }, lastError: String(envio?.error || '').slice(0, 500), claimId: null, claimedAt: null, updatedAt: new Date() },
+        }).catch(e => console.error('[inbox-actions] outbox PENDING:', e.message))
+      } else {
+        await (deps.marcarIncierto || marcarIncierto)(prisma, outboxId, { resultado: envio })
+          .catch(e => console.error('[inbox-actions] marcar incierto:', e.message))
+      }
       return reply.code(502).send({ error: 'no se pudo enviar por WhatsApp', detalle: envio?.error || null })
     }
 
@@ -137,11 +176,19 @@ export async function replyV2(request, reply, prisma, deps = {}) {
     // porque perder el mensaje del lead es peor que una doble respuesta.
     (deps.invalidarTurnoEnVuelo || invalidarTurnoEnVuelo)(id)
 
-    // 2) Persistir el mensaje del VENDEDOR (solo lo que de verdad salió).
-    const msg = await (deps.persistirMensajeSaliente || persistirMensajeSaliente)(prisma, {
-      data: { leadId: id, conversationId: lead.conversations?.[0]?.id ?? null, origen: 'VENDEDOR', texto },
-      resultado: envio, canal, tenantId: lead.tenantId,
+    // 2) Persistir el mensaje del VENDEDOR (solo lo que de verdad salió), en la misma fila
+    // de la outbox que ya sabe cuál fue el resultado. Si el insert del historial falla tras
+    // que Meta aceptó, la recuperación lo crea por wamid SIN volver a enviar.
+    const msg = await (deps.confirmarEnvio || confirmarEnvio)(prisma, outboxId, {
+      resultado: envio,
+      mensajeData: { leadId: id, conversationId: lead.conversations?.[0]?.id ?? null, origen: 'VENDEDOR', texto },
+      canal,
+      tenantId: lead.tenantId,
+    }).then(r => r.mensaje).catch(err => {
+      console.error(`[inbox-actions] reply lead ${id}: no se pudo guardar el historial: ${err.message}`)
+      return null
     })
+    if (!msg) return reply.code(502).send({ error: 'WhatsApp aceptó el envío pero no se pudo registrar; revisa el envío incierto' })
 
     // 3) Tomar control: el bot se calla y se refresca el reloj de auto-resume.
     await prisma.leadState.upsert({

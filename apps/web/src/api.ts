@@ -7,6 +7,37 @@ import type {
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:3999'
 const TOKEN_KEY = 'hidata_token'
 const USER_KEY = 'hidata_user'
+const TENANT_KEY = 'hidata_tenant'
+
+// ── Empresa (tenant) del CRM ───────────────────────────────────────────────
+// El login es el ÚNICO punto sin token del cual no se puede derivar el tenant, así que el
+// navegador tiene que declararlo. Sin esto, la pantalla de perfiles listaba SIEMPRE los
+// vendedores del tenant por defecto del despliegue: en una operación con tres empresas,
+// entrar por el CRM de la segunda era imposible (o, peor, se列表aba el equipo de otra).
+// Orden: ?tenant= en la URL (lo usa cada cliente al publicar su enlace) → valor guardado →
+// variable de entorno del build.
+function resolverTenant(): string | null {
+  const deUrl = new URLSearchParams(window.location.search).get('tenant')
+  if (deUrl) { try { localStorage.setItem(TENANT_KEY, deUrl) } catch { /* modo privado */ } return deUrl }
+  try { const guardado = localStorage.getItem(TENANT_KEY); if (guardado) return guardado } catch { /* modo privado */ }
+  return (import.meta.env.VITE_TENANT as string | undefined) || null
+}
+
+let TENANT: string | null = typeof window === 'undefined' ? null : resolverTenant()
+
+/** Cambia de empresa (o limpia la selección si se pasa null). */
+export function setTenant(tenant: string | null): void {
+  TENANT = tenant
+  try { tenant ? localStorage.setItem(TENANT_KEY, tenant) : localStorage.removeItem(TENANT_KEY) } catch { /* modo privado */ }
+}
+
+export function getTenant(): string | null { return TENANT }
+
+/** Añade el tenant a la ruta de los endpoints que lo necesitan (login). */
+function conTenant(path: string): string {
+  if (!TENANT) return path
+  return path + (path.includes('?') ? '&' : '?') + 'tenant=' + encodeURIComponent(TENANT)
+}
 
 // ── Sesión: una sola fuente, con aviso de expiración ──────────────────────
 // El bug que motivó esto: un 401 borraba el token del almacenamiento pero NO cambiaba el
@@ -113,13 +144,34 @@ export interface LeadsPageQuery {
   label?: string
 }
 
+// Métricas v1 (Hito B4). Cada métrica explica QUÉ cuenta y de DÓNDE sale; si no hay dato,
+// `disponible:false` explica por qué. Es la diferencia entre un panel y una colección de
+// números que nadie puede defender.
+export interface Metrica {
+  clave: string
+  valor: number | null
+  unidad: string
+  definicion: string
+  fuente: string
+  disponible?: boolean
+  motivoSiNo?: string
+}
+
+export interface MetricasResponse {
+  periodo: { dias: number; desde: string }
+  alcance: 'tenant' | 'propio'
+  metricas: Metrica[]
+  resultadosConfirmados: { resultado: string; total: number }[]
+  nota: string
+}
+
 export const api = {
-  // Público (pantalla de login, pre-auth): todos los vendedores activos.
-  vendors: () => req<VendorLite[]>('/auth/vendors'),
+  // Público (pantalla de login, pre-auth): los vendedores del tenant declarado.
+  vendors: () => req<VendorLite[]>(conTenant('/auth/vendors')),
   // Autenticado + tenant-scopeado (picker de reasignar): solo los del MISMO tenant.
   vendorsScoped: () => req<{ id: number; nombre: string; role: string }[]>('/v2/vendors'),
   login: (nombre: string, pin: string) =>
-    req<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify({ nombre, pin }) }),
+    req<LoginResponse>(conTenant('/auth/login'), { method: 'POST', body: JSON.stringify({ nombre, pin }) }),
   // Sin params → array legacy. Con params → página (sobrecargas separadas para no
   // romper el tipado del Inbox actual).
   leads: () => req<LeadListItem[]>('/v2/leads'),
@@ -176,6 +228,9 @@ export const api = {
     req<DebriefPreview>(`/v2/leads/${id}/debrief`, { method: 'POST', body: JSON.stringify({ nota }) }),
   saveDebrief: (id: number, d: DebriefPreview) =>
     req<{ ok: true; outcome: string }>(`/v2/leads/${id}/debrief/save`, { method: 'POST', body: JSON.stringify(d) }),
+  // Métricas v1 (Hito B4): cada número con definición y fuente. Lo que no tiene dato llega
+  // con `disponible:false`, y la pantalla lo dice en vez de inventar un valor.
+  metricas: (dias = 30) => req<MetricasResponse>(`/v2/metricas?dias=${dias}`),
   leadDetail: (id: number) => req<LeadDetail>(`/v2/leads/${id}`),
   // Pass page.cursor unchanged; its timestamp and ID are an opaque backend contract.
   conversation: (id: number, limit?: number, cursor?: string) =>

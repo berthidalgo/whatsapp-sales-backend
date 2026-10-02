@@ -9,8 +9,9 @@ import { STAGE_LABELS, STAGE_ORDER, stageLabel } from '@shared/stages'
 import { loadSeen, saveSeen, isUnread } from './unread'
 import Conversation from './Conversation'
 import AgentPlayground from './AgentPlayground'
+import Metricas from './Metricas'
 
-type View = 'inbox' | 'flujos'
+type View = 'inbox' | 'flujos' | 'metricas'
 
 const TAMANO_PAGINA = 25
 
@@ -120,13 +121,14 @@ export default function Inbox({ user, onLogout }: { user: AuthUser; onLogout: ()
           {noLeidos > 0 && <span className="rb-badge">{noLeidos > 99 ? '99+' : noLeidos}</span>}
         </button>
         <button className={`rb${view === 'flujos' ? ' on' : ''}`} title="Configuración de campañas" onClick={() => setView('flujos')}>⚡<span>CAMPANAS</span></button>
+        <button className={`rb${view === 'metricas' ? ' on' : ''}`} title="Actividad y resultado" onClick={() => setView('metricas')}>📊<span>MÉTRICAS</span></button>
         <div className="rail-sp" />
         <button className="rail-av" title={`${user.nombre} — cerrar sesión`} onClick={onLogout}>
           {user.initials}
         </button>
       </nav>
 
-      {view === 'flujos' ? <AgentPlayground user={user} /> : <>
+      {view === 'flujos' ? <AgentPlayground user={user} /> : view === 'metricas' ? <Metricas user={user} /> : <>
       <aside className="sidebar">
         <div className="sb-top">
           <div className="sb-title">Inbox</div>

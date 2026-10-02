@@ -37,6 +37,7 @@ import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 
 import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2, reabrirV2, previewTurnoV2 } from './api/inbox-actions.js'
 import { listCampaignsV2, getCampaignV2, createCampaignV2, getAgentConfigV2, saveAgentConfigV2, previewAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
 import { paginaInicio, paginaPrivacidad } from './api/sitio-publico.js'
+import { metricasV2 } from './api/metrica.js'
 import { verifyJwt, requireAdmin, scopeWhere } from './lib/auth-guard.js'
 
 import { verificarCadena, resumenSalud, estadoDetallado, construirCadena, describirCadena } from './lib/llm-cadena.js'
@@ -890,6 +891,9 @@ app.post('/v2/agent-config/preview',    { preHandler: [verifyJwt, requireAdmin] 
 app.post('/v2/leads/:id/preview',       { preHandler: verifyJwt }, (req, reply) => previewTurnoV2(req, reply, prisma))
 app.post('/v2/flow/copilot',            { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => copilotV2(req, reply, prisma))
 app.post('/v2/transcribe',            { preHandler: verifyJwt }, (req, reply) => transcribeV2(req, reply))
+// Métricas v1 (Hito B4): cada número con su definición y su fuente; "no disponible" cuando
+// no hay dato. El alcance es el mismo del inbox: un vendedor no ve el volumen de otro.
+app.get('/v2/metricas',                { preHandler: verifyJwt }, (req, reply) => metricasV2(req, reply, prisma))
 app.post('/v2/me/pin',                { preHandler: verifyJwt }, (req, reply) => cambiarPin(req, reply, prisma))
 
 

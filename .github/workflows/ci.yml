@@ -90,3 +90,11 @@ jobs:
           DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
           OPENROUTER_API_KEY: ''
           MISTRAL_API_KEY: ''
+      # Recorrido completo del CRM contra el servidor real y un proveedor de Meta ficticio en
+      # localhost: webhook, campaña, envío, rechazo, incierto y aislamiento entre empresas.
+      - run: npm run recorrido
+        env:
+          CRM_TEST_DATABASE_URL: postgresql://crm_test:crm_test@127.0.0.1:5432/postgres
+          DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
+          OPENROUTER_API_KEY: ''
+          MISTRAL_API_KEY: ''

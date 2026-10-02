@@ -133,21 +133,23 @@ const ETIQUETA_RESULTADO = {
 }
 
 /**
- * Último resultado CONFIRMADO por un humano para este lead.
- * @returns {{ resultado: string|null, etiqueta: string|null, fuente: 'call_events'|null, fecha: string|null }}
+ * Último resultado CONFIRMADO por un humano para este lead. Es lo que se expone en el
+ * contrato (`resultado`, `resultadoEtiqueta`, `resultadoFuente`): el nombre de la clave es
+ * parte del contrato con el front, no un detalle interno.
+ * @returns {{ resultado: string|null, resultadoEtiqueta: string|null, resultadoFuente: 'call_events'|null, resultadoFecha: string|null }}
  */
 export function resultadoConfirmado(callEvents) {
   if (!Array.isArray(callEvents) || !callEvents.length) {
-    return { resultado: null, etiqueta: null, fuente: null, fecha: null }
+    return { resultado: null, resultadoEtiqueta: null, resultadoFuente: null, resultadoFecha: null }
   }
   const conTag = callEvents.filter(c => c?.outcomeTag && RESULTADOS_HUMANOS.has(c.outcomeTag))
-  if (!conTag.length) return { resultado: null, etiqueta: null, fuente: null, fecha: null }
+  if (!conTag.length) return { resultado: null, resultadoEtiqueta: null, resultadoFuente: null, resultadoFecha: null }
   const ultimo = conTag.sort((a, b) => new Date(b.occurredAt || b.createdAt || 0) - new Date(a.occurredAt || a.createdAt || 0))[0]
   return {
     resultado: ultimo.outcomeTag,
-    etiqueta: ETIQUETA_RESULTADO[ultimo.outcomeTag] || ultimo.outcomeTag,
-    fuente: 'call_events',
-    fecha: ultimo.occurredAt || ultimo.createdAt || null,
+    resultadoEtiqueta: ETIQUETA_RESULTADO[ultimo.outcomeTag] || ultimo.outcomeTag,
+    resultadoFuente: 'call_events',
+    resultadoFecha: ultimo.occurredAt || ultimo.createdAt || null,
   }
 }
 
