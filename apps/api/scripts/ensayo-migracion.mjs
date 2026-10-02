@@ -2,9 +2,12 @@
 // Un plan generado sobre una base vacía no dice nada sobre una base con historia: lo que
 // importa es que la migración sea aditiva sobre datos reales y que el código viejo siga
 // funcionando contra el esquema nuevo (que es lo que hace posible volver atrás).
-import { execFileSync } from 'node:child_process'
-import { writeFileSync, mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+//
+// El esquema anterior está FIJADO como archivo en tests/fixtures/esquema-20261001.sql
+// (copia exacta del desplegado, commit 298b32b). No se lee de `git show`: en CI el
+// checkout es superficial y el commit base no existe, y un ensayo que depende del
+// historial es un ensayo que un día falla sin que cambie el código.
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import pg from 'pg'
@@ -16,12 +19,16 @@ if (!base || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(base).hostnam
   console.error('Se necesita CRM_TEST_DATABASE_URL local explícita.')
   process.exit(1)
 }
-const raiz = process.argv[2] || join(process.cwd(), '..', '..')
-
-// El SQL del esquema ANTERIOR, tal como está en producción (commit 298b32b).
-const tmp = mkdtempSync(join(tmpdir(), 'ensayo-'))
-const viejoSql = join(tmp, '20261001.sql')
-writeFileSync(viejoSql, execFileSync('git', ['show', '298b32b:apps/api/prisma/sql/20261001_crm_schema.sql'], { cwd: raiz, maxBuffer: 32 * 1024 * 1024 }))
+const aqui = new URL('.', import.meta.url).pathname.replace(/^\//, '').replace(/\/$/, '')
+const fixtureViejo = join(aqui, '..', 'tests', 'fixtures', 'esquema-20261001.sql')
+let viejoSql
+try {
+  viejoSql = readFileSync(fixtureViejo, 'utf8').replace(/^\uFEFF/, '')
+} catch {
+  console.error('Falta el esquema anterior fijado en tests/fixtures/esquema-20261001.sql')
+  process.exit(1)
+}
+if (!/CREATE TABLE/i.test(viejoSql)) { console.error('El fixture del esquema anterior no parece SQL válido.'); process.exit(1) }
 
 const nuevo = loadContract()
 let fallos = 0
@@ -38,7 +45,7 @@ let db, c
 try {
   console.log('\n── 1. Se levanta el esquema ANTERIOR (20261001) ─────────────────────')
   c = new pg.Client({ connectionString: url }); await c.connect()
-  await c.query(readFileSync(viejoSql, 'utf8'))
+  await c.query(viejoSql)
   const catalogoViejo = await readCatalog(c)
   check('Esquema anterior aplicado', catalogoViejo.tables.length === 19, `${catalogoViejo.tables.length} tablas`)
 
