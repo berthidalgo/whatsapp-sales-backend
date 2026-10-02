@@ -44,7 +44,7 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: node --test tests/conversation-history.test.mjs
+      - run: node --test tests/*.test.mjs
 
   postgres:
     name: CRM (PostgreSQL + HTTP + migraciones)
@@ -78,6 +78,15 @@ jobs:
       - run: npm run test:db
         env:
           CRM_TEST_DATABASE_URL: postgresql://crm_test:crm_test@127.0.0.1:5432/postgres
+          DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
+          OPENROUTER_API_KEY: ''
+          MISTRAL_API_KEY: ''
+      # Hito A (entrada/salida durables + estado comercial) contra PostgreSQL real: la
+      # durabilidad no se prueba con mocks, se prueba con índices, FKs y reclamos reales.
+      - run: npm run test:db:hitoa
+        env:
+          CRM_TEST_DATABASE_URL: postgresql://crm_test:crm_test@127.0.0.1:5432/postgres
+          RUN_POSTGRES_TESTS: '1'
           DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
           OPENROUTER_API_KEY: ''
           MISTRAL_API_KEY: ''

@@ -22,17 +22,31 @@ function catalogFor(c = contract) {
 const empty = () => ({tables: [], columns: [], indexes: [], constraints: []});
 
 test('DB contract covers every CRM model and durable Meta prerequisites', () => {
-  assert.equal(contract.tables.length, 19);
-  for (const name of ['vendors','campaigns','triggers','flow_steps','leads','conversations','messages','media_assets','bot_config','lead_state','turn_trace','call_events','commitments','followup_queue','crm_notifications','test_phones','tenant_settings','channels','pending_cloud_receipts']) assert(contract.tables.some(t => t.name === name), name);
+  // 19 modelos de CRM + los 3 del Hito A (entrada durable, salida durable y candado de
+  // followups). El número sale del contrato; lo que se fija aquí es QUÉ tablas existen.
+  assert.equal(contract.tables.length, 22);
+  for (const name of ['vendors','campaigns','triggers','flow_steps','leads','conversations','messages','media_assets','bot_config','lead_state','turn_trace','call_events','commitments','followup_queue','crm_notifications','test_phones','tenant_settings','channels','pending_cloud_receipts','inbound_events','outbound_messages','followup_reservations']) assert(contract.tables.some(t => t.name === name), name);
   assert.deepEqual(compareCatalog(contract, catalogFor()), []);
   assert(contract.indexes.some(i => i.table === 'pending_cloud_receipts' && i.unique && JSON.stringify(i.columns) === JSON.stringify(['phone_number_id','wa_message_id'])));
+  // La deduplicación REAL de la entrada es este índice único, no una marca en memoria:
+  // (tenant, proveedor, identidad del evento) es lo que impide duplicar historial y respuesta
+  // cuando Meta reentrega el mismo mensaje.
+  assert(contract.indexes.some(i => i.table === 'inbound_events' && i.unique && JSON.stringify(i.columns) === JSON.stringify(['tenant_id','provider','event_key'])));
+  assert(contract.indexes.some(i => i.table === 'followup_reservations' && i.unique && JSON.stringify(i.columns) === JSON.stringify(['lead_id','followup_type','cycle_key'])));
+  // La entrada no se considera procesable hasta que vence la ventana de ráfaga.
+  assert(contract.indexes.some(i => i.table === 'inbound_events' && JSON.stringify(i.columns) === JSON.stringify(['estado','disponible_en'])));
+  // El turno pendiente y su versión son la base de "qué es hecho y qué es promesa" (Hito A3).
+  const ls = contract.tables.find(t => t.name === 'lead_state').columns.map(c => c.name);
+  for (const columna of ['turno_id','turno_pendiente','state_version']) assert(ls.includes(columna), columna);
 });
 
 test('empty bootstrap has all tables before indexes and FK, no business seeds', () => {
   const plan = planAdditive(contract, empty());
-  assert.equal(plan.length, 61);
-  assert(plan.slice(0, 19).every(s => s.startsWith('CREATE TABLE public.')));
-  assert(plan.slice(-25).every(s => s.startsWith('ALTER TABLE public.')));
+  // El total lo determina el contrato; se comprueba la ESTRUCTURA (tablas primero, claves
+  // foráneas al final, nada que borre datos ni inserte semillas de negocio).
+  assert.equal(plan.length, contract.tables.length + contract.indexes.length + contract.foreignKeys.length);
+  assert(plan.slice(0, 22).every(s => s.startsWith('CREATE TABLE public.')));
+  assert(plan.slice(-30).every(s => s.startsWith('ALTER TABLE public.')));
   assert(!plan.some(s => /^(INSERT|DELETE|DROP|TRUNCATE)\b/.test(s)));
 });
 

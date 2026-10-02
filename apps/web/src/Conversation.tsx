@@ -1,22 +1,27 @@
-import { useState, useEffect, useRef, useLayoutEffect } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, ApiError } from './api'
+import { api, ApiError, claveDeCache } from './api'
 import { useToast } from './Toast'
 import type { AuthUser, ConversationEvent, ConversationResponse, MediaRef } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import { stageLabel } from '@shared/stages'
 import LeadDebrief from './LeadDebrief'
 import { conversationEventId, mergeEarlierConversation, mergeLatestConversation } from './conversation-history'
+import { guardarBorrador, leerBorrador } from './drafts'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
   const toast = useToast()
-  const detailQ = useQuery({ queryKey: ['lead', leadId], queryFn: () => api.leadDetail(leadId) })
+  // Las claves llevan el ámbito de sesión (tenant + usuario): dos sesiones nunca comparten
+  // caché aunque el mismo lead exista en dos empresas.
+  const scope = claveDeCache(user)
+  const detailQ = useQuery({ queryKey: scope.concat('lead', leadId), queryFn: () => api.leadDetail(leadId) })
+  const convKey = scope.concat('conv', leadId)
   const convQ = useQuery({
-    queryKey: ['conv', leadId],
+    queryKey: convKey,
     queryFn: async () => {
       const latest = await api.conversation(leadId, 300)
-      return mergeLatestConversation(qc.getQueryData<ConversationResponse>(['conv', leadId]), latest)
+      return mergeLatestConversation(qc.getQueryData<ConversationResponse>(convKey), latest)
     },
     refetchInterval: 10_000,
   })
@@ -38,8 +43,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   }, [convQ.data?.eventos, leadId])
 
   async function cargarAnterior() {
-    const key = ['conv', leadId]
-    const page = qc.getQueryData<ConversationResponse>(key)?.page
+    const page = qc.getQueryData<ConversationResponse>(convKey)?.page
     if (loadingEarlierLead === leadId || !page?.hayMas || !page.cursor) return
     setLoadingEarlierLead(leadId)
     try {
@@ -50,7 +54,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
         const visible = Array.from(container.children).find(child => child.hasAttribute('data-event-id') && child.getBoundingClientRect().bottom > top)
         if (visible) scrollAnchorRef.current = { leadId, id: visible.getAttribute('data-event-id')!, offset: visible.getBoundingClientRect().top - top }
       }
-      qc.setQueryData<ConversationResponse>(key, current => mergeEarlierConversation(current, earlier))
+      qc.setQueryData<ConversationResponse>(convKey, current => mergeEarlierConversation(current, earlier))
     } catch {
       if (selectedLeadRef.current === leadId) toast('No se pudieron cargar los mensajes anteriores. Reintenta.')
     } finally {
@@ -60,9 +64,25 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
 
   const puedeReasignar = user.role === 'ADMIN' || user.role === 'SUPERVISOR'
   // Picker de reasignar: vendedores del MISMO tenant (endpoint scopeado, no el público).
-  const vendorsQ = useQuery({ queryKey: ['vendors-scoped'], queryFn: api.vendorsScoped, enabled: puedeReasignar })
+  const vendorsQ = useQuery({ queryKey: scope.concat('vendors-scoped'), queryFn: api.vendorsScoped, enabled: puedeReasignar })
 
-  const [texto, setTexto] = useState('')
+  // ═══ BORRADOR POR LEAD (Hito B1) ═══
+  // El texto se carga y se guarda PARA el lead abierto. Cambiar de conversación restaura el
+  // borrador de la nueva y NO arrastra el de la anterior. Es lo que evita enviar el texto de
+  // Ana a Bruno (un envío erróneo a un cliente real, no reversible).
+  const [texto, setTexto] = useState(() => leerBorrador(leadId))
+  useEffect(() => {
+    setTexto(leerBorrador(leadId))
+  }, [leadId])
+  const onTexto = useCallback((valor: string) => {
+    setTexto(valor)
+    guardarBorrador(selectedLeadRef.current, valor)
+  }, [])
+
+  // El envío en curso se amarra al lead con el que arrancó. Si el usuario cambia de
+  // conversación mientras espera, el mensaje sigue yendo a SU lead, y la respuesta se
+  // descarta si ya no estamos viendo esa conversación (no se pinta en otro lado).
+  const envioRef = useRef<{ leadId: number; texto: string } | null>(null)
   const [enviando, setEnviando] = useState(false)
   const [cambiandoModo, setCambiandoModo] = useState(false)
   const [reasignando, setReasignando] = useState(false)
@@ -74,38 +94,50 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   const [reabriendo, setReabriendo] = useState(false)
 
   function refrescar() {
-    qc.invalidateQueries({ queryKey: ['conv', leadId] })
-    qc.invalidateQueries({ queryKey: ['lead', leadId] })
-    qc.invalidateQueries({ queryKey: ['leads'] })
+    qc.invalidateQueries({ queryKey: scope.concat('conv', leadId) })
+    qc.invalidateQueries({ queryKey: scope.concat('lead', leadId) })
+    qc.invalidateQueries({ queryKey: scope.concat('leads') })
   }
 
   async function enviar() {
     const t = texto.trim()
     if (!t || enviando) return
+    // Se congela el destino AHORA: aunque el usuario cambie de lead mientras espera, el
+    // mensaje va a este. Un envío a un cliente equivocado es irreversible.
+    const destino = leadId
+    envioRef.current = { leadId: destino, texto: t }
     setEnviando(true)
     try {
-      await api.reply(leadId, t)   // responder TOMA el control (el bot se calla)
-      setTexto('')                 // solo se limpia si NO lanzó → en error el texto se conserva
-      setVentanaCerrada(null)
+      await api.reply(destino, t)   // responder TOMA el control (el bot se calla)
+      // Solo se borra el borrador si sigue siendo el del lead que se envió Y no se escribió
+      // otra cosa mientras tanto (si el usuario siguió escribiendo, no se pierde nada).
+      if (envioRef.current?.texto === t && selectedLeadRef.current === destino) {
+        onTexto('')
+        guardarBorrador(destino, '')
+        setVentanaCerrada(null)
+      }
       refrescar()
     } catch (e) {
       // 409 con ventanaCerrada no es un fallo del vendedor: el chat lleva más de 24 h
       // callado y Meta solo lo reabre con una plantilla. Se le ofrece, no se le regaña.
       if (e instanceof ApiError && e.status === 409 && e.body?.ventanaCerrada) {
         setVentanaCerrada({ plantilla: e.body.plantilla ?? null })
-      } else {
+      } else if (selectedLeadRef.current === destino) {
         toast('No se pudo enviar el mensaje. Tu texto sigue acá, reintenta.')
       }
     }
-    finally { setEnviando(false) }
+    finally { envioRef.current = null; setEnviando(false) }
   }
 
   async function reabrir() {
     if (reabriendo) return
+    const destino = leadId
     setReabriendo(true)
     try {
-      const r = await api.reabrir(leadId)
+      const r = await api.reabrir(destino)
       setVentanaCerrada(null)
+      // Enviar una plantilla NO abre la ventana de texto libre: se espera la respuesta del
+      // cliente. El texto pendiente se conserva (puede ir después, cuando conteste).
       toast(`Plantilla "${r.plantilla}" enviada. Cuando el cliente responda vas a poder escribirle normal.`)
       refrescar()
     } catch (e) {
@@ -153,10 +185,15 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
           <div className="conv-meta">
             {d && (
               <>
-                <span className="stage">{stageLabel(d.stage)}</span>
+                <span className="stage" title="Etapa que el bot infiere de la conversación">{stageLabel(d.stage)}</span>
                 <span className={`pill ${humano ? 'pill-human' : 'pill-bot'}`}>
                   {humano ? '👤 humano' : '🤖 bot'}
                 </span>
+                {/* Resultado confirmado por un humano. Distinto de la etapa y del pedido
+                    reconocido por el bot: "pagó" solo aparece si alguien lo registró. */}
+                {d.resultadoEtiqueta
+                  ? <span className="pill pill-resultado" title={d.resultadoFecha ? `Registrado el ${fmt(d.resultadoFecha)}` : undefined}>✓ {d.resultadoEtiqueta}</span>
+                  : <span className="pill pill-sindato" title="Nadie ha registrado el resultado de una llamada todavía">resultado: no disponible</span>}
                 {d.esRecurrente && <span className="pill">↩ vuelve</span>}
                 {d.label && <span className="pill pill-label">🏷 {d.label}</span>}
               </>
@@ -238,7 +275,7 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
       <div className="conv-input">
         <input
           value={texto}
-          onChange={e => setTexto(e.target.value)}
+          onChange={e => onTexto(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') void enviar() }}
           placeholder={humano ? 'Escribe tu respuesta…' : 'Escribe para responder (tomarás el control del chat)…'}
           disabled={enviando}

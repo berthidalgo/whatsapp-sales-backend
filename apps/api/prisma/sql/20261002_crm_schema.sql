@@ -134,6 +134,55 @@ CREATE TABLE public."pending_cloud_receipts" (
 );
 
 -- CreateTable
+CREATE TABLE public."inbound_events" (
+    "id" TEXT NOT NULL,
+    "tenant_id" TEXT NOT NULL,
+    "provider" TEXT NOT NULL DEFAULT 'cloud',
+    "event_key" TEXT NOT NULL,
+    "tipo" TEXT NOT NULL DEFAULT 'message',
+    "phone_number_id" TEXT,
+    "payload" JSONB NOT NULL DEFAULT '{}',
+    "estado" TEXT NOT NULL DEFAULT 'PENDING',
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "last_error" TEXT,
+    "disponible_en" TIMESTAMPTZ(6) NOT NULL,
+    "claim_id" TEXT,
+    "claimed_at" TIMESTAMPTZ(6),
+    "leadId" INTEGER,
+    "processed_at" TIMESTAMPTZ(6),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+
+    CONSTRAINT "inbound_events_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE public."outbound_messages" (
+    "id" TEXT NOT NULL,
+    "tenant_id" TEXT NOT NULL,
+    "leadId" INTEGER,
+    "origen" TEXT NOT NULL,
+    "tipo" TEXT NOT NULL DEFAULT 'text',
+    "payload" JSONB NOT NULL DEFAULT '{}',
+    "canal_ref" TEXT,
+    "estado" TEXT NOT NULL DEFAULT 'PENDING',
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "wa_message_id" TEXT,
+    "message_id" INTEGER,
+    "last_error" TEXT,
+    "error_code" INTEGER,
+    "claim_id" TEXT,
+    "claimed_at" TIMESTAMPTZ(6),
+    "resuelto_por" TEXT,
+    "resuelto_at" TIMESTAMPTZ(6),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    "sent_at" TIMESTAMPTZ(6),
+
+    CONSTRAINT "outbound_messages_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE public."media_assets" (
     "id" SERIAL NOT NULL,
     "lead_id" INTEGER NOT NULL,
@@ -184,6 +233,9 @@ CREATE TABLE public."lead_state" (
     "last_message_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "returning_lead_flag" BOOLEAN NOT NULL DEFAULT false,
     "label" TEXT,
+    "state_version" INTEGER NOT NULL DEFAULT 1,
+    "turno_id" TEXT,
+    "turno_pendiente" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -289,6 +341,22 @@ CREATE TABLE public."crm_notifications" (
 );
 
 -- CreateTable
+CREATE TABLE public."followup_reservations" (
+    "id" TEXT NOT NULL,
+    "lead_id" INTEGER NOT NULL,
+    "followup_type" TEXT NOT NULL,
+    "cycle_key" TEXT NOT NULL,
+    "context_snapshot" JSONB NOT NULL DEFAULT '{}',
+    "executed" BOOLEAN NOT NULL DEFAULT false,
+    "executed_at" TIMESTAMPTZ(6),
+    "message_id" TEXT,
+    "result" TEXT,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "followup_reservations_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE public."test_phones" (
     "telefono" TEXT NOT NULL,
     "added_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -311,6 +379,7 @@ CREATE TABLE public."tenant_settings" (
     "estado_suscripcion" TEXT NOT NULL DEFAULT 'trial',
     "turnos_incluidos_por_vendedor_mes" INTEGER NOT NULL DEFAULT 10000,
     "turnos_consumidos_mes_actual" INTEGER NOT NULL DEFAULT 0,
+    "turnos_ia_mes_actual" INTEGER NOT NULL DEFAULT 0,
     "mes_actual_inicio" TIMESTAMPTZ(6) NOT NULL DEFAULT date_trunc('month'::text, now()),
     "gemini_api_key_encrypted" TEXT,
     "byok_enabled" BOOLEAN NOT NULL DEFAULT false,
@@ -379,7 +448,28 @@ CREATE INDEX "pending_cloud_receipts_tenant_id_phone_number_id_idx" ON public."p
 CREATE UNIQUE INDEX "pending_cloud_receipts_phone_number_id_wa_message_id_key" ON public."pending_cloud_receipts"("phone_number_id", "wa_message_id");
 
 -- CreateIndex
+CREATE INDEX "inbound_events_estado_disponible_en_idx" ON public."inbound_events"("estado", "disponible_en");
+
+-- CreateIndex
+CREATE INDEX "inbound_events_leadId_idx" ON public."inbound_events"("leadId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "inbound_events_tenant_id_provider_event_key_key" ON public."inbound_events"("tenant_id", "provider", "event_key");
+
+-- CreateIndex
+CREATE INDEX "outbound_messages_tenant_id_estado_idx" ON public."outbound_messages"("tenant_id", "estado");
+
+-- CreateIndex
+CREATE INDEX "outbound_messages_leadId_idx" ON public."outbound_messages"("leadId");
+
+-- CreateIndex
 CREATE INDEX "media_assets_lead_id_idx" ON public."media_assets"("lead_id");
+
+-- CreateIndex
+CREATE INDEX "followup_reservations_executed_created_at_idx" ON public."followup_reservations"("executed", "created_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "followup_reservations_lead_id_followup_type_cycle_key_key" ON public."followup_reservations"("lead_id", "followup_type", "cycle_key");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "channels_external_key_key" ON public."channels"("external_key");
@@ -427,6 +517,18 @@ ALTER TABLE public."messages" ADD CONSTRAINT "messages_conversationId_fkey" FORE
 ALTER TABLE public."pending_cloud_receipts" ADD CONSTRAINT "pending_cloud_receipts_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES public."tenant_settings"("tenant_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE public."inbound_events" ADD CONSTRAINT "inbound_events_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES public."tenant_settings"("tenant_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE public."inbound_events" ADD CONSTRAINT "inbound_events_leadId_fkey" FOREIGN KEY ("leadId") REFERENCES public."leads"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE public."outbound_messages" ADD CONSTRAINT "outbound_messages_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES public."tenant_settings"("tenant_id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE public."outbound_messages" ADD CONSTRAINT "outbound_messages_leadId_fkey" FOREIGN KEY ("leadId") REFERENCES public."leads"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE public."media_assets" ADD CONSTRAINT "media_assets_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES public."leads"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -461,6 +563,9 @@ ALTER TABLE public."crm_notifications" ADD CONSTRAINT "crm_notifications_vendor_
 
 -- AddForeignKey
 ALTER TABLE public."crm_notifications" ADD CONSTRAINT "crm_notifications_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES public."leads"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE public."followup_reservations" ADD CONSTRAINT "followup_reservations_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES public."leads"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE public."channels" ADD CONSTRAINT "channels_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES public."tenant_settings"("tenant_id") ON DELETE CASCADE ON UPDATE CASCADE;

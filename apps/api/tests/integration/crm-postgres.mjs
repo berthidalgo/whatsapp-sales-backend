@@ -28,10 +28,14 @@ test('PostgreSQL: migrations and full HTTP CRM contracts', {skip:!configured,tim
   try{
     for(const name of names){assert(/^crm_smoke_[a-z]+_[a-f0-9]+$/.test(name));await admin.query('CREATE DATABASE "'+name+'"');const c=new pg.Client({connectionString:urlFor(name)});await c.connect();clients.push(c)}
     const [fresh,upgrade,rollback]=clients
-    await t.test('empty bootstrap creates 19 models and second application writes zero statements',async()=>{
-      const first=await prepareDatabase(fresh,contract,{apply:true});assert.equal(first.statements.length,61)
+    await t.test('empty bootstrap creates every contract model and a second application writes zero statements',async()=>{
+      const first=await prepareDatabase(fresh,contract,{apply:true})
+      // El número de sentencias lo fija el contrato generado, no el test: se compara contra
+      // el propio contrato para que una tabla nueva no rompa la suite sin que nadie lo vea.
+      assert.equal(first.statements.length,contract.tables.length+contract.indexes.length+contract.foreignKeys.length)
       const second=await prepareDatabase(fresh,contract,{apply:true});assert.equal(second.statements.length,0)
       assert.deepEqual((await prepareDatabase(fresh,contract,{verify:true})).issues,[])
+      assert.equal(contract.tables.length,22)
     })
     await t.test('additive upgrade preserves commercial ficha, lead state and messages',async()=>{
       await prepareDatabase(upgrade,contract,{apply:true})

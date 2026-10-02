@@ -8,8 +8,12 @@ export class ReadinessError extends Error {}
 
 export const API_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const SCHEMA_PATH = path.join(API_ROOT, 'prisma', 'schema.prisma');
-export const SQL_PATH = path.join(API_ROOT, 'prisma', 'sql', '20261001_crm_schema.sql');
-export const CONTRACT_PATH = path.join(API_ROOT, 'prisma', 'sql', '20261001_crm_contract.json');
+export const SQL_PATH = path.join(API_ROOT, 'prisma', 'sql', '20261002_crm_schema.sql');
+// Versión del contrato de esquema. Cambia cuando cambian las tablas/columnas/índices y se
+// bumpea junto con el nombre del archivo SQL+JSON. `/ready` lo publica: un despliegue con
+// un contrato distinto al que espera su código se ve antes de atender tráfico.
+export const CONTRACT_VERSION = '20261002';
+const CONTRACT_PATH = path.join(API_ROOT, 'prisma', 'sql', '20261002_crm_contract.json');
 export const hash = value => createHash('sha256').update(value.replace(/\r\n/g, '\n')).digest('hex');
 const quote = value => '"' + value.replace(/"/g, '""') + '"';
 const tableSql = name => 'public.' + quote(name);
@@ -54,7 +58,7 @@ export function parseSchemaSql(sql, schemaSource = '') {
   if (!tables.length) throw new ReadinessError('Contrato SQL vacío: no se reconoció ningún modelo');
   const recognized = tables.length + indexes.length + foreignKeys.length;
   if (recognized !== statements.length) throw new ReadinessError('Contrato SQL contiene sentencias no reconocidas');
-  return { version: '20261001', schemaHash: hash(schemaSource), sqlHash: hash(sql), tables, indexes, foreignKeys };
+  return { version: CONTRACT_VERSION, schemaHash: hash(schemaSource), sqlHash: hash(sql), tables, indexes, foreignKeys };
 }
 
 export function loadContract() {
@@ -191,7 +195,12 @@ const SCOPE_CHECKS = [
   ['call_event_vendor', ['call_events','leads','vendors'], 'SELECT count(*)::int AS n FROM public.call_events x JOIN public.leads l ON l.id=x.lead_id JOIN public.vendors v ON v.id=x.vendor_id WHERE l.tenant_id<>v.tenant_id'],
   ['notification_vendor', ['crm_notifications','leads','vendors'], 'SELECT count(*)::int AS n FROM public.crm_notifications x JOIN public.leads l ON l.id=x.lead_id JOIN public.vendors v ON v.id=x.vendor_id WHERE l.tenant_id<>v.tenant_id'],
   ['media_tenant', ['media_assets','leads'], 'SELECT count(*)::int AS n FROM public.media_assets x JOIN public.leads l ON l.id=x.lead_id WHERE x.tenant_id IS NOT NULL AND x.tenant_id<>l.tenant_id'],
-  ['pending_receipt_channel', ['pending_cloud_receipts','channels'], "SELECT count(*)::int AS n FROM public.pending_cloud_receipts p LEFT JOIN public.channels c ON c.provider='cloud' AND c.external_key=p.phone_number_id WHERE c.id IS NULL OR p.tenant_id<>c.tenant_id"]
+  ['pending_receipt_channel', ['pending_cloud_receipts','channels'], "SELECT count(*)::int AS n FROM public.pending_cloud_receipts p LEFT JOIN public.channels c ON c.provider='cloud' AND c.external_key=p.phone_number_id WHERE c.id IS NULL OR p.tenant_id<>c.tenant_id"],
+  // Hito A1/A2: la entrada y la salida durables no pueden pertenecer a un lead de otro
+  // tenant. Sin esta comprobación, un bug de ruteo escribiría el mensaje de un cliente en la
+  // bandeja de otro sin que ninguna otra verificación lo notara.
+  ['inbound_lead_tenant', ['inbound_events','leads'], 'SELECT count(*)::int AS n FROM public.inbound_events x JOIN public.leads l ON l.id=x."leadId" WHERE x.tenant_id<>l.tenant_id'],
+  ['outbound_lead_tenant', ['outbound_messages','leads'], 'SELECT count(*)::int AS n FROM public.outbound_messages x JOIN public.leads l ON l.id=x."leadId" WHERE x.tenant_id<>l.tenant_id']
 ];
 
 export async function checkTenantScope(client, tables) {
@@ -211,7 +220,7 @@ export async function prepareDatabase(client, contract, { apply = false, verify 
     await client.query("SET LOCAL lock_timeout = '10s'");
     await client.query("SET LOCAL statement_timeout = '60s'");
     if (apply) {
-      const locked = (await client.query('SELECT pg_try_advisory_xact_lock(20261001, 1701) AS locked')).rows[0].locked;
+      const locked = (await client.query('SELECT pg_try_advisory_xact_lock(20261002, 1701) AS locked')).rows[0].locked;
       if (!locked) throw new ReadinessError('Otra migración CRM está en curso');
     }
     const before = await readCatalog(client);

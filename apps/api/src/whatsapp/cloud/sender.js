@@ -211,6 +211,9 @@ async function postGraph(url, token, body, start) {
         ok: false, sent: false, messageId: null, status: res.status,
         latency_ms: Date.now() - start,
         error: code === 131047 ? 'fuera_de_ventana_24h' : `graph_${res.status}`,
+        // El código de Meta viaja hasta la outbox para que el vendedor vea POR QUÉ no
+        // salió, no solo que "falló". 5xx sin cuerpo también se registra como graphically.
+        errorCode: Number.isInteger(code) ? code : null,
         errors: [String(metaErr).slice(0, 300)]
       }
     }

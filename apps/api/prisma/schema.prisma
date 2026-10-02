@@ -143,6 +143,9 @@ model Lead {
   followupQueue     FollowupQueueItem[]
   crmNotifications  CrmNotification[]
   mediaAssets       MediaAsset[]
+  inboundEvents     InboundEvent[]
+  outboundMessages  OutboundMessage[]
+  followupReservations FollowupReservation[]
   createdAt         DateTime            @default(now()) @db.Timestamp(6)
   updatedAt         DateTime            @updatedAt @db.Timestamp(6)
 
@@ -232,6 +235,120 @@ model PendingCloudReceipt {
   @@map("pending_cloud_receipts")
 }
 
+// ════════════════════════════════════════════════════════
+// MOTOR v21 — Entrada y salida durables (Hito A, oct 2026)
+// ════════════════════════════════════════════════════════
+//
+// POR QUÉ EXISTEN. Antes de esta versión el webhook contestaba 200 y después worked in
+// memoria: debounce, locks y deduplicación vivían en el proceso. Un reinicio en ese
+// hueco (Render duerme, deploy, caída) perdía el mensaje sin dejar rastro, y un reintento
+// de Meta tras la caída se procesaba dos veces. En la salida el problema era el espejo:
+// Meta aceptaba el envío y el insert del historial podía fallar después, dejando un
+// mensaje que el cliente recibió pero que la bandeja no conoce.
+//
+// InboundEvent  = la entrada YA autenticada y routeada, persistida antes de responder.
+//                 Identidad estable del evento (eventKey), estados de procesamiento,
+//                 reclasificación por reintento acotado y recuperación tras reinicio.
+// OutboundMessage = la intención de envío, durable ANTES de llamar a Meta, con el
+//                 resultado o el estado INCIERTO cuando no se puede saber. Meta NO ofrece
+//                 clave de idempotencia para POST /messages (verificado en su
+//                 documentación): por eso nada se reenvía a ciegas tras una aceptación
+//                 posible; queda incierto y visible para una resolución controlada.
+//
+// Los dos son append-only en su identidad: la deduplicación real es el índice único,
+// no una marca en memoria.
+
+// ─── Entrada durable (bandeja) ─────────────────────────────────
+model InboundEvent {
+  id            String   @id @default(uuid())
+  // tenant_id sin default (mismo motivo que en Lead/Vendor: un tenant olvidado debe
+  // FALLAR, no contaminar). Se escribe tras resolver el canal (phone_number_id → channel).
+  tenantId      String   @map("tenant_id")
+  tenant        TenantSettings @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+
+  provider      String   @default("cloud")   // cloud | evolution
+  // Identidad estable del evento en el proveedor. Para Cloud es el wamid del mensaje.
+  // Es la clave de deduplicación REAL (junto con tenant + provider): repetir el mismo
+  // evento no crea una segunda fila, y el replay posterior es idempotente por construcción.
+  eventKey      String   @map("event_key")
+
+  tipo          String   @default("message") // message | echo
+  phoneNumberId String?  @map("phone_number_id")
+  // Lo que el procesamiento necesita para volver a intentarlo sin volver a llamar a Meta:
+  // remitente, tipo, texto, media_id, contexto de anuncio e interactivo. Datos del
+  // mensaje entrante, nunca credenciales.
+  payload       Json     @default("{}")
+
+  // PENDING (pendiente de procesar) → PROCESSING (reclamado por un worker) →
+  // DONE (procesado) · DISCARDED (descartado a propósito: sin remitente, lead archivado,
+  // comprobante escalado) · FAILED (agotó sus reintentos). Solo PENDING es recuperable.
+  estado        String   @default("PENDING")
+  attempts      Int      @default(0)
+  lastError     String?  @db.Text @map("last_error")
+
+  // Ráfagas: el turno se agrupa 6 s desde el último mensaje. Se guarda como fecha en la
+  // fila (no como timer en memoria) → tras un reinicio el mismo criterio sigue aplicando.
+  disponibleEn  DateTime @map("disponible_en") @db.Timestamptz(6)
+  // Reclamo: qué worker tomó la fila y cuándo. Si el proceso muere con la fila tomada,
+  // la recuperación la devuelve a PENDING cuando el reclamo caduca.
+  claimId       String?  @map("claim_id")
+  claimedAt     DateTime? @map("claimed_at") @db.Timestamptz(6)
+
+  leadId        Int?
+  lead          Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz(6)
+
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, provider, eventKey])
+  @@index([estado, disponibleEn])
+  @@index([leadId])
+  @@map("inbound_events")
+}
+
+// ─── Salida durable (outbox con resultado incierto) ───────────
+model OutboundMessage {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  tenant        TenantSettings @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  leadId        Int?
+  lead          Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  origen        String   // BOT | VENDEDOR
+  tipo          String   @default("text")    // text | template | image
+  // Lo que se envía y con qué datos: texto, o nombre/idioma/componentes de plantilla,
+  // o referencia de imagen. Sin credenciales (esas salen del canal en el momento del envío).
+  payload       Json     @default("{}")
+  canalRef      String?  @map("canal_ref")   // external_key / phone_number_id del canal
+
+  // PENDING (intención durable, aún no enviada) → SENDING (llamada en curso) →
+  // SENT (Meta aceptó; queda el wamid) · REJECTED (Meta rechazó: NO reenviar, se
+  // marca fallido con su código) · UNCERTAIN (pudo aceptarse y no lo sabemos: NUNCA
+  // se reenvía solo; queda visible y se resuelve a mano).
+  estado        String   @default("PENDING")
+  attempts      Int      @default(0)
+  waMessageId   String?  @map("wa_message_id")
+  // Fila de `messages` ya creada. Si Meta aceptó y este insert falla, la recuperación
+  // lo reintenta por wamid (único) sin volver a enviar.
+  messageId     Int?     @map("message_id")
+  lastError     String?  @db.Text @map("last_error")
+  errorCode     Int?     @map("error_code")
+  claimId       String?  @map("claim_id")
+  claimedAt     DateTime? @map("claimed_at") @db.Timestamptz(6)
+  // Cuándo se resolvió un estado incierto a mano (operador), para auditoría.
+  resueltoPor   String?  @map("resuelto_por")
+  resueltoAt    DateTime? @map("resuelto_at") @db.Timestamptz(6)
+
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sentAt        DateTime? @map("sent_at") @db.Timestamptz(6)
+
+  @@index([tenantId, estado])
+  @@index([leadId])
+  @@map("outbound_messages")
+}
+
 // ─── Media entrante (comprobantes, fotos del lead) ────────────
 // El lead manda una imagen por WhatsApp → el cerebro la baja para que Gemini la
 // lea, y AHORA además la persistimos para mostrarla en el Inbox. `storage` es la
@@ -308,6 +425,20 @@ model LeadState {
   // cerebro. Columna propia (no en slots_filled) → inmune al upsert del bot. Texto
   // libre en la BD; la taxonomía válida la fija la capa app (inbox-actions).
   label              String?                              @map("label")
+
+  // ── Turno pendiente de confirmar (Hito A3, oct 2026) ──
+  // Antes el pipeline guardaba stage + slots ANTES de enviar y nada decía si el envío
+  // terminó. Un turno descartado (respuesta obsoleta) o un envío rechazado dejaban un
+  // avance comercial que el cliente nunca recibió: "pedido confirmado" sin mensaje.
+  //
+  // Ahora se separa lo que el LEAD APORTÓ (slots sin prefijo `_`, se guardan siempre:
+  // son hechos de la conversación) de lo que depende de una acción SALIENTE (etapa,
+  // pedido, cierre, escalado, compromisos). Lo segundo queda en `turnoPendiente` con su
+  // `turnoId` y se confirma con `confirmarTurno` solo cuando Meta aceptó el envío.
+  // Un descarte de turno viejo solo limpia SU turnoId: nunca pisa el turno siguiente.
+  stateVersion       Int      @default(1)  @map("state_version")
+  turnoId            String?   @map("turno_id")
+  turnoPendiente     Json?     @map("turno_pendiente")
   
   createdAt          DateTime @default(now())             @map("created_at")
   updatedAt          DateTime @default(now())             @updatedAt @map("updated_at")
@@ -450,6 +581,31 @@ model CrmNotification {
   @@map("crm_notifications")
 }
 
+// Candado de envío del motor de followups (Hito A4, oct 2026).
+// El flag en memoria de /cron/followup solo serializa corridas DENTRO del proceso; dos
+// processes (o dos disparos solapados tras un reintento) leían el mismo lead como elegible
+// y mandaban el mismo recordatorio dos veces. Aquí la reserva vive en la BD: la unicidad de
+// (lead_id, followup_type, cycle_key) hace que la segunda corrida no pueda tomar lo mismo.
+// `cycle_key` agrupa por hora para el followup por silencio y por compromiso para el
+// recordatorio de fecha (uno por compromiso, no por hora).
+model FollowupReservation {
+  id               String   @id @default(uuid())
+  leadId           Int      @map("lead_id")
+  lead             Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  followupType     String   @map("followup_type")
+  cycleKey         String   @map("cycle_key")
+  contextSnapshot  Json     @default("{}") @map("context_snapshot")
+  executed         Boolean  @default(false)
+  executedAt       DateTime? @map("executed_at") @db.Timestamptz(6)
+  messageId        String?  @map("message_id")
+  result           String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([leadId, followupType, cycleKey])
+  @@index([executed, createdAt])
+  @@map("followup_reservations")
+}
+
 // ─── Lista de teléfonos de prueba ─────────────────────────────
 model TestPhone {
   telefono     String   @id
@@ -481,6 +637,13 @@ model TenantSettings {
   // Quota operativa de turnos IA
   turnosIncluidosPorVendedorMes  Int      @default(10000) @map("turnos_incluidos_por_vendedor_mes")
   turnosConsumidosMesActual      Int      @default(0)     @map("turnos_consumidos_mes_actual")
+  // Hito A4 (oct 2026): "turno atendido" NO es "gasto de modelo". Muchos turnos se resuelven
+  // por regla determinista (vulnerabilidad, llamada, pedido) con 0 tokens; sumarlos al
+  // contador de cuota como si costaran dineroEra una lectura engañosa. Este contador
+  // separa los turnos que SÍ llamaron a un proveedor de IA. La política de cuota NO cambia
+  // (sigue contando turnos atendidos) y no se corta atención: esto solo hace la métrica
+  // honesta. Ver docs/estado-despliegue-crm.json y el panel de métricas.
+  turnosIaMesActual              Int      @default(0)     @map("turnos_ia_mes_actual")
   mesActualInicio                DateTime @default(dbgenerated("date_trunc('month'::text, now())")) @map("mes_actual_inicio") @db.Timestamptz(6)
   
   // API key dedicada (futuro multi-tenant real)
@@ -495,6 +658,8 @@ model TenantSettings {
   // ya no es solo una fila de facturación, es "quién atiende por qué número".
   channels                       Channel[]
   pendingCloudReceipts            PendingCloudReceipt[]
+  inboundEvents                  InboundEvent[]
+  outboundMessages               OutboundMessage[]
 
   createdAt                      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)

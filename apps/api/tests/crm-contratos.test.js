@@ -513,7 +513,7 @@ test('GET /v2/leads sin params → array legacy (compat front actual)', async ()
   assert.ok(Array.isArray(r.payload), 'el front viejo sigue recibiendo array')
 })
 
-test('GET /v2/leads?limit&offset → página con hasMore', async () => {
+test('GET /v2/leads?limit&offset → página con hasMore y total real', async () => {
   const db = prismaFalso({})
   db.lead.findMany = async ({ take, skip } = {}) => {
     const todos = leadsSeed(5, 't1').map(l => ({
@@ -521,15 +521,44 @@ test('GET /v2/leads?limit&offset → página con hasMore', async () => {
     }))
     return todos.slice(skip || 0, (skip || 0) + take)
   }
+  db.lead.count = async () => 5
   const r1 = replyFake()
   await listLeadsV2(reqFake(ADMIN_T1, { query: { limit: '2', offset: '0' } }), r1, db)
   assert.equal(r1.payload.items.length, 2)
   assert.equal(r1.payload.page.hasMore, true)
-  assert.deepEqual(r1.payload.page, { limit: 2, offset: 0, hasMore: true })
+  assert.deepEqual(r1.payload.page, { limit: 2, offset: 0, hasMore: true, total: 5 })
   const r2 = replyFake()
   await listLeadsV2(reqFake(ADMIN_T1, { query: { limit: '2', offset: '4' } }), r2, db)
   assert.equal(r2.payload.items.length, 1)
   assert.equal(r2.payload.page.hasMore, false)
+})
+
+// Hito B2: búsqueda y filtro se resuelven en el servidor sobre TODA la bandeja. Antes se
+// filtraba en el navegador lo que ya estaba en memoria, así que un lead existente fuera de
+// cargada se perdia y la pantalla decia que no habia coincidencias.
+test('GET /v2/leads?q/stage/label filtra en el servidor y conserva el alcance del usuario', async () => {
+  let whereVisto = null
+  const db = prismaFalso({})
+  db.lead.findMany = async (args) => {
+    whereVisto = args.where
+    return []
+  }
+  db.lead.count = async () => 0
+  const r = replyFake()
+  await listLeadsV2(reqFake(ADMIN_T1, { query: { q: 'Surco', stage: 'discovery', label: 'Caliente' } }), r, db)
+  assert.equal(whereVisto.tenantId, 't1', 'el filtro nunca amplía el alcance del usuario')
+  assert.equal(whereVisto.leadState.currentStage, 'discovery')
+  assert.equal(whereVisto.leadState.label, 'Caliente')
+  assert.equal(whereVisto.OR.length, 3, 'busca por nombre, teléfono y producto')
+
+  // '__none__' es "sin etiqueta"; una etiqueta fuera de la taxonomía se ignora (no se
+  // consulta un valor arbitrario que el cliente eligió).
+  const r2 = replyFake()
+  await listLeadsV2(reqFake(ADMIN_T1, { query: { label: '__none__' } }), r2, db)
+  assert.equal(whereVisto.leadState.label, null)
+  const r3 = replyFake()
+  await listLeadsV2(reqFake(ADMIN_T1, { query: { label: 'inventada-xyz' } }), r3, db)
+  assert.equal(whereVisto.leadState, undefined, 'una etiqueta no válida no añade filtro')
 })
 
 test('GET conversation: la ventana por defecto trae lo MÁS RECIENTE (no los más viejos)', async () => {
