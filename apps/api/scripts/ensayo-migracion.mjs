@@ -8,8 +8,8 @@
 // checkout es superficial y el commit base no existe, y un ensayo que depende del
 // historial es un ensayo que un día falla sin que cambie el código.
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 import { PrismaClient } from '@prisma/client'
 import { loadContract, prepareDatabase, readCatalog, checkTenantScope } from './db-readiness-lib.js'
@@ -19,13 +19,16 @@ if (!base || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(base).hostnam
   console.error('Se necesita CRM_TEST_DATABASE_URL local explícita.')
   process.exit(1)
 }
-const aqui = new URL('.', import.meta.url).pathname.replace(/^\//, '').replace(/\/$/, '')
-const fixtureViejo = join(aqui, '..', 'tests', 'fixtures', 'esquema-20261001.sql')
+// La ruta del fixture se resuelve desde la URL del propio módulo con fileURLToPath:
+// usar `new URL('.').pathname` a mano funciona en Windows y rompe en Linux, que es
+// exactamente el tipo de fallo que solo aparece en CI.
+const fixtureViejo = fileURLToPath(new URL('../tests/fixtures/esquema-20261001.sql', import.meta.url))
 let viejoSql
 try {
   viejoSql = readFileSync(fixtureViejo, 'utf8').replace(/^\uFEFF/, '')
-} catch {
-  console.error('Falta el esquema anterior fijado en tests/fixtures/esquema-20261001.sql')
+} catch (e) {
+  console.error('No se pudo leer el esquema anterior fijado en:', fixtureViejo)
+  console.error('  motivo:', e.code || e.message)
   process.exit(1)
 }
 if (!/CREATE TABLE/i.test(viejoSql)) { console.error('El fixture del esquema anterior no parece SQL válido.'); process.exit(1) }
