@@ -1,10 +1,33 @@
-# HANDOFF PARA CODEX — CRM v1 cerrado (código local, sin publicar)
+# HANDOFF PARA CODEX — CRM v1 cerrado y **publicado**
 
-**Fecha:** 2 de octubre de 2026 · **Rama:** `codex/crm-v1-cierre` · **Base:** `298b32b`
-**Commits:** `853af4d` (Hito A + B1–B3), `6990585` (métricas, tenant en login, recorrido)
+**Fecha:** 2 de octubre de 2026 · **Producción:** `a42df23` (PR #1, deploy `dep-davkl9eq1p3s73dd5rrg`, `live`)
+**Esquema en producción:** `20261002`, 22 modelos · **Antes:** `298b32b` / `20261001`
+**Rama de trabajo:** `codex/crm-v1-cierre` (6 commits, fusionados por squash)
 
-> **Nada de esto está desplegado.** Lo que corre en producción sigue siendo `298b32b` con el
-> esquema `20261001`. Este handoff describe código **probado en local** contra PostgreSQL real.
+> **Estado real:** el **backend** está publicado y verificado contra la base de producción. El
+> **frontend del CRM no está desplegado en ningún sitio**: el workspace de Render solo tiene la
+> API, no hay static site ni workflow de despliegue del front, y la API no sirve el CRM. Las
+> mejoras de interfaz (login por tenant, bandeja paginada, borradores, campañas, métricas) están
+> en el repo y comprobadas, pero **nadie las ve todavía**. Ver §5.1.
+
+---
+
+## 0. Qué se hizo al publicar
+
+1. **Backup** de la base de producción antes de tocar nada:
+   `C:\Users\HP\Documents\crm-backups\antes-de-20261002-2026-10-02T05-53-11.dump` (3.08 MB, 588
+   objetos, verificado legible con `pg_restore -l`). Segundo punto de restauración tras migrar:
+   `...-05-55-01.dump` (3.09 MB, 609 objetos).
+2. **Migración** `20261001 → 20261002`: 19 sentencias aditivas, atómicas y con candado.
+   **624 filas antes, 624 después.** Las tres tablas nuevas nacieron vacías. Cero borrados.
+3. **Publicación** por PR #1 con los tres jobs de CI en verde, fusionado a `main` (Render despliega
+   solo al fusionar).
+4. **Verificación** contra el servicio real: todo correcto, 0 fallos (§5).
+
+> Dos defectos **solo de CI** aparecieron al publicar y quedaron corregidos antes de fusionar:
+> el ensayo de migración usaba `git show` sobre el commit base (el checkout de CI es superficial)
+> y derivaba una ruta POSIX como si fuera de Windows. Los dos pasaban en local. El ensayo ahora
+> fija el esquema anterior como archivo del repo y resuelve rutas con `fileURLToPath`.
 
 ---
 
@@ -111,39 +134,87 @@ configuración en móvil.
 
 ---
 
-## 5. Checklist de publicación
+## 5. Publicación: qué se ejecutó y cómo repetirla
 
-> Esta tanda está **probada y sin publicar**. Render despliega `main` automáticamente: revisar
-> el diff y esperar CI en verde **antes** de tocar `main`. Nada de lo de abajo se ejecuta solo.
+> **Ya está hecho.** Esta sección queda como registro y como procedimiento reproducible para la
+> próxima versión. Render despliega `main` automáticamente: revisar el diff y esperar CI en verde
+> **antes** de tocar `main`.
 
-### Antes
+### Lo que se ejecutó (2-oct-2026)
 
-1. [ ] **Revisar el diff completo**: `git log --oneline 298b32b..HEAD` y
-       `git diff 298b32b..HEAD -- apps/api/src apps/api/prisma`. Lo que se publica son 61
-       archivos, +6526/−930, en tres commits (`853af4d`, `6990585`, `86a8229`).
+1. [x] **Revisión del diff**: 63 archivos. Barrido de secretos sobre el diff (no sobre el árbol):
+       limpio; lo único detectado son credenciales de CI en `localhost` y el PIN `1234` de las
+       bases desechables.
+2. [x] **Backup** de la base de producción y punto de restauración anotado (§0.1).
+3. [x] **Plan de migración** contra la base real (`--revisar`, solo lectura): 19 sentencias
+       aditivas. El SQL no contiene `DROP`, `TRUNCATE`, `DELETE` ni `UPDATE`.
+4. [x] **Migración aplicada** (`--aplicar`): `22 modelos; 19 sentencias aplicadas atómicamente`.
+5. [x] **Verificación** (`--verificar`): `22 modelos; solo lectura`, sin incidencias.
+6. [x] **Conteo de filas antes y después**: 624 → 624. Ninguna tabla previa cambió.
+7. [x] **PR #1** con CI en verde (3 jobs) → fusionado a `main` como `a42df23`.
+8. [x] **Despliegue** en Render: `dep-davkl9eq1p3s73dd5rrg`, estado `live`.
+9. [x] **Verificación post-despliegue** contra el servicio real (abajo).
+
+### Verificación post-despliegue (resultado real)
+
+| Comprobación | Resultado |
+| --- | --- |
+| `GET /health` | ✓ 200, commit `a42df23`, versión `7.1.0` |
+| `GET /ready` | ✓ 200, `status: ready` |
+| `database.schemaVersion` | ✓ `20261002` |
+| `database.models` | ✓ 22 |
+| Durabilidad en `/ready` | ✓ `inbox` y `outbox` presentes, ambas en 0 filas |
+| `POST /webhook/cloud` sin firma | ✓ 401 |
+| `GET /v2/metricas` sin token | ✓ 401 |
+| `GET /v2/leads` sin token | ✓ 401 (ruta presente) |
+| `GET /v2/metricas` **con** token ADMIN | ⏳ **pendiente**: requiere entrar con un vendedor real. Los PIN están hasheados y no se recuperan. No se saltó la autenticación. |
+
+### 5.1 Lo que falta para que el CRM se vea: el frontend
+
+El backend está vivo; **la interfaz no está alojada en ninguna parte**. Concretamente:
+
+- El workspace de Render tiene **un solo servicio** (la API). No hay static site.
+- No hay workflow de despliegue del front en `.github/workflows`, ni configuración de Vercel,
+  Netlify o Cloudflare Pages en el repo.
+- La API no sirve el CRM: en `/` responde la web pública del negocio.
+
+Para ponerlo en pie hace falta, en este orden:
+
+1. **Elegir dónde alojar el front** y crear ese servicio (Render static site sirve y deja todo en
+   el mismo sitio y en el mismo panel).
+2. Definir en el build del front: `VITE_API_URL=https://whatsapp-sales-backend.onrender.com` y
+   `VITE_TENANT` con la empresa por defecto (hoy `ACTIVE_TENANT=bioayur` en la API).
+3. **Configurar `CORS_ORIGINS` en el servicio de la API** con el dominio del front. **Hoy no
+   existe esa variable** y en producción localhost no se permite: sin ella el navegador bloquea
+   la API y la pantalla dice «no se pudo conectar».
+4. Publicar el front y repetir la verificación de §5 entrando con un vendedor de cada empresa.
+
+### Procedimiento para la próxima versión
+
+1. [ ] **Revisar el diff completo**: `git log --oneline <base>..HEAD` y
+       `git diff <base>..HEAD -- apps/api/src apps/api/prisma`.
 2. [ ] **CI en verde** en la rama: incluye el ensayo de migración (§4), que es la única forma
        de saber que la base con historia aguanta el salto.
-3. [ ] **Backup de la base de producción** y anotar el punto de restauración.
-4. [ ] Confirmar que `DATABASE_URL` apunta a la base real y que `CRM_DATABASE_URL` está
-       definida **solo** para el comando de migración.
-5. [ ] `npm run db:plan` (revisión offline, sin conectar) y revisar que solo hay `CREATE TABLE`,
-       `ALTER TABLE … ADD COLUMN`, `CREATE INDEX` y claves foráneas. **Nada** de `DROP`,
-       `INSERT` ni `TRUNCATE`.
-6. [ ] `CRM_DATABASE_URL=… node scripts/preparar-db-crm.js --aplicar` (aditivo, atómico, con
-       candado de concurrencia). Debe reportar 19 sentencias; si aplicara 0, la base ya estaba
-       al día y se puede saltar.
-7. [ ] `CRM_DATABASE_URL=… node scripts/verificar-db-crm.js --verificar` → sin incidencias,
-       incluidas las comprobaciones nuevas de tenant de entrada y salida.
+3. [ ] **Backup** de la base de producción y anotar el punto de restauración.
+4. [ ] `npm run db:plan` (revisión offline, sin conectar): solo `CREATE TABLE`,
+       `ALTER TABLE … ADD COLUMN`, `CREATE INDEX` y FK. **Nada** de `DROP`, `INSERT` ni `TRUNCATE`.
+5. [ ] `CRM_DATABASE_URL=… node scripts/preparar-db-crm.js --aplicar` (aditivo, atómico, con
+       candado de concurrencia). Debe reportar el número de sentencias nuevas; si aplicara 0, la
+       base ya estaba al día.
+6. [ ] `CRM_DATABASE_URL=… node scripts/verificar-db-crm.js --verificar` → sin incidencias.
+7. [ ] **Contar filas antes y después** de la migración. Este paso no es opcional: es el que
+       detecta que una migración «aditiva» perdió algo.
 8. [ ] Fijar el candidato: `git rev-parse HEAD` y anotar el commit.
 
 ### Variables de entorno (por nombre, sin valores)
 
-| Variable | Dónde | Para qué | Estado |
+| Variable | Dónde | Para qué | Estado real |
 | --- | --- | --- | --- |
-| `CORS_ORIGINS` | API | Dominios del front autorizados. **Sin esto el navegador bloquea la API y la pantalla dice «no se pudo conectar».** | probablemente ya exista; **verificar** que incluye el dominio del CRM |
-| `VITE_API_URL` | build del front | URL de la API | ya existe |
-| `VITE_TENANT` | build del front | Empresa del CRM cuando el enlace no trae `?tenant=` | **nueva** |
-| `CLOUD_GRAPH_BASE` | API | Solo pruebas locales (Graph falso). **En producción se deja sin valor.** | **nueva, opcional** |
+| `CORS_ORIGINS` | API | Dominios del front autorizados. **Sin esto el navegador bloquea la API y la pantalla dice «no se pudo conectar».** | **NO EXISTE en el servicio.** Hay que crearla al publicar el front (§5.1) |
+| `VITE_TENANT` | build del front | Empresa del CRM cuando el enlace no trae `?tenant=` | **nueva**, al publicar el front |
+| `VITE_API_URL` | build del front | URL de la API | al publicar el front |
+| `CLOUD_GRAPH_BASE` | API | Solo pruebas locales (Graph falso). **En producción se deja sin valor.** | no definida, correcto |
+| `ACTIVE_TENANT` | API | Empresa por defecto del login. Hoy `bioayur`. | ya existía, sin cambios |
 | `DATABASE_URL`, `JWT_SECRET`, `CLOUD_APP_SECRET`, `CRON_SECRET`, `WEBHOOK_SECRET`, `BRAIN_PROVIDER`, `BRAIN_FALLBACKS` | API | Sin cambios | no tocar |
 
 El tenant del login se toma de `?tenant=` en la URL → `localStorage` → `VITE_TENANT`. Si se
@@ -151,20 +222,19 @@ publica un enlace por cliente, incluir el parámetro: `https://…/?tenant=<slug
 
 ### Después
 
-9. [ ] Publicar: `git push origin codex/crm-v1-cierre` y abrir PR contra `main`. Render
-       despliega al **fusionar**, no al hacer push de la rama.
+9. [ ] Publicar: abrir PR contra `main`. Render despliega al **fusionar**, no al hacer push.
 10. [ ] `GET /health` → `ok` con el commit nuevo.
 11. [ ] `GET /ready` → `status: ready`, `database.schemaVersion: "20261002"`,
-       `database.models: 22` y `durabilidad` con `inbox` y `outbox`. Si aquí sigue
-       `20261001`, el backend no vio la base nueva: no seguir.
+        `database.models: 22` y `durabilidad` con `inbox` y `outbox`. Si aquí sigue
+        `20261001`, el backend no vio la base nueva: no seguir.
 12. [ ] `POST /webhook/cloud` sin firma → **401**.
 13. [ ] `GET /v2/metricas` con token ADMIN → **200**, cada métrica con `definicion` y `fuente`.
 14. [ ] Entrar por el CRM con un vendedor de cada empresa: las bandejas deben verse distintas.
 15. [ ] Enviar **un** mensaje de prueba a un número de pruebas: la entrada debe aparecer en
-       `inbound_events` y el historial con su `wamid`. No enviar a clientes reales sin
-       autorización explícita.
-16. [ ] A las 24 h: `inbound_events` sin filas `PENDING` Older de 2 min y `outbound_messages`
-       sin `UNCERTAIN` sin resolver. Cualquier fila que se quede ahí es una alerta.
+        `inbound_events` y el historial con su `wamid`. No enviar a clientes reales sin
+        autorización explícita.
+16. [ ] A las 24 h: `inbound_events` sin filas `PENDING` older de 2 min y `outbound_messages`
+        sin `UNCERTAIN` sin resolver. Cualquier fila que se quede ahí es una alerta.
 
 ### Rollback
 
