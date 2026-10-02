@@ -29,7 +29,7 @@ import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
 import { enqueueMessage, getMessageGeneration } from './debounce.js'
-import { enviarTexto, enviarImagen, transporteDe } from '../whatsapp/transporte.js'
+import { enviarTexto, enviarImagen, transporteDe, persistirMensajeSaliente } from '../whatsapp/transporte.js'
 import { procesarConCerebro } from '../brain/brain-pipeline.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 import { getImagen } from '../lib/assets.js'
@@ -306,7 +306,7 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       // envío fue OK: un mensaje NO entregado no debe entrar al historial.
       // Un fallo del insert no tumba el pipeline: se loguea y se sigue.
       try {
-        await prisma.message.create({ data: { leadId, origen: 'BOT', texto: botResponse.text } })
+        await persistirMensajeSaliente(prisma, { data: { leadId, origen: 'BOT', texto: botResponse.text }, resultado: sendResult, canal, tenantId: leadInfo.tenantId || ACTIVE_TENANT })
       } catch (err) {
         console.error(`[Pipeline] No se pudo persistir mensaje BOT lead ${leadId}:`, err.message)
       }
@@ -314,28 +314,33 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       // ─── 5b. ADJUNTAR IMAGEN si el cerebro la pidió (vertical colágeno, foto de
       //     precios en M4) — se envía DESPUÉS del texto y solo si el texto salió OK.
       //     Fire-and-forget suave: un fallo del envío de imagen NO tumba el turno. ───
-      if (botResponse.enviar_imagen) {
+      if (botResponse.enviar_imagen && getMessageGeneration(leadId) === genAtStart) {
         // La imagen se resuelve para ESTA campaña (su ficha manda) dentro de SU
         // tenant: la misma clave ("precios") apunta a un archivo distinto en cada
         // cliente. Sin registro, getImagen devuelve null y no se manda nada.
         let imagenesConfig = {}
         try {
+          const tenantId = leadInfo.tenantId || ACTIVE_TENANT
           const lead = await prisma.lead.findFirst({
-            where: { id: leadId, tenantId: leadInfo.tenantId },
+            where: { id: leadId, tenantId },
             select: { campaign: { select: { config: true, tenantId: true } } }
           })
-          if (lead?.campaign && lead.campaign.tenantId !== leadInfo.tenantId) throw new Error('campaña fuera del tenant')
-          const ficha = lead?.campaign?.config?.factSheet
+          if (!lead || (lead.campaign && lead.campaign.tenantId !== tenantId)) throw new Error('campaña fuera del tenant')
+          const ficha = lead.campaign?.config?.factSheet
           imagenesConfig = ficha ? (ficha.imagenes || {}) : null
         } catch (err) {
           console.warn(`[Pipeline] no se pudo leer la ficha para la imagen: ${err.message}`)
         }
-        const img = getImagen(botResponse.enviar_imagen, leadInfo.tenantId, imagenesConfig)
-        if (img) {
+        const img = getImagen(botResponse.enviar_imagen, leadInfo.tenantId || ACTIVE_TENANT, imagenesConfig)
+        if (img && getMessageGeneration(leadId) === genAtStart) {
           const mediaRes = await enviarImagen({
             canal, telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,
             instancia
           })
+          if (mediaRes.ok) {
+            await persistirMensajeSaliente(prisma, { data: { leadId, origen: 'BOT', texto: 'Imagen enviada' }, resultado: mediaRes, canal, tenantId: leadInfo.tenantId || ACTIVE_TENANT })
+              .catch(e => console.error('[Pipeline] persistir imagen saliente:', e.message))
+          }
           console.log(mediaRes.ok
             ? `[Pipeline] 📎 Imagen "${botResponse.enviar_imagen}" enviada a ${telefono} (${mediaRes.latency_ms}ms)`
             : `[Pipeline] ⚠️ No se pudo enviar imagen "${botResponse.enviar_imagen}": ${mediaRes.error}`)

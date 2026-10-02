@@ -1,18 +1,62 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from './api'
+import { api, ApiError } from './api'
 import { useToast } from './Toast'
-import type { AuthUser, ConversationEvent, MediaRef } from '@shared/types'
+import type { AuthUser, ConversationEvent, ConversationResponse, MediaRef } from '@shared/types'
 import { ETIQUETAS_VALIDAS } from '@shared/labels'
 import { stageLabel } from '@shared/stages'
 import LeadDebrief from './LeadDebrief'
+import { conversationEventId, mergeEarlierConversation, mergeLatestConversation } from './conversation-history'
 
 export default function Conversation({ leadId, user }: { leadId: number; user: AuthUser }) {
   const qc = useQueryClient()
   const toast = useToast()
   const detailQ = useQuery({ queryKey: ['lead', leadId], queryFn: () => api.leadDetail(leadId) })
-  const convQ = useQuery({ queryKey: ['conv', leadId], queryFn: () => api.conversation(leadId), refetchInterval: 10_000 })
+  const convQ = useQuery({
+    queryKey: ['conv', leadId],
+    queryFn: async () => {
+      const latest = await api.conversation(leadId, 300)
+      return mergeLatestConversation(qc.getQueryData<ConversationResponse>(['conv', leadId]), latest)
+    },
+    refetchInterval: 10_000,
+  })
   const d = detailQ.data
+  const msgsRef = useRef<HTMLDivElement>(null)
+  const selectedLeadRef = useRef(leadId)
+  selectedLeadRef.current = leadId
+  const scrollAnchorRef = useRef<{ leadId: number; id: string; offset: number } | null>(null)
+  const [loadingEarlierLead, setLoadingEarlierLead] = useState<number | null>(null)
+
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current
+    const container = msgsRef.current
+    if (!anchor || !container) return
+    scrollAnchorRef.current = null
+    if (anchor.leadId !== leadId) return
+    const element = Array.from(container.children).find(child => child.getAttribute('data-event-id') === anchor.id)
+    if (element) container.scrollTop += element.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.offset
+  }, [convQ.data?.eventos, leadId])
+
+  async function cargarAnterior() {
+    const key = ['conv', leadId]
+    const page = qc.getQueryData<ConversationResponse>(key)?.page
+    if (loadingEarlierLead === leadId || !page?.hayMas || !page.cursor) return
+    setLoadingEarlierLead(leadId)
+    try {
+      const earlier = await api.conversation(leadId, page.limit, page.cursor)
+      const container = msgsRef.current
+      if (container && selectedLeadRef.current === leadId) {
+        const top = container.getBoundingClientRect().top
+        const visible = Array.from(container.children).find(child => child.hasAttribute('data-event-id') && child.getBoundingClientRect().bottom > top)
+        if (visible) scrollAnchorRef.current = { leadId, id: visible.getAttribute('data-event-id')!, offset: visible.getBoundingClientRect().top - top }
+      }
+      qc.setQueryData<ConversationResponse>(key, current => mergeEarlierConversation(current, earlier))
+    } catch {
+      if (selectedLeadRef.current === leadId) toast('No se pudieron cargar los mensajes anteriores. Reintenta.')
+    } finally {
+      setLoadingEarlierLead(current => current === leadId ? null : current)
+    }
+  }
 
   const puedeReasignar = user.role === 'ADMIN' || user.role === 'SUPERVISOR'
   // Picker de reasignar: vendedores del MISMO tenant (endpoint scopeado, no el público).
@@ -24,6 +68,10 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   const [reasignando, setReasignando] = useState(false)
   const [etiquetando, setEtiquetando] = useState(false)
   const [debriefOpen, setDebriefOpen] = useState(false)
+  // Ventana de 24 h de Meta: cuando se cierra, el backend dice con qué plantilla se
+  // reabre. Se guarda acá para ofrecerlo en vez de dejar al vendedor con un error seco.
+  const [ventanaCerrada, setVentanaCerrada] = useState<{ plantilla: string | null } | null>(null)
+  const [reabriendo, setReabriendo] = useState(false)
 
   function refrescar() {
     qc.invalidateQueries({ queryKey: ['conv', leadId] })
@@ -38,9 +86,32 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
     try {
       await api.reply(leadId, t)   // responder TOMA el control (el bot se calla)
       setTexto('')                 // solo se limpia si NO lanzó → en error el texto se conserva
+      setVentanaCerrada(null)
       refrescar()
-    } catch { toast('No se pudo enviar el mensaje. Tu texto sigue acá, reintenta.') }
+    } catch (e) {
+      // 409 con ventanaCerrada no es un fallo del vendedor: el chat lleva más de 24 h
+      // callado y Meta solo lo reabre con una plantilla. Se le ofrece, no se le regaña.
+      if (e instanceof ApiError && e.status === 409 && e.body?.ventanaCerrada) {
+        setVentanaCerrada({ plantilla: e.body.plantilla ?? null })
+      } else {
+        toast('No se pudo enviar el mensaje. Tu texto sigue acá, reintenta.')
+      }
+    }
     finally { setEnviando(false) }
+  }
+
+  async function reabrir() {
+    if (reabriendo) return
+    setReabriendo(true)
+    try {
+      const r = await api.reabrir(leadId)
+      setVentanaCerrada(null)
+      toast(`Plantilla "${r.plantilla}" enviada. Cuando el cliente responda vas a poder escribirle normal.`)
+      refrescar()
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : 'No se pudo enviar la plantilla.')
+    }
+    finally { setReabriendo(false) }
   }
 
   async function toggleModo() {
@@ -133,11 +204,36 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
 
       {debriefOpen && <LeadDebrief leadId={leadId} onClose={() => setDebriefOpen(false)} onSaved={refrescar} />}
 
-      <div className="msgs">
+      <div className="msgs" ref={msgsRef}>
         {convQ.isLoading && <div className="empty">Cargando conversación…</div>}
         {convQ.isError && <div className="empty">No se pudo cargar la conversación. Reintentando…</div>}
-        {convQ.data?.eventos.map((e, i) => <EventItem key={i} ev={e} leadId={leadId} />)}
+        {convQ.data?.page?.hayMas && convQ.data.page.cursor && (
+          <button className="btn" onClick={() => void cargarAnterior()} disabled={loadingEarlierLead === leadId} style={{ alignSelf: 'center' }}>
+            {loadingEarlierLead === leadId ? 'Cargando mensajes anteriores…' : 'Cargar mensajes anteriores'}
+          </button>
+        )}
+        {convQ.data?.eventos.map(e => <EventItem key={conversationEventId(e)} ev={e} leadId={leadId} />)}
       </div>
+
+      {ventanaCerrada && (
+        <div className="ventana-cerrada">
+          <div className="vc-texto">
+            <strong>Este chat está cerrado.</strong> El cliente no escribe desde hace más de 24 h y
+            Meta solo permite reabrirlo con una plantilla aprobada.
+            {ventanaCerrada.plantilla
+              ? ' Tu texto sigue abajo: se lo podrás enviar cuando el cliente conteste.'
+              : ' Todavía no hay una plantilla de reapertura configurada — avisa al administrador.'}
+          </div>
+          <div className="vc-botones">
+            {ventanaCerrada.plantilla && (
+              <button className="btn btn-send" onClick={() => void reabrir()} disabled={reabriendo}>
+                {reabriendo ? '…' : 'Enviar plantilla (se cobra)'}
+              </button>
+            )}
+            <button className="btn" onClick={() => setVentanaCerrada(null)}>Cerrar</button>
+          </div>
+        </div>
+      )}
 
       <div className="conv-input">
         <input
@@ -155,33 +251,52 @@ export default function Conversation({ leadId, user }: { leadId: number; user: A
   )
 }
 
-// Marcador de media que persiste el webhook ("[📷 …]" / "[🎙️ …]"): si la imagen ya
-// se renderiza, el texto es redundante → lo ocultamos (pero conservamos captions reales).
+// Marcador de media que persiste el webhook ("[📷 …]", "[🎙️ …]", "[📄 …]", "[🎬 …]"):
+// si el adjunto ya se renderiza, el texto es redundante → lo ocultamos (pero conservamos
+// los captions reales, que son palabras del lead).
 function esMarcadorMedia(t: string): boolean {
-  return /^\[(📷|🎙️)/.test(t)
+  return /^\[(📷|🎙️|📄|🎬)/.test(t)
 }
 
 function EventItem({ ev, leadId }: { ev: ConversationEvent; leadId: number }) {
   if (ev.kind === 'state') {
-    return <div className="state-pill">⦿ {ev.label} · {fmt(ev.at)}</div>
+    return <div className="state-pill" data-event-id={conversationEventId(ev)}>⦿ {ev.label} · {fmt(ev.at)}</div>
   }
   const cls = ev.origen === 'LEAD' ? 'in' : ev.origen === 'VENDEDOR' ? 'vendor' : 'bot'
-  const hayImagen = ev.media?.tipo === 'image'
-  const mostrarTexto = ev.texto && !(hayImagen && esMarcadorMedia(ev.texto))
+  const mostrarTexto = ev.texto && !(ev.media && esMarcadorMedia(ev.texto))
   return (
-    <div className={`bubble-row ${cls}`}>
+    <div className={`bubble-row ${cls}`} data-event-id={conversationEventId(ev)}>
       <div className={`bubble ${cls}`}>
         {ev.origen !== 'LEAD' && <div className="bub-tag">{ev.origen}</div>}
-        {hayImagen && <MediaImage leadId={leadId} media={ev.media as MediaRef} />}
+        {ev.media && <Adjunto leadId={leadId} media={ev.media as MediaRef} />}
         {mostrarTexto && <div className="bub-text">{ev.texto}</div>}
-        <div className="bub-time">{fmt(ev.at)}</div>
+        <div className="bub-time">{fmt(ev.at)} <Recibo ev={ev} /></div>
       </div>
     </div>
   )
 }
 
-// Baja la imagen con auth (object URL) y la revoca al desmontar (evita fugas de memoria).
-function MediaImage({ leadId, media }: { leadId: number; media: MediaRef }) {
+// El recibo de Meta. Sin esto, un mensaje que Meta rechazó —fuera de la ventana de 24 h,
+// número sin WhatsApp, plantilla no aprobada— se veía igual que uno entregado, y el
+// vendedor descubría el problema cuando ya había perdido la venta.
+function Recibo({ ev }: { ev: Extract<ConversationEvent, { kind: 'message' }> }) {
+  if (!ev.estado) return null
+  if (ev.estado === 'failed') {
+    return (
+      <span className="recibo recibo-falla" title={ev.estadoDetalle || 'Meta no pudo entregarlo'}>
+        ⚠ no entregado
+      </span>
+    )
+  }
+  const marca = ev.estado === 'sent' ? '✓' : '✓✓'
+  const titulo = ev.estado === 'sent' ? 'enviado' : ev.estado === 'delivered' ? 'entregado' : 'leído'
+  return <span className={`recibo recibo-${ev.estado}`} title={titulo}>{marca}</span>
+}
+
+// Baja el adjunto con auth (object URL) y lo revoca al desmontar (evita fugas de memoria).
+// La foto se ve, la nota de voz se escucha y el resto (PDF, video) se abre o se descarga:
+// el vendedor ya no tiene que pedirle al lead que le reenvíe su comprobante.
+function Adjunto({ leadId, media }: { leadId: number; media: MediaRef }) {
   const [src, setSrc] = useState<string | null>(null)
   const [error, setError] = useState(false)
   useEffect(() => {
@@ -192,9 +307,16 @@ function MediaImage({ leadId, media }: { leadId: number; media: MediaRef }) {
       .catch(() => { if (vivo) setError(true) })
     return () => { vivo = false; if (url) URL.revokeObjectURL(url) }
   }, [leadId, media.id])
-  if (error) return <div className="media-error">no se pudo cargar la imagen</div>
-  if (!src) return <div className="media-loading">cargando imagen…</div>
-  return <img className="media-img" src={src} alt="adjunto del lead" />
+  if (error) return <div className="media-error">no se pudo cargar el adjunto</div>
+  if (!src) return <div className="media-loading">cargando adjunto…</div>
+  if (media.tipo === 'image') return <img className="media-img" src={src} alt="adjunto del lead" />
+  if (media.tipo === 'audio') return <audio className="media-audio" src={src} controls preload="none" />
+  if (media.tipo === 'video') return <video className="media-img" src={src} controls preload="metadata" />
+  return (
+    <a className="media-file" href={src} download target="_blank" rel="noreferrer">
+      📄 abrir documento
+    </a>
+  )
 }
 
 function fmt(iso: string): string {

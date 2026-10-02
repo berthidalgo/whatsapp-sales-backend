@@ -26,6 +26,8 @@ jobs:
       - run: npm run test:offline
         env:
           DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline?connect_timeout=1
+          OPENROUTER_API_KEY: ''
+          MISTRAL_API_KEY: ''
 
   web:
     name: Frontend (tipos + build)
@@ -42,3 +44,40 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
       - run: npm run build
+      - run: node --test tests/conversation-history.test.mjs
+
+  postgres:
+    name: CRM (PostgreSQL + HTTP + migraciones)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: crm_test
+          POSTGRES_PASSWORD: crm_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run test:db
+        env:
+          CRM_TEST_DATABASE_URL: postgresql://crm_test:crm_test@127.0.0.1:5432/postgres
+          DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
+          OPENROUTER_API_KEY: ''
+          MISTRAL_API_KEY: ''

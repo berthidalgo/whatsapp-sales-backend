@@ -1,0 +1,2814 @@
+{
+  "version": "20261001",
+  "schemaHash": "efcad58861722a5998136ebfb81847c4c62fdac81e0c0b965c07f24c237f29fa",
+  "sqlHash": "77c546ad0b59c00aebc4e74026147c93878b7471a0298e0820cbe5405e54130c",
+  "tables": [
+    {
+      "name": "vendors",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "telefono",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'VENDOR'",
+          "declaration": "TEXT NOT NULL DEFAULT 'VENDOR'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "activo",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "true",
+          "declaration": "BOOLEAN NOT NULL DEFAULT true",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "instanciaEvolution",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "whatsappNumber",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "pin",
+          "type": "TEXT",
+          "nullable": true,
+          "default": "'0000'",
+          "declaration": "TEXT DEFAULT '0000'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "createdAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(3) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "vendors_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"vendors\" (\n    \"id\" SERIAL NOT NULL,\n    \"tenant_id\" TEXT NOT NULL,\n    \"nombre\" TEXT NOT NULL,\n    \"telefono\" TEXT NOT NULL,\n    \"role\" TEXT NOT NULL DEFAULT 'VENDOR',\n    \"activo\" BOOLEAN NOT NULL DEFAULT true,\n    \"instanciaEvolution\" TEXT,\n    \"whatsappNumber\" TEXT,\n    \"pin\" TEXT DEFAULT '0000',\n    \"createdAt\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updatedAt\" TIMESTAMP(3) NOT NULL,\n\n    CONSTRAINT \"vendors_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "campaigns",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "slug",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "activa",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "true",
+          "declaration": "BOOLEAN NOT NULL DEFAULT true",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendorId",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "botPrompt",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "config",
+          "type": "JSONB",
+          "nullable": true,
+          "default": null,
+          "declaration": "JSONB",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1",
+          "declaration": "INTEGER NOT NULL DEFAULT 1",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "createdAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(3) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "campaigns_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"campaigns\" (\n    \"id\" SERIAL NOT NULL,\n    \"tenant_id\" TEXT NOT NULL,\n    \"slug\" TEXT NOT NULL,\n    \"nombre\" TEXT NOT NULL,\n    \"activa\" BOOLEAN NOT NULL DEFAULT true,\n    \"vendorId\" INTEGER NOT NULL,\n    \"botPrompt\" TEXT,\n    \"config\" JSONB,\n    \"version\" INTEGER NOT NULL DEFAULT 1,\n    \"createdAt\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updatedAt\" TIMESTAMP(3) NOT NULL,\n\n    CONSTRAINT \"campaigns_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "triggers",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "texto",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "campaignId",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "triggers_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"triggers\" (\n    \"id\" SERIAL NOT NULL,\n    \"texto\" TEXT NOT NULL,\n    \"campaignId\" INTEGER NOT NULL,\n\n    CONSTRAINT \"triggers_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "flow_steps",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "orden",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tipo",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "mensaje",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "followupHrs",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "campaignId",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "flow_steps_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"flow_steps\" (\n    \"id\" SERIAL NOT NULL,\n    \"orden\" INTEGER NOT NULL,\n    \"tipo\" TEXT NOT NULL,\n    \"mensaje\" TEXT NOT NULL,\n    \"followupHrs\" INTEGER,\n    \"campaignId\" INTEGER NOT NULL,\n\n    CONSTRAINT \"flow_steps_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "leads",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "telefono",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "campaignId",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendorId",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "pasoActual",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0",
+          "declaration": "INTEGER NOT NULL DEFAULT 0",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "ultimoMensaje",
+          "type": "TIMESTAMP(6)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(6)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "notificado",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "estado",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'NUEVO'",
+          "declaration": "TEXT NOT NULL DEFAULT 'NUEVO'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "nombreDetectado",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "productoDetectado",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "wa_jid",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "addressing_mode",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "archived_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMPTZ(6)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "archived_reason",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "archived_by",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "createdAt",
+          "type": "TIMESTAMP(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "TIMESTAMP(6)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(6) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "leads_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"leads\" (\n    \"id\" SERIAL NOT NULL,\n    \"tenant_id\" TEXT NOT NULL,\n    \"telefono\" TEXT NOT NULL,\n    \"campaignId\" INTEGER,\n    \"vendorId\" INTEGER,\n    \"pasoActual\" INTEGER NOT NULL DEFAULT 0,\n    \"ultimoMensaje\" TIMESTAMP(6),\n    \"notificado\" BOOLEAN NOT NULL DEFAULT false,\n    \"estado\" TEXT NOT NULL DEFAULT 'NUEVO',\n    \"nombreDetectado\" TEXT,\n    \"productoDetectado\" TEXT,\n    \"wa_jid\" TEXT,\n    \"addressing_mode\" TEXT,\n    \"archived_at\" TIMESTAMPTZ(6),\n    \"archived_reason\" TEXT,\n    \"archived_by\" INTEGER,\n    \"createdAt\" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updatedAt\" TIMESTAMP(6) NOT NULL,\n\n    CONSTRAINT \"leads_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "conversations",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "leadId",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "campaignId",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendorId",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "state",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'ACTIVE'",
+          "declaration": "TEXT NOT NULL DEFAULT 'ACTIVE'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "currentStep",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0",
+          "declaration": "INTEGER NOT NULL DEFAULT 0",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lastBotMessageAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lastLeadMessageAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "reactivationCount",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0",
+          "declaration": "INTEGER NOT NULL DEFAULT 0",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lastReactivationAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendorNotifiedAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendorNotificationCount",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0",
+          "declaration": "INTEGER NOT NULL DEFAULT 0",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "reminderJobId",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "createdAt",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "conversations_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"conversations\" (\n    \"id\" SERIAL NOT NULL,\n    \"leadId\" INTEGER NOT NULL,\n    \"campaignId\" INTEGER,\n    \"vendorId\" INTEGER,\n    \"state\" TEXT NOT NULL DEFAULT 'ACTIVE',\n    \"currentStep\" INTEGER NOT NULL DEFAULT 0,\n    \"lastBotMessageAt\" TIMESTAMP(3),\n    \"lastLeadMessageAt\" TIMESTAMP(3),\n    \"reactivationCount\" INTEGER NOT NULL DEFAULT 0,\n    \"lastReactivationAt\" TIMESTAMP(3),\n    \"vendorNotifiedAt\" TIMESTAMP(3),\n    \"vendorNotificationCount\" INTEGER NOT NULL DEFAULT 0,\n    \"reminderJobId\" TEXT,\n    \"createdAt\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"conversations_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "messages",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "leadId",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "conversationId",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "origen",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "texto",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "createdAt",
+          "type": "TIMESTAMP(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": true
+        },
+        {
+          "name": "wa_message_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "cloud_phone_number_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "status_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "error_code",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "error_detalle",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "messages_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"messages\" (\n    \"id\" SERIAL NOT NULL,\n    \"leadId\" INTEGER NOT NULL,\n    \"conversationId\" INTEGER,\n    \"origen\" TEXT NOT NULL,\n    \"texto\" TEXT NOT NULL,\n    \"createdAt\" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"wa_message_id\" TEXT,\n    \"cloud_phone_number_id\" TEXT,\n    \"status\" TEXT,\n    \"status_at\" TIMESTAMP(3),\n    \"error_code\" INTEGER,\n    \"error_detalle\" TEXT,\n\n    CONSTRAINT \"messages_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "pending_cloud_receipts",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "phone_number_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "wa_message_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "status_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(3) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "error_code",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "error_detalle",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(3) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "pending_cloud_receipts_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"pending_cloud_receipts\" (\n    \"id\" TEXT NOT NULL,\n    \"tenant_id\" TEXT NOT NULL,\n    \"phone_number_id\" TEXT NOT NULL,\n    \"wa_message_id\" TEXT NOT NULL,\n    \"status\" TEXT NOT NULL,\n    \"status_at\" TIMESTAMP(3) NOT NULL,\n    \"error_code\" INTEGER,\n    \"error_detalle\" TEXT,\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updated_at\" TIMESTAMP(3) NOT NULL,\n\n    CONSTRAINT \"pending_cloud_receipts_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "media_assets",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "default": "__serial__",
+          "declaration": "SERIAL NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "message_id",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "origen",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'LEAD'",
+          "declaration": "TEXT NOT NULL DEFAULT 'LEAD'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tipo",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "mime_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "storage",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'pg'",
+          "declaration": "TEXT NOT NULL DEFAULT 'pg'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "bytes",
+          "type": "BYTEA",
+          "nullable": true,
+          "default": null,
+          "declaration": "BYTEA",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "url",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "size_bytes",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "media_assets_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"media_assets\" (\n    \"id\" SERIAL NOT NULL,\n    \"lead_id\" INTEGER NOT NULL,\n    \"message_id\" INTEGER,\n    \"tenant_id\" TEXT,\n    \"origen\" TEXT NOT NULL DEFAULT 'LEAD',\n    \"tipo\" TEXT NOT NULL,\n    \"mime_type\" TEXT NOT NULL,\n    \"storage\" TEXT NOT NULL DEFAULT 'pg',\n    \"bytes\" BYTEA,\n    \"url\" TEXT,\n    \"size_bytes\" INTEGER,\n    \"created_at\" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"media_assets_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "bot_config",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenantId",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "activo",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "true",
+          "declaration": "BOOLEAN NOT NULL DEFAULT true",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgBienvenida",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgProducto",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgExperiencia",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgPresentacion",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgObjecion",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgUrgencia",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "msgHandoff",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "nombreEmpresa",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "nombreProducto",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updatedEn",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "bot_config_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"bot_config\" (\n    \"id\" TEXT NOT NULL,\n    \"tenantId\" TEXT NOT NULL,\n    \"activo\" BOOLEAN NOT NULL DEFAULT true,\n    \"nombre\" TEXT,\n    \"msgBienvenida\" TEXT,\n    \"msgProducto\" TEXT,\n    \"msgExperiencia\" TEXT,\n    \"msgPresentacion\" TEXT,\n    \"msgObjecion\" TEXT,\n    \"msgUrgencia\" TEXT,\n    \"msgHandoff\" TEXT,\n    \"nombreEmpresa\" TEXT,\n    \"nombreProducto\" TEXT,\n    \"updatedEn\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"bot_config_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "lead_state",
+      "columns": [
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "current_mode",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'AUTO_CONSULTIVO'",
+          "declaration": "TEXT NOT NULL DEFAULT 'AUTO_CONSULTIVO'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "current_stage",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'greeting'",
+          "declaration": "TEXT NOT NULL DEFAULT 'greeting'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "slots_filled",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "slots_pending",
+          "type": "TEXT[]",
+          "nullable": true,
+          "default": "ARRAY[]::TEXT[]",
+          "declaration": "TEXT[] DEFAULT ARRAY[]::TEXT[]",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "intentos_por_slot",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendor_active_id",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "mode_entered_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "last_message_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "returning_lead_flag",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "label",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "lead_state_pkey",
+          "columns": [
+            "lead_id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"lead_state\" (\n    \"lead_id\" INTEGER NOT NULL,\n    \"current_mode\" TEXT NOT NULL DEFAULT 'AUTO_CONSULTIVO',\n    \"current_stage\" TEXT NOT NULL DEFAULT 'greeting',\n    \"slots_filled\" JSONB NOT NULL DEFAULT '{}',\n    \"slots_pending\" TEXT[] DEFAULT ARRAY[]::TEXT[],\n    \"intentos_por_slot\" JSONB NOT NULL DEFAULT '{}',\n    \"vendor_active_id\" INTEGER,\n    \"mode_entered_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"last_message_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"returning_lead_flag\" BOOLEAN NOT NULL DEFAULT false,\n    \"label\" TEXT,\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updated_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"lead_state_pkey\" PRIMARY KEY (\"lead_id\")\n);"
+    },
+    {
+      "name": "turn_trace",
+      "columns": [
+        {
+          "name": "turn_id",
+          "type": "UUID",
+          "nullable": false,
+          "default": null,
+          "declaration": "UUID NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id_archived",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "conversation_id",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "reset_generation",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1",
+          "declaration": "INTEGER NOT NULL DEFAULT 1",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "data_quality",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'real_pilot'",
+          "declaration": "TEXT NOT NULL DEFAULT 'real_pilot'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_message",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_message_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'text'",
+          "declaration": "TEXT NOT NULL DEFAULT 'text'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "perception",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "perception_version",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "state_before",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "state_after",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "mode_router_decision",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "policy_decision",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "policy_version",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "guardrails_evaluated",
+          "type": "TEXT[]",
+          "nullable": true,
+          "default": "ARRAY[]::TEXT[]",
+          "declaration": "TEXT[] DEFAULT ARRAY[]::TEXT[]",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "bot_response",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "response_version",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "model_used",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "audit_log",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "errors",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'[]'",
+          "declaration": "JSONB NOT NULL DEFAULT '[]'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "latency_ms",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "model_costs",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "pii_redacted_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMPTZ(6)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "turn_trace_pkey",
+          "columns": [
+            "turn_id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"turn_trace\" (\n    \"turn_id\" UUID NOT NULL,\n    \"lead_id\" INTEGER,\n    \"lead_id_archived\" INTEGER,\n    \"conversation_id\" INTEGER,\n    \"reset_generation\" INTEGER NOT NULL DEFAULT 1,\n    \"data_quality\" TEXT NOT NULL DEFAULT 'real_pilot',\n    \"lead_message\" TEXT NOT NULL,\n    \"lead_message_type\" TEXT NOT NULL DEFAULT 'text',\n    \"perception\" JSONB NOT NULL DEFAULT '{}',\n    \"perception_version\" TEXT,\n    \"state_before\" JSONB NOT NULL DEFAULT '{}',\n    \"state_after\" JSONB NOT NULL DEFAULT '{}',\n    \"mode_router_decision\" JSONB NOT NULL DEFAULT '{}',\n    \"policy_decision\" JSONB NOT NULL DEFAULT '{}',\n    \"policy_version\" TEXT,\n    \"guardrails_evaluated\" TEXT[] DEFAULT ARRAY[]::TEXT[],\n    \"bot_response\" TEXT,\n    \"response_version\" TEXT,\n    \"model_used\" TEXT,\n    \"audit_log\" JSONB NOT NULL DEFAULT '{}',\n    \"errors\" JSONB NOT NULL DEFAULT '[]',\n    \"latency_ms\" INTEGER,\n    \"model_costs\" JSONB NOT NULL DEFAULT '{}',\n    \"pii_redacted_at\" TIMESTAMPTZ(6),\n    \"created_at\" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"turn_trace_pkey\" PRIMARY KEY (\"turn_id\")\n);"
+    },
+    {
+      "name": "call_events",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendor_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "scheduled_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "occurred_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "duration_seconds",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "outcome_tag",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "modalidad_acordada",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "fecha_proximo_evento",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "condiciones_especiales",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendor_notes",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "voice_note_url",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "call_events_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"call_events\" (\n    \"id\" TEXT NOT NULL,\n    \"lead_id\" INTEGER NOT NULL,\n    \"vendor_id\" INTEGER NOT NULL,\n    \"scheduled_at\" TIMESTAMP(3),\n    \"occurred_at\" TIMESTAMP(3),\n    \"duration_seconds\" INTEGER,\n    \"outcome_tag\" TEXT,\n    \"modalidad_acordada\" TEXT,\n    \"fecha_proximo_evento\" TIMESTAMP(3),\n    \"condiciones_especiales\" TEXT,\n    \"vendor_notes\" TEXT,\n    \"voice_note_url\" TEXT,\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"call_events_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "commitments",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "call_event_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "due_date",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(3) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "fulfilled",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "fulfilled_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "reminder_sent",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "reminder_sent_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "commitments_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"commitments\" (\n    \"id\" TEXT NOT NULL,\n    \"lead_id\" INTEGER NOT NULL,\n    \"call_event_id\" TEXT,\n    \"description\" TEXT NOT NULL,\n    \"due_date\" TIMESTAMP(3) NOT NULL,\n    \"fulfilled\" BOOLEAN NOT NULL DEFAULT false,\n    \"fulfilled_at\" TIMESTAMP(3),\n    \"reminder_sent\" BOOLEAN NOT NULL DEFAULT false,\n    \"reminder_sent_at\" TIMESTAMP(3),\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updated_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"commitments_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "followup_queue",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "scheduled_for",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": null,
+          "declaration": "TIMESTAMP(3) NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "context_snapshot",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "followup_type",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'soft_reengagement'",
+          "declaration": "TEXT NOT NULL DEFAULT 'soft_reengagement'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "executed",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "executed_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "result",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "followup_queue_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"followup_queue\" (\n    \"id\" TEXT NOT NULL,\n    \"lead_id\" INTEGER NOT NULL,\n    \"scheduled_for\" TIMESTAMP(3) NOT NULL,\n    \"context_snapshot\" JSONB NOT NULL DEFAULT '{}',\n    \"followup_type\" TEXT NOT NULL DEFAULT 'soft_reengagement',\n    \"executed\" BOOLEAN NOT NULL DEFAULT false,\n    \"executed_at\" TIMESTAMP(3),\n    \"result\" TEXT,\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"followup_queue_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "crm_notifications",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "vendor_id",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null,
+          "declaration": "INTEGER NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "lead_id",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "declaration": "INTEGER",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "priority",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "title",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "message",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "payload",
+          "type": "JSONB",
+          "nullable": false,
+          "default": "'{}'",
+          "declaration": "JSONB NOT NULL DEFAULT '{}'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "acknowledged",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "acknowledged_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMP(3)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "crm_notifications_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"crm_notifications\" (\n    \"id\" TEXT NOT NULL,\n    \"vendor_id\" INTEGER NOT NULL,\n    \"lead_id\" INTEGER,\n    \"priority\" TEXT NOT NULL,\n    \"title\" TEXT NOT NULL,\n    \"message\" TEXT NOT NULL,\n    \"payload\" JSONB NOT NULL DEFAULT '{}',\n    \"acknowledged\" BOOLEAN NOT NULL DEFAULT false,\n    \"acknowledged_at\" TIMESTAMP(3),\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"crm_notifications_pkey\" PRIMARY KEY (\"id\")\n);"
+    },
+    {
+      "name": "test_phones",
+      "columns": [
+        {
+          "name": "telefono",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "added_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "added_by",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "test_phones_pkey",
+          "columns": [
+            "telefono"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"test_phones\" (\n    \"telefono\" TEXT NOT NULL,\n    \"added_at\" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"added_by\" TEXT,\n    \"description\" TEXT,\n\n    CONSTRAINT \"test_phones_pkey\" PRIMARY KEY (\"telefono\")\n);"
+    },
+    {
+      "name": "tenant_settings",
+      "columns": [
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "display_name",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "num_vendedores_pagados",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0",
+          "declaration": "INTEGER NOT NULL DEFAULT 0",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "precio_por_vendedor_usd",
+          "type": "DECIMAL(10,2)",
+          "nullable": false,
+          "default": "20.00",
+          "declaration": "DECIMAL(10,2) NOT NULL DEFAULT 20.00",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "periodo_meses",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "6",
+          "declaration": "INTEGER NOT NULL DEFAULT 6",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "fecha_inicio",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMPTZ(6)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "fecha_fin",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": true,
+          "default": null,
+          "declaration": "TIMESTAMPTZ(6)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "monto_total_pagado_usd",
+          "type": "DECIMAL(10,2)",
+          "nullable": true,
+          "default": null,
+          "declaration": "DECIMAL(10,2)",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "estado_suscripcion",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'trial'",
+          "declaration": "TEXT NOT NULL DEFAULT 'trial'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "turnos_incluidos_por_vendedor_mes",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "10000",
+          "declaration": "INTEGER NOT NULL DEFAULT 10000",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "turnos_consumidos_mes_actual",
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0",
+          "declaration": "INTEGER NOT NULL DEFAULT 0",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "mes_actual_inicio",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": false,
+          "default": "date_trunc('month'::text, now())",
+          "declaration": "TIMESTAMPTZ(6) NOT NULL DEFAULT date_trunc('month'::text, now())",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "gemini_api_key_encrypted",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "byok_enabled",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "notas",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMPTZ(6)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "tenant_settings_pkey",
+          "columns": [
+            "tenant_id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"tenant_settings\" (\n    \"tenant_id\" TEXT NOT NULL,\n    \"display_name\" TEXT NOT NULL,\n    \"num_vendedores_pagados\" INTEGER NOT NULL DEFAULT 0,\n    \"precio_por_vendedor_usd\" DECIMAL(10,2) NOT NULL DEFAULT 20.00,\n    \"periodo_meses\" INTEGER NOT NULL DEFAULT 6,\n    \"fecha_inicio\" TIMESTAMPTZ(6),\n    \"fecha_fin\" TIMESTAMPTZ(6),\n    \"monto_total_pagado_usd\" DECIMAL(10,2),\n    \"estado_suscripcion\" TEXT NOT NULL DEFAULT 'trial',\n    \"turnos_incluidos_por_vendedor_mes\" INTEGER NOT NULL DEFAULT 10000,\n    \"turnos_consumidos_mes_actual\" INTEGER NOT NULL DEFAULT 0,\n    \"mes_actual_inicio\" TIMESTAMPTZ(6) NOT NULL DEFAULT date_trunc('month'::text, now()),\n    \"gemini_api_key_encrypted\" TEXT,\n    \"byok_enabled\" BOOLEAN NOT NULL DEFAULT false,\n    \"notas\" TEXT,\n    \"created_at\" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updated_at\" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"tenant_settings_pkey\" PRIMARY KEY (\"tenant_id\")\n);"
+    },
+    {
+      "name": "channels",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "tenant_id",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": true,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'evolution'",
+          "declaration": "TEXT NOT NULL DEFAULT 'evolution'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "modo",
+          "type": "TEXT",
+          "nullable": false,
+          "default": "'nube_pura'",
+          "declaration": "TEXT NOT NULL DEFAULT 'nube_pura'",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "external_key",
+          "type": "TEXT",
+          "nullable": false,
+          "default": null,
+          "declaration": "TEXT NOT NULL",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "numero_display",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "credenciales",
+          "type": "JSONB",
+          "nullable": true,
+          "default": null,
+          "declaration": "JSONB",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "activo",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "true",
+          "declaration": "BOOLEAN NOT NULL DEFAULT true",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "es_default",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "false",
+          "declaration": "BOOLEAN NOT NULL DEFAULT false",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "notas",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "declaration": "TEXT",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "created_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        },
+        {
+          "name": "updated_at",
+          "type": "TIMESTAMP(3)",
+          "nullable": false,
+          "default": "CURRENT_TIMESTAMP",
+          "declaration": "TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP",
+          "forbidDefault": false,
+          "allowSetNotNull": false
+        }
+      ],
+      "primary": [
+        {
+          "name": "channels_pkey",
+          "columns": [
+            "id"
+          ]
+        }
+      ],
+      "sql": "CREATE TABLE public.\"channels\" (\n    \"id\" TEXT NOT NULL,\n    \"tenant_id\" TEXT NOT NULL,\n    \"provider\" TEXT NOT NULL DEFAULT 'evolution',\n    \"modo\" TEXT NOT NULL DEFAULT 'nube_pura',\n    \"external_key\" TEXT NOT NULL,\n    \"numero_display\" TEXT,\n    \"credenciales\" JSONB,\n    \"activo\" BOOLEAN NOT NULL DEFAULT true,\n    \"es_default\" BOOLEAN NOT NULL DEFAULT false,\n    \"notas\" TEXT,\n    \"created_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    \"updated_at\" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,\n\n    CONSTRAINT \"channels_pkey\" PRIMARY KEY (\"id\")\n);"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "vendors_tenant_id_idx",
+      "table": "vendors",
+      "unique": false,
+      "columns": [
+        "tenant_id"
+      ],
+      "sql": "CREATE INDEX \"vendors_tenant_id_idx\" ON public.\"vendors\"(\"tenant_id\");"
+    },
+    {
+      "name": "vendors_tenant_id_telefono_key",
+      "table": "vendors",
+      "unique": true,
+      "columns": [
+        "tenant_id",
+        "telefono"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"vendors_tenant_id_telefono_key\" ON public.\"vendors\"(\"tenant_id\", \"telefono\");"
+    },
+    {
+      "name": "vendors_tenant_id_whatsappNumber_key",
+      "table": "vendors",
+      "unique": true,
+      "columns": [
+        "tenant_id",
+        "whatsappNumber"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"vendors_tenant_id_whatsappNumber_key\" ON public.\"vendors\"(\"tenant_id\", \"whatsappNumber\");"
+    },
+    {
+      "name": "campaigns_tenant_id_idx",
+      "table": "campaigns",
+      "unique": false,
+      "columns": [
+        "tenant_id"
+      ],
+      "sql": "CREATE INDEX \"campaigns_tenant_id_idx\" ON public.\"campaigns\"(\"tenant_id\");"
+    },
+    {
+      "name": "campaigns_tenant_id_slug_key",
+      "table": "campaigns",
+      "unique": true,
+      "columns": [
+        "tenant_id",
+        "slug"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"campaigns_tenant_id_slug_key\" ON public.\"campaigns\"(\"tenant_id\", \"slug\");"
+    },
+    {
+      "name": "flow_steps_campaignId_orden_key",
+      "table": "flow_steps",
+      "unique": true,
+      "columns": [
+        "campaignId",
+        "orden"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"flow_steps_campaignId_orden_key\" ON public.\"flow_steps\"(\"campaignId\", \"orden\");"
+    },
+    {
+      "name": "leads_tenant_id_idx",
+      "table": "leads",
+      "unique": false,
+      "columns": [
+        "tenant_id"
+      ],
+      "sql": "CREATE INDEX \"leads_tenant_id_idx\" ON public.\"leads\"(\"tenant_id\");"
+    },
+    {
+      "name": "leads_tenant_id_telefono_key",
+      "table": "leads",
+      "unique": true,
+      "columns": [
+        "tenant_id",
+        "telefono"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"leads_tenant_id_telefono_key\" ON public.\"leads\"(\"tenant_id\", \"telefono\");"
+    },
+    {
+      "name": "conversations_leadId_campaignId_key",
+      "table": "conversations",
+      "unique": true,
+      "columns": [
+        "leadId",
+        "campaignId"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"conversations_leadId_campaignId_key\" ON public.\"conversations\"(\"leadId\", \"campaignId\");"
+    },
+    {
+      "name": "messages_wa_message_id_key",
+      "table": "messages",
+      "unique": true,
+      "columns": [
+        "wa_message_id"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"messages_wa_message_id_key\" ON public.\"messages\"(\"wa_message_id\");"
+    },
+    {
+      "name": "messages_status_idx",
+      "table": "messages",
+      "unique": false,
+      "columns": [
+        "status"
+      ],
+      "sql": "CREATE INDEX \"messages_status_idx\" ON public.\"messages\"(\"status\");"
+    },
+    {
+      "name": "pending_cloud_receipts_tenant_id_phone_number_id_idx",
+      "table": "pending_cloud_receipts",
+      "unique": false,
+      "columns": [
+        "tenant_id",
+        "phone_number_id"
+      ],
+      "sql": "CREATE INDEX \"pending_cloud_receipts_tenant_id_phone_number_id_idx\" ON public.\"pending_cloud_receipts\"(\"tenant_id\", \"phone_number_id\");"
+    },
+    {
+      "name": "pending_cloud_receipts_phone_number_id_wa_message_id_key",
+      "table": "pending_cloud_receipts",
+      "unique": true,
+      "columns": [
+        "phone_number_id",
+        "wa_message_id"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"pending_cloud_receipts_phone_number_id_wa_message_id_key\" ON public.\"pending_cloud_receipts\"(\"phone_number_id\", \"wa_message_id\");"
+    },
+    {
+      "name": "media_assets_lead_id_idx",
+      "table": "media_assets",
+      "unique": false,
+      "columns": [
+        "lead_id"
+      ],
+      "sql": "CREATE INDEX \"media_assets_lead_id_idx\" ON public.\"media_assets\"(\"lead_id\");"
+    },
+    {
+      "name": "channels_external_key_key",
+      "table": "channels",
+      "unique": true,
+      "columns": [
+        "external_key"
+      ],
+      "sql": "CREATE UNIQUE INDEX \"channels_external_key_key\" ON public.\"channels\"(\"external_key\");"
+    },
+    {
+      "name": "channels_tenant_id_idx",
+      "table": "channels",
+      "unique": false,
+      "columns": [
+        "tenant_id"
+      ],
+      "sql": "CREATE INDEX \"channels_tenant_id_idx\" ON public.\"channels\"(\"tenant_id\");"
+    },
+    {
+      "name": "channels_provider_activo_idx",
+      "table": "channels",
+      "unique": false,
+      "columns": [
+        "provider",
+        "activo"
+      ],
+      "sql": "CREATE INDEX \"channels_provider_activo_idx\" ON public.\"channels\"(\"provider\", \"activo\");"
+    }
+  ],
+  "foreignKeys": [
+    {
+      "table": "campaigns",
+      "name": "campaigns_vendorId_fkey",
+      "columns": [
+        "vendorId"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "RESTRICT",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"campaigns\" ADD CONSTRAINT \"campaigns_vendorId_fkey\" FOREIGN KEY (\"vendorId\") REFERENCES public.\"vendors\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+    },
+    {
+      "table": "triggers",
+      "name": "triggers_campaignId_fkey",
+      "columns": [
+        "campaignId"
+      ],
+      "target": "campaigns",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"triggers\" ADD CONSTRAINT \"triggers_campaignId_fkey\" FOREIGN KEY (\"campaignId\") REFERENCES public.\"campaigns\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "flow_steps",
+      "name": "flow_steps_campaignId_fkey",
+      "columns": [
+        "campaignId"
+      ],
+      "target": "campaigns",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"flow_steps\" ADD CONSTRAINT \"flow_steps_campaignId_fkey\" FOREIGN KEY (\"campaignId\") REFERENCES public.\"campaigns\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "leads",
+      "name": "leads_campaignId_fkey",
+      "columns": [
+        "campaignId"
+      ],
+      "target": "campaigns",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"leads\" ADD CONSTRAINT \"leads_campaignId_fkey\" FOREIGN KEY (\"campaignId\") REFERENCES public.\"campaigns\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "leads",
+      "name": "leads_vendorId_fkey",
+      "columns": [
+        "vendorId"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"leads\" ADD CONSTRAINT \"leads_vendorId_fkey\" FOREIGN KEY (\"vendorId\") REFERENCES public.\"vendors\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "leads",
+      "name": "leads_archived_by_fkey",
+      "columns": [
+        "archived_by"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"leads\" ADD CONSTRAINT \"leads_archived_by_fkey\" FOREIGN KEY (\"archived_by\") REFERENCES public.\"vendors\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "conversations",
+      "name": "conversations_leadId_fkey",
+      "columns": [
+        "leadId"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"conversations\" ADD CONSTRAINT \"conversations_leadId_fkey\" FOREIGN KEY (\"leadId\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "conversations",
+      "name": "conversations_campaignId_fkey",
+      "columns": [
+        "campaignId"
+      ],
+      "target": "campaigns",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"conversations\" ADD CONSTRAINT \"conversations_campaignId_fkey\" FOREIGN KEY (\"campaignId\") REFERENCES public.\"campaigns\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "conversations",
+      "name": "conversations_vendorId_fkey",
+      "columns": [
+        "vendorId"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"conversations\" ADD CONSTRAINT \"conversations_vendorId_fkey\" FOREIGN KEY (\"vendorId\") REFERENCES public.\"vendors\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "messages",
+      "name": "messages_leadId_fkey",
+      "columns": [
+        "leadId"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "RESTRICT",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"messages\" ADD CONSTRAINT \"messages_leadId_fkey\" FOREIGN KEY (\"leadId\") REFERENCES public.\"leads\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+    },
+    {
+      "table": "messages",
+      "name": "messages_conversationId_fkey",
+      "columns": [
+        "conversationId"
+      ],
+      "target": "conversations",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"messages\" ADD CONSTRAINT \"messages_conversationId_fkey\" FOREIGN KEY (\"conversationId\") REFERENCES public.\"conversations\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "pending_cloud_receipts",
+      "name": "pending_cloud_receipts_tenant_id_fkey",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_settings",
+      "targetColumns": [
+        "tenant_id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"pending_cloud_receipts\" ADD CONSTRAINT \"pending_cloud_receipts_tenant_id_fkey\" FOREIGN KEY (\"tenant_id\") REFERENCES public.\"tenant_settings\"(\"tenant_id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "media_assets",
+      "name": "media_assets_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"media_assets\" ADD CONSTRAINT \"media_assets_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "lead_state",
+      "name": "lead_state_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"lead_state\" ADD CONSTRAINT \"lead_state_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "lead_state",
+      "name": "lead_state_vendor_active_id_fkey",
+      "columns": [
+        "vendor_active_id"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"lead_state\" ADD CONSTRAINT \"lead_state_vendor_active_id_fkey\" FOREIGN KEY (\"vendor_active_id\") REFERENCES public.\"vendors\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "turn_trace",
+      "name": "turn_trace_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"turn_trace\" ADD CONSTRAINT \"turn_trace_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "turn_trace",
+      "name": "turn_trace_conversation_id_fkey",
+      "columns": [
+        "conversation_id"
+      ],
+      "target": "conversations",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"turn_trace\" ADD CONSTRAINT \"turn_trace_conversation_id_fkey\" FOREIGN KEY (\"conversation_id\") REFERENCES public.\"conversations\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "call_events",
+      "name": "call_events_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"call_events\" ADD CONSTRAINT \"call_events_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "call_events",
+      "name": "call_events_vendor_id_fkey",
+      "columns": [
+        "vendor_id"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"call_events\" ADD CONSTRAINT \"call_events_vendor_id_fkey\" FOREIGN KEY (\"vendor_id\") REFERENCES public.\"vendors\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "commitments",
+      "name": "commitments_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"commitments\" ADD CONSTRAINT \"commitments_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "commitments",
+      "name": "commitments_call_event_id_fkey",
+      "columns": [
+        "call_event_id"
+      ],
+      "target": "call_events",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "SET NULL",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"commitments\" ADD CONSTRAINT \"commitments_call_event_id_fkey\" FOREIGN KEY (\"call_event_id\") REFERENCES public.\"call_events\"(\"id\") ON DELETE SET NULL ON UPDATE CASCADE;"
+    },
+    {
+      "table": "followup_queue",
+      "name": "followup_queue_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"followup_queue\" ADD CONSTRAINT \"followup_queue_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "crm_notifications",
+      "name": "crm_notifications_vendor_id_fkey",
+      "columns": [
+        "vendor_id"
+      ],
+      "target": "vendors",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"crm_notifications\" ADD CONSTRAINT \"crm_notifications_vendor_id_fkey\" FOREIGN KEY (\"vendor_id\") REFERENCES public.\"vendors\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "crm_notifications",
+      "name": "crm_notifications_lead_id_fkey",
+      "columns": [
+        "lead_id"
+      ],
+      "target": "leads",
+      "targetColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"crm_notifications\" ADD CONSTRAINT \"crm_notifications_lead_id_fkey\" FOREIGN KEY (\"lead_id\") REFERENCES public.\"leads\"(\"id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    {
+      "table": "channels",
+      "name": "channels_tenant_id_fkey",
+      "columns": [
+        "tenant_id"
+      ],
+      "target": "tenant_settings",
+      "targetColumns": [
+        "tenant_id"
+      ],
+      "onDelete": "CASCADE",
+      "onUpdate": "CASCADE",
+      "sql": "ALTER TABLE public.\"channels\" ADD CONSTRAINT \"channels_tenant_id_fkey\" FOREIGN KEY (\"tenant_id\") REFERENCES public.\"tenant_settings\"(\"tenant_id\") ON DELETE CASCADE ON UPDATE CASCADE;"
+    }
+  ]
+}

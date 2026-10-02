@@ -1,6 +1,6 @@
 # Hidata — Sales OS (monorepo)
 
-WhatsApp Sales OS para edtech LATAM. Monorepo: backend (cerebro + API), frontend (CRM) y el contrato compartido.
+Backend multitenant para el CRM de Perú Exporta, BIOAYUR e Hidata. El cerebro del bot es uno de sus componentes principales. Monorepo: API y cerebro, frontend del CRM y contrato compartido. El canal operativo es la API oficial de Meta.
 
 ## Estructura
 ```
@@ -28,6 +28,12 @@ hidata/
 - **Vercel (frontend):** *Root Directory* = `apps/web`. Previews automáticos por rama; producción solo en merge a `main`.
 - Cada target **ignora cambios fuera de su Root Directory** (mecanismo oficial de monorepo de Render/Vercel) → un push solo-front NO redespliega el backend.
 
-## ⚠️ Pendientes operativos
-- **Poner el repo en PRIVADO** (hoy es público → expone el código del cerebro, que es el moat).
-- Setear `JWT_SECRET` en Render antes de producción.
+## Estado de la preparación del CRM
+
+La BD real quedó preparada y verificada con 19 modelos y 34 cambios estructurales. Las correcciones de esta revisión están locales; ese estado de BD no confirma su despliegue en Render.
+
+- [Contrato API ↔ CRM](docs/contrato-crm.md): autenticación, ficha editable, versiones, inbox, medios y Meta.
+- [Preparación de BD](docs/db-readiness.md): contrato versionado, migración aditiva, backup/restauración y pruebas.
+- [Evidencia de aplicación](docs/estado-db-aplicacion.json): resultado de la BD real sin credenciales.
+- [Cierre de auditoría](docs/cierre-backend-crm-2026-10-01.md): resultados de pruebas, correcciones y límites pendientes.
+- El arranque exige `JWT_SECRET` y un esquema compatible. Los scripts de preparación no aplican cambios automáticamente al arrancar.

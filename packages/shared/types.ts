@@ -70,18 +70,37 @@ export interface PedidoCerrado {
 // `/v2/leads/:id/media/:id` (no hay URL pública → no se filtra PII del comprobante).
 export interface MediaRef {
   id: number
-  tipo: string        // image | audio
+  tipo: string        // image | audio | document | video
   mimeType: string
 }
 
+// Recibo de Meta sobre un mensaje que SALIÓ de nosotros. Ausente en los del lead y en
+// todo lo que va por Evolution (que no tiene este concepto).
+export type EstadoEnvio = 'sent' | 'delivered' | 'read' | 'failed'
+
 // Timeline unificado de la conversación. Discriminated union por `kind`.
 export type ConversationEvent =
-  | { kind: 'message'; origen: 'LEAD' | 'BOT' | 'VENDEDOR'; texto: string; at: string; media?: MediaRef }
-  | { kind: 'state'; label: string; priority: string; at: string }
+  | {
+      id?: string
+      kind: 'message'; origen: 'LEAD' | 'BOT' | 'VENDEDOR'; texto: string | null; at: string
+      media?: MediaRef
+      estado?: EstadoEnvio
+      estadoDetalle?: string   // por qué falló, en palabras de Meta
+    }
+  | { kind: 'state'; id?: string; label: string; priority: string; at: string }
 
 export interface ConversationResponse {
   leadId: number
   eventos: ConversationEvent[]
+  // Paginación hacia atrás. Presente siempre; el front puede ignorarlo.
+  page?: {
+    limit: number
+    hayMas: boolean
+    // ISO del evento más antiguo devuelto: se pasa como ?before= para cargar más.
+    cursorAntesDe: string | null
+    // Cursor opaco con desempate; se pasa intacto como ?before=.
+    cursor?: string | null
+  }
 }
 
 // ── Hito 2: acciones de escritura del Inbox ──
@@ -135,11 +154,71 @@ export interface Flow {
 }
 
 export interface AgentConfig {
-  version: number
   campaignId: number | null
   nombrePrograma: string
   factSheet: Record<string, any>
   agente: Record<string, any>
+  // Control optimista: el GET la entrega, el PUT la exige. Sin ella → 428;
+  // con una vieja → 409 con la ficha vigente (el borrador local no se pierde).
+  version: number | null
+}
+
+// Merge recursivo: omitir conserva; null borra solo campos opcionales y con force.
+// `version` es la que entregó el GET.
+export interface SaveAgentConfigRequest {
+  campaignId: number
+  factSheet?: Record<string, any> | null
+  agente?: Record<string, any> | null
+  version: number
+  force?: boolean
+}
+
+export interface SaveAgentConfigResponse {
+  ok: true
+  campaignId: number
+  version: number
+}
+
+// Conflicto de edición (409): la ficha vigente para combinar con el borrador local.
+export interface AgentConfigConflicto {
+  error: string
+  version: number
+  factSheet: Record<string, any>
+  agente: Record<string, any>
+}
+
+// Dry-run sin escritura (POST /v2/agent-config/preview). No llama al LLM.
+export interface AgentConfigPreview {
+  ok: boolean
+  errores?: string[]
+  version: number | null
+  factSheet?: Record<string, any>
+  agente?: Record<string, any>
+  precioTexto?: string | null
+}
+
+// Simulación segura de un turno (POST /v2/leads/:id/preview): no envía, no persiste,
+// no llama al LLM. Reproduce los gates previos al modelo del pipeline real, incluido
+// el auto-resume del takeover humano.
+export type PreviewMotivo =
+  | 'llegaria_al_modelo'
+  | 'humano_tiene_control'
+  | 'conversacion_pausada'
+  | 'auto_resume_del_bot'
+
+export interface TurnoPreview {
+  llegariaAlModelo: boolean
+  motivo: PreviewMotivo
+  modo: string
+  stage: string
+  campaignId: number | null
+  versionCampana: number | null
+  fichaTienePrecio: boolean
+  advertencias: string[]
+  // Horas que el lead lleva en su modo actual (contexto del auto-resume).
+  horasEnControl?: number | null
+  autoResumeHoras?: number | null
+  nota?: string
 }
 
 // Copiloto (Consultor): propone cambios a la configuración del agente
@@ -173,4 +252,36 @@ export interface CampaignLite {
   nombre: string
   activa: boolean
   tieneFlow: boolean                  // si ya tiene un flujo editado guardado
+}
+
+// Alta desde el CRM (POST /v2/campaigns). `borrador:true` guarda parcial sin validar
+// el contrato (campaña pendiente de completar = estado válido, no defecto).
+export interface CreateCampaignRequest {
+  nombre: string
+  slug?: string
+  vendorId?: number
+  triggers?: string[]
+  steps?: { tipo: string; mensaje: string; followupHrs?: number | null }[]
+  config?: Record<string, any> | null
+  borrador?: boolean
+  activa?: boolean
+}
+
+export interface CampaignDetail {
+  id: number
+  slug: string
+  nombre: string
+  activa: boolean
+  version: number
+  factSheet: Record<string, any>
+  agente: Record<string, any>
+  triggers: string[]
+  steps: unknown[]
+}
+
+// Paginación opt-in de GET /v2/leads (?limit&?offset). Sin params, la API devuelve
+// el array legacy LeadListItem[].
+export interface LeadsPage {
+  items: LeadListItem[]
+  page: { limit: number; offset: number; hasMore: boolean }
 }

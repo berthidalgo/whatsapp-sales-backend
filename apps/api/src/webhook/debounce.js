@@ -271,6 +271,17 @@ export function cancelDebounce(leadId) {
   }
 }
 
+// Invalida un turno del bot en vuelo + cancela el buffer pendiente.
+// Lo llama el takeover humano (reply/mode/reabrir del CRM) y el eco del dueño:
+// sube la generación para que el pipeline que esté pensando descarte su respuesta
+// por obsoleta (kill-stale) y limpia el buffer para que el bot no responda encima
+// del operador. NO bufferea nada (a diferencia de enqueueMessage): si no había nada
+// en vuelo, es un no-op seguro.
+export function invalidarTurnoEnVuelo(leadId) {
+  if (leadId) bumpGeneration(leadId)
+  return cancelDebounce(leadId)
+}
+
 // ════════════════════════════════════════════════════════
 // HELPERS DE DEBUG
 // ════════════════════════════════════════════════════════

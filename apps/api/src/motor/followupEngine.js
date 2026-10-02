@@ -23,7 +23,7 @@
 
 import { randomUUID } from 'node:crypto'
 import prisma from '../db/prisma.js'
-import { enviarTexto, enviarPlantilla, transporteDe } from '../whatsapp/transporte.js'
+import { enviarTexto, enviarPlantilla, transporteDe, persistirMensajeSaliente } from '../whatsapp/transporte.js'
 import { textoDePlantilla } from '../whatsapp/cloud/plantillas-catalogo.js'
 import { readFileSync } from 'node:fs'
 import { ACTIVE_TENANT, verticalPorTenant } from '../lib/tenant.js'
@@ -91,7 +91,8 @@ export async function datosComercialesPorLead(leadIds, db = prisma) {
   for (const f of filas) {
     const config = (f.campaign?.config && typeof f.campaign.config === 'object') ? f.campaign.config : {}
     const followups = (config.followups && typeof config.followups === 'object') ? config.followups : null
-    if (!f.tenantId || f.campaign?.tenantId !== f.tenantId) continue
+    // Sin campaña es válido; una asociación ajena o no resuelta se omite.
+    if (!f.tenantId || (f.campaign !== null && f.campaign?.tenantId !== f.tenantId)) continue
     mapa.set(f.id, {
       tenantId: f.tenantId, vertical: config.vertical || verticalPorTenant(f.tenantId),
       producto: config.agente?.nombreProducto || null,
@@ -309,7 +310,7 @@ export async function ejecutarFollowups() {
 
       // Persistir el followup como mensaje BOT (queda en el historial; no afecta el
       // reloj de silencio, que se mide desde el último mensaje del LEAD).
-      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto: enviado } })
+      await persistirMensajeSaliente(prisma, { data: { leadId: c.leadId, origen: 'BOT', texto: enviado }, resultado: r, canal, tenantId: c.tenantId })
 
       // Registrar el followup ejecutado (idempotencia por ciclo + auditoría).
       await prisma.$executeRaw`
@@ -390,7 +391,7 @@ export async function ejecutarRecordatoriosCompromiso() {
     // Lo que sí debe ser del tenant es el NÚMERO por el que sale.
     const { canal, instancia } = await canalDeTenant(c.tenantId, canalPorTenant)
     const transporte = transporteDe(canal)
-    if (transporte === 'evolution' && !instancia) {
+    if (!canal || (transporte === 'evolution' && !instancia)) {
       console.warn(`[Compromiso] ⏭️ lead ${c.leadId} (${c.tenantId}) sin canal de salida → omitido.`)
       continue
     }
@@ -413,7 +414,7 @@ export async function ejecutarRecordatoriosCompromiso() {
       await prisma.$executeRaw`
         UPDATE commitments SET reminder_sent = true, reminder_sent_at = now(), updated_at = now()
         WHERE id = ${c.commitment_id}::uuid`
-      await prisma.message.create({ data: { leadId: c.leadId, origen: 'BOT', texto: enviado } })
+      await persistirMensajeSaliente(prisma, { data: { leadId: c.leadId, origen: 'BOT', texto: enviado }, resultado: r, canal, tenantId: c.tenantId })
 
       enviados++
       console.log(`[Compromiso] ✅ recordatorio a lead ${c.leadId} (commitment ${c.commitment_id})`)

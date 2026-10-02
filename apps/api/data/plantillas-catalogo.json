@@ -1,0 +1,68 @@
+{
+  "plantillas": [
+    {
+      "clave": "followup_24h",
+      "env": "CLOUD_TEMPLATE_FOLLOWUP_24H",
+      "nombre": "hidata_followup_24h",
+      "categoria": "marketing",
+      "uso": "Seguimiento a un lead que dejó de responder hace más de 24 h (motor de followups).",
+      "cuerpo": "Hola {{1}} 👋 Quedó pendiente tu consulta sobre {{2}}. Si te animas, coordinamos tu pedido con gusto. ¿Lo vemos? 😊",
+      "variables": [
+        "nombre del lead",
+        "producto de interés"
+      ],
+      "ejemplos": [
+        "María",
+        "tu pedido"
+      ]
+    },
+    {
+      "clave": "reapertura",
+      "env": "CLOUD_TEMPLATE_REAPERTURA",
+      "nombre": "hidata_reapertura",
+      "categoria": "marketing",
+      "uso": "El vendedor reabre desde la bandeja una conversación cerrada por la ventana de 24 h (botón «reabrir»).",
+      "cuerpo": "Hola {{1}} 👋 Retomo tu consulta sobre {{2}}. Si todavía te interesa, respóndeme por aquí y seguimos donde lo dejamos 😊",
+      "variables": [
+        "nombre del lead",
+        "producto de interés"
+      ],
+      "ejemplos": [
+        "María",
+        "tu pedido"
+      ]
+    },
+    {
+      "clave": "compromiso",
+      "env": "CLOUD_TEMPLATE_COMPROMISO",
+      "nombre": "hidata_compromiso",
+      "categoria": "utility",
+      "uso": "Recordatorio de algo que el lead y el negocio dejaron acordado para una fecha (una llamada, un pago, una respuesta).",
+      "cuerpo": "Hola {{1}} 👋 Te escribo por lo que quedamos en nuestra conversación. Cuando puedas, respóndeme por aquí y lo retomamos.",
+      "variables": [
+        "nombre del lead"
+      ],
+      "ejemplos": [
+        "María"
+      ]
+    },
+    {
+      "clave": "aviso_vendedor",
+      "env": "CLOUD_TEMPLATE_AVISO_VENDEDOR",
+      "nombre": "hidata_aviso_vendedor",
+      "categoria": "utility",
+      "uso": "Aviso al vendedor cuando un lead necesita atención humana. Llega siempre, aunque el vendedor no haya escrito hoy al número.",
+      "cuerpo": "🔔 {{1}} necesita atención humana. Motivo: {{2}}. Abre el chat aquí: {{3}} 👈",
+      "variables": [
+        "nombre del cliente",
+        "motivo",
+        "enlace wa.me al cliente"
+      ],
+      "ejemplos": [
+        "María Pérez",
+        "quiere pagar y pide hablar con un asesor",
+        "https://wa.me/51987654321"
+      ]
+    }
+  ]
+}

@@ -6,15 +6,15 @@
 //   2. GET {esa URL}          → el binario (requiere el Bearer token igual)
 // Devuelve { ok, base64, mimeType } — mismo shape que consume vision.js (leerComprobante).
 
-import { cloudConfig, cloudReady } from './config.js'
+import { resolverCredencialesCloud, cloudReady } from './config.js'
+import { MAX_MEDIA_BYTES } from '../../lib/mediaStore.js'
 
 const TIMEOUT_MS = 15000
 
 // credenciales: las del canal del cliente (multitenant); sin ellas, las del entorno.
 export async function descargarMediaCloud(mediaId, credenciales = null) {
   if (!mediaId) return { ok: false, error: 'media_id_required' }
-  const env = cloudConfig()
-  const c = { ...env, phoneNumberId: credenciales?.phoneNumberId || env.phoneNumberId, accessToken: credenciales?.accessToken || env.accessToken }
+  const c = resolverCredencialesCloud(credenciales)
   if (!cloudReady(c)) return { ok: false, error: 'cloud_not_configured' }
 
   // ── Paso 1: metadata del media (URL temporal) ──
@@ -23,20 +23,30 @@ export async function descargarMediaCloud(mediaId, credenciales = null) {
   const url = meta.data?.url
   const mimeType = meta.data?.mime_type || null
   if (!url) return { ok: false, error: 'media_url_missing' }
+  if (Number(meta.data?.file_size) > MAX_MEDIA_BYTES) return { ok: false, error: 'demasiado_grande' }
 
   // ── Paso 2: descargar el binario (la URL de Meta también exige el token) ──
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
   try {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${c.accessToken}` }, signal: ctrl.signal })
-    clearTimeout(timer)
     if (!res.ok) return { ok: false, error: `media_bin_${res.status}` }
-    const buf = Buffer.from(await res.arrayBuffer())
+    if (Number(res.headers.get('content-length')) > MAX_MEDIA_BYTES) {
+      await res.body?.cancel()
+      return { ok: false, error: 'demasiado_grande' }
+    }
+    const chunks = []; let total = 0
+    for await (const chunk of res.body || []) {
+      total += chunk.length
+      if (total > MAX_MEDIA_BYTES) { ctrl.abort(); return { ok: false, error: 'demasiado_grande' } }
+      chunks.push(Buffer.from(chunk))
+    }
+    const buf = Buffer.concat(chunks, total)
     return { ok: true, base64: buf.toString('base64'), mimeType }
   } catch (e) {
     clearTimeout(timer)
     return { ok: false, error: e.name === 'AbortError' ? 'timeout' : 'fetch_error', detail: e.message }
-  }
+  } finally { clearTimeout(timer) }
 }
 
 async function getJson(url, token) {

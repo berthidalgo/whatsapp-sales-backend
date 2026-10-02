@@ -11,6 +11,9 @@
 //
 // Opcionales:
 //   --default        lo marca como canal por defecto del cliente (followups y avisos salen por él)
+//   --modo X         nube_pura (default) o coexistencia. Es la MISMA API en los dos casos; en
+//                    coexistencia el número sigue vivo en el celular del cliente y Meta nos manda
+//                    copia de lo que él contesta desde ahí (el bot se calla solo cuando pasa).
 //   --token-propio   guarda el token del .env (CLOUD_ACCESS_TOKEN) en el canal. Úsalo solo para
 //                    clientes con SU cuenta de Meta; para el número de Hidata basta el .env.
 //
@@ -36,11 +39,13 @@ const flag = (k) => args.includes(k)
 const tenantId = valor('--tenant')
 const phoneNumberId = valor('--phone-number-id')
 const numero = valor('--numero')
+const modo = valor('--modo') || 'nube_pura'
 const aplicar = flag('--aplicar')
 
 function salir(msg) { console.error(`✖ ${msg}`); process.exit(1) }
 if (!tenantId) salir('falta --tenant (identificador del cliente)')
 if (!phoneNumberId || !/^\d{8,20}$/.test(phoneNumberId)) salir('falta --phone-number-id (el ID numérico que muestra Meta, NO el teléfono)')
+if (!['nube_pura', 'coexistencia'].includes(modo)) salir('--modo debe ser nube_pura o coexistencia')
 
 const prisma = new PrismaClient({ log: ['error'] })
 try {
@@ -63,6 +68,7 @@ try {
     provider: 'cloud',
     externalKey: phoneNumberId,
     numeroDisplay: numero || null,
+    modo,
     credenciales,
     activo: true,
     esDefault: flag('--default'),
@@ -71,6 +77,7 @@ try {
 
   console.log(`Cliente: ${tenant.displayName} (${tenantId})`)
   console.log(`Canal:   Meta · phone_number_id ${phoneNumberId}${numero ? ` · ${numero}` : ''}${datos.esDefault ? ' · por defecto' : ''}`)
+  console.log(`Modo:    ${modo === 'coexistencia' ? 'coexistencia (el número sigue en la app del celular; sus respuestas llegan como eco y pausan al bot)' : 'nube pura (el número vive solo en Meta)'}`)
   console.log(`Token:   ${credenciales.accessToken ? 'propio del canal' : 'el del entorno (CLOUD_ACCESS_TOKEN en Render)'}`)
   console.log(existente ? 'Acción:  actualizar el canal existente' : 'Acción:  crear el canal')
 

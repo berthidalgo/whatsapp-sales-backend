@@ -116,7 +116,7 @@ model Lead {
   vendorId          Int?
   vendor            Vendor?             @relation(fields: [vendorId], references: [id])
   pasoActual        Int                 @default(0)
-  ultimoMensaje     DateTime?
+  ultimoMensaje     DateTime?            @db.Timestamp(6)
   notificado        Boolean             @default(false)
   estado            String              @default("NUEVO")
   nombreDetectado   String?
@@ -129,7 +129,7 @@ model Lead {
   addressingMode    String?             @map("addressing_mode")
   
   // Soft delete fields (v20)
-  archivedAt        DateTime?           @map("archived_at")
+  archivedAt        DateTime?           @map("archived_at") @db.Timestamptz(6)
   archivedReason    String?             @map("archived_reason")
   archivedById      Int?                @map("archived_by")
   archivedBy        Vendor?             @relation("LeadArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
@@ -143,8 +143,8 @@ model Lead {
   followupQueue     FollowupQueueItem[]
   crmNotifications  CrmNotification[]
   mediaAssets       MediaAsset[]
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  createdAt         DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt         DateTime            @updatedAt @db.Timestamp(6)
 
   // Multitenancy: el teléfono es único POR TENANT, no global.
   // Evita que un mismo número robe el lead de un tenant a otro.
@@ -180,6 +180,16 @@ model Conversation {
 }
 
 // ─── Historial de mensajes ────────────────────────────────────
+// RECIBOS DE META (sep 2026). Hasta ahora un mensaje saliente se guardaba y ahí moría:
+// nadie sabía si llegó. Con Evolution se notaba poco (el vendedor miraba su celular);
+// con Cloud API pura el CRM es lo ÚNICO que hay, así que un mensaje que Meta rechazó
+// —fuera de la ventana de 24 h, número que no tiene WhatsApp, plantilla no aprobada—
+// se veía "enviado" en la bandeja y el lead nunca lo recibía.
+//
+// Meta manda esos recibos por el mismo webhook, en `statuses`, referenciando su propio
+// id de mensaje (wamid). Por eso guardamos el wamid al enviar: es la única forma de
+// enganchar el recibo con la fila. Todo es opcional a propósito — Evolution no da wamid
+// y sus mensajes viven perfectamente con estas columnas en null.
 model Message {
   id             Int           @id @default(autoincrement())
   leadId         Int
@@ -188,9 +198,38 @@ model Message {
   conversation   Conversation? @relation(fields: [conversationId], references: [id])
   origen         String        // LEAD | BOT | VENDEDOR
   texto          String        @db.Text
-  createdAt      DateTime      @default(now())
+  createdAt      DateTime      @default(now()) @db.Timestamp(6)
 
+  // wamid de Meta. Único a propósito: si el mismo envío se persistiera dos veces, la
+  // base lo corta. En Postgres varios NULL no chocan entre sí → Evolution no se entera.
+  waMessageId    String?       @unique @map("wa_message_id")
+  cloudPhoneNumberId String?   @map("cloud_phone_number_id")
+  status         String?       // sent | delivered | read | failed
+  statusAt       DateTime?     @map("status_at")
+  errorCode      Int?          @map("error_code")     // código de Meta (131047, 131026…)
+  errorDetalle   String?       @map("error_detalle")
+
+  @@index([status])
   @@map("messages")
+}
+
+// Recibos tempranos durables: conciliación por tenant + número verificado + wamid.
+model PendingCloudReceipt {
+  id            String         @id @default(uuid())
+  tenantId      String         @map("tenant_id")
+  tenant        TenantSettings @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  phoneNumberId String         @map("phone_number_id")
+  waMessageId   String         @map("wa_message_id")
+  status        String
+  statusAt      DateTime       @map("status_at")
+  errorCode     Int?           @map("error_code")
+  errorDetalle  String?        @map("error_detalle")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  @@unique([phoneNumberId, waMessageId])
+  @@index([tenantId, phoneNumberId])
+  @@map("pending_cloud_receipts")
 }
 
 // ─── Media entrante (comprobantes, fotos del lead) ────────────
@@ -213,7 +252,7 @@ model MediaAsset {
   bytes       Bytes?                                // si storage=pg
   url         String?                               // si storage=supabase
   sizeBytes   Int?     @map("size_bytes")
-  createdAt   DateTime @default(now())             @map("created_at")
+  createdAt   DateTime @default(now())             @map("created_at") @db.Timestamptz(6)
 
   @@index([leadId])
   @@map("media_assets")
@@ -278,7 +317,7 @@ model LeadState {
 
 // ─── Trace inmutable de cada turno conversacional ─────────────
 model TurnTrace {
-  turnId               String        @id @default(uuid()) @map("turn_id")
+  turnId               String        @id @default(uuid()) @map("turn_id") @db.Uuid
   
   leadId               Int?          @map("lead_id")
   lead                 Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
@@ -316,9 +355,9 @@ model TurnTrace {
   latencyMs            Int?          @map("latency_ms")
   modelCosts           Json          @default("{}") @map("model_costs")
   
-  piiRedactedAt        DateTime?     @map("pii_redacted_at")
+  piiRedactedAt        DateTime?     @map("pii_redacted_at") @db.Timestamptz(6)
   
-  createdAt            DateTime      @default(now()) @map("created_at")
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("turn_trace")
 }
@@ -414,7 +453,7 @@ model CrmNotification {
 // ─── Lista de teléfonos de prueba ─────────────────────────────
 model TestPhone {
   telefono     String   @id
-  addedAt      DateTime @default(now()) @map("added_at")
+  addedAt      DateTime @default(now()) @map("added_at") @db.Timestamptz(6)
   addedBy      String?  @map("added_by")
   description  String?
 
@@ -434,15 +473,15 @@ model TenantSettings {
   numVendedoresPagados           Int      @default(0)     @map("num_vendedores_pagados")
   precioPorVendedorUsd           Decimal  @default(20.00) @map("precio_por_vendedor_usd") @db.Decimal(10,2)
   periodoMeses                   Int      @default(6)     @map("periodo_meses")
-  fechaInicio                    DateTime?                @map("fecha_inicio")
-  fechaFin                       DateTime?                @map("fecha_fin")
+  fechaInicio                    DateTime?                @map("fecha_inicio") @db.Timestamptz(6)
+  fechaFin                       DateTime?                @map("fecha_fin") @db.Timestamptz(6)
   montoTotalPagadoUsd            Decimal?                 @map("monto_total_pagado_usd") @db.Decimal(10,2)
   estadoSuscripcion              String   @default("trial") @map("estado_suscripcion")
   
   // Quota operativa de turnos IA
   turnosIncluidosPorVendedorMes  Int      @default(10000) @map("turnos_incluidos_por_vendedor_mes")
   turnosConsumidosMesActual      Int      @default(0)     @map("turnos_consumidos_mes_actual")
-  mesActualInicio                DateTime @default(now()) @map("mes_actual_inicio")
+  mesActualInicio                DateTime @default(dbgenerated("date_trunc('month'::text, now())")) @map("mes_actual_inicio") @db.Timestamptz(6)
   
   // API key dedicada (futuro multi-tenant real)
   geminiApiKeyEncrypted          String?  @map("gemini_api_key_encrypted")
@@ -455,9 +494,10 @@ model TenantSettings {
   // Es lo que convierte a tenant_settings en el ANCLA del multitenant: un tenant
   // ya no es solo una fila de facturación, es "quién atiende por qué número".
   channels                       Channel[]
+  pendingCloudReceipts            PendingCloudReceipt[]
 
-  createdAt                      DateTime @default(now()) @map("created_at")
-  updatedAt                      DateTime @default(now()) @updatedAt @map("updated_at")
+  createdAt                      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@map("tenant_settings")
 }
@@ -493,6 +533,13 @@ model Channel {
   tenant         TenantSettings @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
 
   provider       String         @default("evolution")   // evolution | bird | cloud
+
+  // Cómo está conectado el número cuando provider='cloud'. La API es la MISMA en los dos
+  // casos (mismo webhook, mismo phone_number_id, mismo envío); lo que cambia es que en
+  // coexistencia el número sigue vivo en la app del celular del cliente y Meta nos manda
+  // una copia de lo que él contesta desde ahí (ver 'echo' en cloud/parser.js).
+  // Se guarda para saber a quién hay que migrar y para no sorprenderse con los ecos.
+  modo           String         @default("nube_pura")   // nube_pura | coexistencia
 
   // Llave de routing del webhook entrante. ÚNICA GLOBAL a propósito: una misma
   // instancia/número no puede pertenecer a dos tenants — si eso pasara, los

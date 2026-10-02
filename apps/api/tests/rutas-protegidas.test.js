@@ -36,6 +36,7 @@ const fuente = readFileSync(SERVER, 'utf8')
 // No agregar nada aquí sin entender que queda expuesto a internet.
 const PUBLICAS = new Map([
   ['GET /health',         'UptimeRobot lo llama para mantener Render despierto; no devuelve datos'],
+  ['GET /ready',          'Estado de conexión/esquema sin datos de tenants ni credenciales'],
   ['GET /',               'web del negocio: Meta la lee para aprobar la cuenta de WhatsApp; texto fijo, sin datos de leads'],
   ['GET /privacidad',     'política de privacidad: Meta exige su URL para publicar la app; texto fijo, sin datos de leads'],
   ['GET /webhook',        'ping de verificación de Evolution; solo devuelve un status'],
@@ -100,7 +101,7 @@ test('las rutas de ADMINISTRACIÓN exigen rol ADMIN/SUPERVISOR (no solo un token
 test('la allowlist pública no creció sin querer', () => {
   // Candado de intención: si alguien mete una ruta en PUBLICAS para "que pase el test",
   // este contador falla y obliga a justificarlo en la revisión.
-  assert.equal(PUBLICAS.size, 11,
+  assert.equal(PUBLICAS.size, 12,
     'Cambió la cantidad de rutas públicas. Revisa UNA POR UNA que deban serlo y ' +
     'actualiza este número a conciencia.')
 })

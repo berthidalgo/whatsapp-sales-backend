@@ -33,7 +33,9 @@ const DEFAULT_TENANT_ID = ACTIVE_TENANT   // switch de tenant (jul 2026): perill
 // Normalización (IDÉNTICA a src/routes/campaigns.js para coherencia)
 // minúsculas + sin tildes (NFD) + sin símbolos
 // ════════════════════════════════════════════════════════
-export const normalizeText = normalizarTrigger
+export function normalizeText(s) {
+  return normalizarTrigger(s)
+}
 
 // ════════════════════════════════════════════════════════
 // API PÚBLICA — resolveCampaign()

@@ -82,6 +82,19 @@ button { font-family: inherit; cursor: pointer; }
 .db-preview { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
 .db-fecha { font-size: 12px; color: var(--accent); margin-top: 8px; font-weight: 600; }
 .db-guardar { width: 100%; margin-top: 14px; }
+
+/* Conflicto de edición de la ficha (409/428). El borrador sigue en el formulario:
+   el aviso NO invalida la query, solo ofrece las dos salidas. */
+.ap-conflict {
+  margin: 10px 16px;
+  padding: 12px 14px;
+  border: 1px solid #d98324;
+  border-radius: 10px;
+  background: rgba(217, 131, 36, 0.12);
+  font-size: 13px;
+}
+.ap-conflict p { margin: 6px 0 10px; opacity: 0.9; }
+.ap-conflict-acciones { display: flex; gap: 8px; flex-wrap: wrap; }
 .fnode { width: 240px; background: #ffffff; border: 1px solid var(--border); border-radius: 10px; padding: 14px; box-shadow: 0 4px 12px rgba(0,0,0,.04), 0 1px 2px rgba(0,0,0,.02); transition: all 0.2s ease; }
 .fnode:hover { box-shadow: 0 8px 24px rgba(0,0,0,.08); border-color: #cbd5e1; }
 .fnode-generative { border-top: 4px solid var(--accent); }
@@ -178,8 +191,17 @@ button { font-family: inherit; cursor: pointer; }
 
 /* ── Media inline en la conversación ── */
 .media-img { max-width: 260px; max-height: 320px; border-radius: 10px; display: block; margin-bottom: 4px; cursor: zoom-in; }
+.media-audio { width: 240px; height: 36px; display: block; margin-bottom: 4px; }
+.media-file { display: inline-block; margin-bottom: 4px; padding: 7px 11px; border-radius: 8px; background: rgba(20,30,50,.06); font-size: 13px; font-weight: 500; text-decoration: none; color: inherit; }
+.media-file:hover { background: rgba(20,30,50,.12); }
 .media-loading, .media-error { font-size: 12px; color: var(--text-2); padding: 8px 0; }
 .media-error { color: var(--hot); }
+
+/* ── Recibos de Meta (enviado / entregado / leído / falló) ── */
+.recibo { margin-left: 4px; font-size: 11px; cursor: default; }
+.recibo-sent, .recibo-delivered { opacity: .55; }
+.recibo-read { color: var(--blue, #2f7de1); opacity: 1; }
+.recibo-falla { color: var(--hot); font-weight: 600; opacity: 1; }
 
 /* ── Toasts (feedback de acciones) ── */
 .toast-wrap { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; max-width: 340px; }
@@ -615,3 +637,8 @@ button { font-family: inherit; cursor: pointer; }
   border-top: 1px solid var(--border);
 }
 
+
+/* ── Ventana de 24 h de Meta cerrada: se ofrece la plantilla, no un error seco ── */
+.ventana-cerrada { margin: 0 12px 8px; padding: 11px 13px; border-radius: 10px; background: rgba(255,176,32,.12); border: 1px solid rgba(255,176,32,.45); font-size: 13px; line-height: 1.45; }
+.vc-texto { margin-bottom: 9px; }
+.vc-botones { display: flex; gap: 8px; }

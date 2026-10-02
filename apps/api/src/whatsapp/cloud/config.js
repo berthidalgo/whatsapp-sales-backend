@@ -1,10 +1,10 @@
 // src/whatsapp/cloud/config.js — Hidata v20 · WhatsApp Cloud API (Meta)
 //
-// Config del proveedor OFICIAL de Meta. TODO viene de env vars que se setean
-// CUANDO tengamos el número nuevo. Hasta entonces, cloudReady() = false y el
-// proveedor Cloud queda inerte (no se usa salvo que WHATSAPP_PROVIDER='cloud').
+// Config del proveedor oficial de Meta, operativo en este proyecto. El número
+// del despliegue usa el entorno; los demás canales usan sus credenciales de BD.
+// La recepción exige firma válida y el envío exige las credenciales del número.
 //
-// Env vars a setear al enchufar el número (ninguna existe todavía):
+// Variables del número del despliegue:
 //   CLOUD_PHONE_NUMBER_ID   - el Phone Number ID del WABA (NO el número en sí)
 //   CLOUD_WABA_ID           - WhatsApp Business Account ID (para gestionar templates)
 //   CLOUD_ACCESS_TOKEN      - token permanente / de System User
@@ -25,6 +25,15 @@ export function cloudConfig() {
     verifyToken:   process.env.CLOUD_VERIFY_TOKEN || null,
     graphBase:     `https://graph.facebook.com/${apiVersion}`
   }
+}
+
+// Un canal ajeno al número del deploy requiere su propio token; nunca mezcla
+// un phone_number_id del cliente con las credenciales globales de otro número.
+export function resolverCredencialesCloud(credenciales = null) {
+  const env = cloudConfig()
+  const phoneNumberId = credenciales ? credenciales.phoneNumberId : env.phoneNumberId
+  const accessToken = credenciales?.accessToken || (phoneNumberId === env.phoneNumberId ? env.accessToken : null)
+  return { ...env, phoneNumberId, accessToken }
 }
 
 /**

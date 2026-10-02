@@ -8,6 +8,10 @@
 //     base64: primero se SUBE el archivo (/media) y luego se envía por su id.
 //   - sendTemplateCloud(): plantilla pre-aprobada. ÚNICO modo permitido FUERA de la
 //     ventana de 24h (followup >24h, campañas). Requiere plantilla aprobada en Meta.
+//   - sendInteractiveCloud(): botones de respuesta, lista o botón de enlace (los arma
+//     cloud/interactivos.js). Como el texto libre, solo dentro de la ventana de 24 h.
+//   - marcarLeidoCloud(): marca el mensaje del cliente como leído (✓✓ azules) y, si se
+//     pide, muestra «escribiendo…» hasta 25 s o hasta que salga la respuesta.
 //
 // MULTITENANT (sep 2026): cada función acepta `credenciales` ({ phoneNumberId,
 // accessToken }) del canal del cliente. Sin ellas se usan las env vars CLOUD_* (el
@@ -18,7 +22,8 @@
 //
 // Contrato de retorno: { ok, sent, messageId, status, latency_ms, error, errors }.
 
-import { cloudConfig, cloudReady } from './config.js'
+import { resolverCredencialesCloud, cloudReady } from './config.js'
+import { sanearComponentes } from './plantillas.js'
 
 const TIMEOUT_MS = 10000
 const TIMEOUT_MEDIA_MS = 25000
@@ -35,12 +40,9 @@ export function destinatarioCloud(telefonoOBsuid) {
   return digitos ? { to: digitos } : null
 }
 
-/** Credenciales efectivas: las del canal si vienen completas; si no, las del entorno. */
+/** Credenciales efectivas. El token global solo sirve al mismo número configurado. */
 function resolverCredenciales(credenciales) {
-  const env = cloudConfig()
-  const phoneNumberId = credenciales?.phoneNumberId || env.phoneNumberId
-  const accessToken = credenciales?.accessToken || env.accessToken
-  return { ...env, phoneNumberId, accessToken }
+  return resolverCredencialesCloud(credenciales)
 }
 
 // ════════════════════════════════════════════════════════
@@ -116,6 +118,8 @@ export async function sendImageCloud({ telefono, base64, mimetype = 'image/png',
 // ════════════════════════════════════════════════════════
 // TEMPLATE (fuera de ventana 24h — followups/campañas)
 // components: array Meta (header/body/button params). Vacío = template sin variables.
+// Los valores de texto se limpian aquí (sanearComponentes): un salto de línea o un valor
+// vacío en una variable hace que Meta rechace el envío entero.
 // ════════════════════════════════════════════════════════
 export async function sendTemplateCloud({ telefono, templateName, languageCode = 'es', components = [], credenciales = null }) {
   const start = Date.now()
@@ -125,15 +129,59 @@ export async function sendTemplateCloud({ telefono, templateName, languageCode =
   const c = resolverCredenciales(credenciales)
   if (!cloudReady(c)) return buildErr('cloud_not_configured', start)
 
+  const componentes = sanearComponentes(components)
   const body = {
     messaging_product: 'whatsapp',
     ...dest,
     type: 'template',
     template: {
       name: templateName,
-      language: { code: languageCode },
-      ...(components.length ? { components } : {})
+      language: { code: languageCode || 'es' },
+      ...(componentes.length ? { components: componentes } : {})
     }
+  }
+  return postGraph(`${c.graphBase}/${c.phoneNumberId}/messages`, c.accessToken, body, start)
+}
+
+// ════════════════════════════════════════════════════════
+// INTERACTIVO (botones / lista / enlace) — dentro de la ventana de 24h
+// `interactive` ya viene armado y validado por cloud/interactivos.js.
+// ════════════════════════════════════════════════════════
+export async function sendInteractiveCloud({ telefono, interactive, credenciales = null }) {
+  const start = Date.now()
+  const dest = destinatarioCloud(telefono)
+  if (!dest)                              return buildErr('telefono_required', start)
+  if (!interactive || !interactive.type)  return buildErr('interactive_required', start)
+  const c = resolverCredenciales(credenciales)
+  if (!cloudReady(c))                     return buildErr('cloud_not_configured', start)
+
+  const body = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    ...dest,
+    type: 'interactive',
+    interactive
+  }
+  return postGraph(`${c.graphBase}/${c.phoneNumberId}/messages`, c.accessToken, body, start)
+}
+
+// ════════════════════════════════════════════════════════
+// LEÍDO + «ESCRIBIENDO…»
+// Es la MISMA ruta /messages con otro cuerpo. Meta responde { success: true }, sin wamid
+// (por eso `messageId` sale null aquí). Se puede marcar como leído hasta 30 días después.
+// Meta pide mostrar «escribiendo…» solo si de verdad se va a responder.
+// ════════════════════════════════════════════════════════
+export async function marcarLeidoCloud({ messageId, escribiendo = false, credenciales = null }) {
+  const start = Date.now()
+  if (!messageId) return buildErr('message_id_required', start)
+  const c = resolverCredenciales(credenciales)
+  if (!cloudReady(c)) return buildErr('cloud_not_configured', start)
+
+  const body = {
+    messaging_product: 'whatsapp',
+    status: 'read',
+    message_id: messageId,
+    ...(escribiendo ? { typing_indicator: { type: 'text' } } : {})
   }
   return postGraph(`${c.graphBase}/${c.phoneNumberId}/messages`, c.accessToken, body, start)
 }
@@ -186,4 +234,4 @@ function buildErr(code, start) {
   return { ok: false, sent: false, messageId: null, status: null, latency_ms: Date.now() - start, error: code, errors: [] }
 }
 
-export const CLOUD_SENDER_VERSION = 'v2_multitenant_imagen_bsuid'
+export const CLOUD_SENDER_VERSION = 'v3_interactivo_leido_escribiendo'

@@ -6,15 +6,20 @@
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "prisma generate && node --import ./instrument.mjs src/server.js",
+    "start": "node --import ./instrument.mjs src/server.js",
     "test": "node --test --test-isolation=none",
-    "test:offline": "node --import ./tests/helpers/offline-guard.mjs --test --test-isolation=none",
     "build": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.cjs"
+    "db:seed": "node prisma/seed.cjs",
+    "test:offline": "node --import ./tests/helpers/offline-guard.mjs --test --test-isolation=none",
+    "test:db": "node --import ./tests/helpers/offline-guard.mjs --test tests/integration/crm-postgres.mjs",
+    "db:plan": "node scripts/preparar-db-crm.js",
+    "db:prepare": "node scripts/preparar-db-crm.js --aplicar",
+    "db:verify": "node scripts/verificar-db-crm.js",
+    "db:contract": "node scripts/generar-contrato-db.js --actualizar"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
@@ -31,6 +36,6 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   }
 }

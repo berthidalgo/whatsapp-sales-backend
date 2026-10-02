@@ -22,6 +22,8 @@ test('scopeWhere: VENDOR sin vendorId no ve nada (fail-closed, vendorId=-1)', ()
   assert.equal(w.vendorId, -1)
 })
 
-test('scopeWhere: usuario nulo → where vacío (no crashea)', () => {
-  assert.deepEqual(scopeWhere(null), {})
+test('scopeWhere: usuario nulo o sin tenant nunca produce consulta sin filtro', () => {
+  assert.deepEqual(scopeWhere(null), { id: -1 })
+  assert.deepEqual(scopeWhere({ role: 'ADMIN' }), { id: -1 })
+  assert.deepEqual(scopeWhere({ role: 'VENDOR', vendorId: 7 }), { id: -1 })
 })

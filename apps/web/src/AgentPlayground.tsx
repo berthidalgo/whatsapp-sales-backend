@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from './api'
+import { api, ApiError } from './api'
 import { useToast } from './Toast'
 import type { AuthUser } from '@shared/types'
 
@@ -223,30 +223,42 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
 
   const [factSheet, setFactSheet] = useState<any>({})
   const [agente, setAgente] = useState<any>({})
-  const [baseVersion, setBaseVersion] = useState<number>(0)
+  const [baseVersion, setBaseVersion] = useState<number | null>(null)
   const [loadedCampaignId, setLoadedCampaignId] = useState<number | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const draftRevisionRef = useRef(0)
+  const selectedCampaignRef = useRef(campaignId)
+  selectedCampaignRef.current = campaignId
   const [flashFields, setFlashFields] = useState<Set<string>>(new Set())
+  // Conflicto de edición (409/428): la ficha que el servidor tiene AHORA, para que el
+  // operador decida. El borrador local NO se borra: por eso no invalidamos la query
+  // al detectar el conflicto (invalidarla sobrescribiría los inputs, que es justo lo
+  // que el operador estaba por perder).
+  const [conflicto, setConflicto] = useState<{ version: number | null; factSheet: any; agente: any } | null>(null)
   const toast = useToast()
   const qc = useQueryClient()
 
   useEffect(() => {
-    if (configQ.data && (loadedCampaignId !== campaignId || !dirty)) {
-      setBaseVersion(configQ.data.version)
-      setLoadedCampaignId(campaignId)
-      setFactSheet(configQ.data.factSheet || {})
-      setAgente(configQ.data.agente || {})
-      setDirty(false)
-    }
-  }, [configQ.data, campaignId, loadedCampaignId, dirty])
+    if (!configQ.data || configQ.data.campaignId !== campaignId) return
+    if (loadedCampaignId === campaignId && (dirty || conflicto || (baseVersion !== null && (configQ.data.version === null || configQ.data.version < baseVersion)))) return
+    draftRevisionRef.current++
+    setBaseVersion(configQ.data.version)
+    setLoadedCampaignId(campaignId)
+    setFactSheet(configQ.data.factSheet || {})
+    setAgente(configQ.data.agente || {})
+    setDirty(false)
+    setConflicto(null)
+  }, [configQ.data, campaignId, loadedCampaignId, dirty, conflicto, baseVersion])
 
-  const setFs = (key: string, val: any) => { setFactSheet((p: any) => ({ ...p, [key]: val })); setDirty(true) }
+  const setFs = (key: string, val: any) => { draftRevisionRef.current++; setFactSheet((p: any) => ({ ...p, [key]: val })); setDirty(true) }
   const setFsSub = (parent: string, key: string, val: any) => {
+    draftRevisionRef.current++
     setFactSheet((p: any) => ({ ...p, [parent]: { ...p[parent], [key]: val } }))
     setDirty(true)
   }
-  const setAg = (key: string, val: any) => { setAgente((p: any) => ({ ...p, [key]: val })); setDirty(true) }
+  const setAg = (key: string, val: any) => { draftRevisionRef.current++; setAgente((p: any) => ({ ...p, [key]: val })); setDirty(true) }
 
   const [tab, setTab] = useState<'crear' | 'configurar'>('crear')
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([
@@ -297,11 +309,13 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
       if (r.edits) {
         const edits = r.edits
         if (edits.factSheet && Object.keys(edits.factSheet).length) {
+          draftRevisionRef.current++
           setFactSheet((prev: any) => deepMerge(prev, edits.factSheet))
           Object.keys(edits.factSheet).forEach(k => flashField(`fs-${k}`))
           setDirty(true)
         }
         if (edits.agente && Object.keys(edits.agente).length) {
+          draftRevisionRef.current++
           setAgente((prev: any) => deepMerge(prev, edits.agente))
           Object.keys(edits.agente).forEach(k => flashField(`ag-${k}`))
           setDirty(true)
@@ -382,25 +396,65 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
   })
 
   // ── Guardar / Descartar ────────────────────────────────────
-  const guardar = async () => {
-    if (!campaignId) return
+  // Control optimista: se guarda con la version del GET. 409 = otro supervisor
+  // guardó entremedio; 428 = el editor está sobre una base desconocida.
+  // En ambos casos NO se recarga la ficha a la fuerza: el borrador local se queda
+  // en pantalla y se le ofrece la versión del servidor para comparar (abajo).
+  const guardar = async (versionOverride?: number) => {
+    if (!campaignId || savingRef.current || loadedCampaignId !== campaignId) return
+    savingRef.current = true
+    const savedCampaignId = campaignId
+    const savedRevision = draftRevisionRef.current
     setSaving(true)
     try {
-      await api.saveAgentConfig(campaignId, factSheet, agente, baseVersion)
-      toast('✅ Configuración guardada en el cerebro del agente', 'success')
-      setDirty(false)
-      qc.invalidateQueries({ queryKey: ['agentConfig', campaignId] })
+      const version = versionOverride ?? baseVersion
+      if (version === undefined || version === null) {
+        toast('Ficha sin version: recarga la pantalla para obtenerla', 'error')
+        return
+      }
+      const result = await api.saveAgentConfig(campaignId, factSheet, agente, version)
+      if (selectedCampaignRef.current === savedCampaignId) {
+        const hasNewEdits = draftRevisionRef.current !== savedRevision
+        setBaseVersion(current => Math.max(current ?? 0, result.version))
+        setDirty(hasNewEdits)
+        setConflicto(null)
+        toast(hasNewEdits ? 'Configuración guardada. Tus cambios nuevos siguen sin guardar.' : '✅ Configuración guardada en el cerebro del agente', 'success')
+      }
+      qc.invalidateQueries({ queryKey: ['agentConfig', savedCampaignId] })
     } catch (e) {
-      if (e instanceof Error && e.message.includes('409')) { toast('La ficha cambió. Tus cambios siguen aquí; descarta para cargar la versión nueva.', 'error'); qc.invalidateQueries({ queryKey: ['agentConfig', campaignId] }) }
-      else toast('Error al guardar', 'error')
-    } finally { setSaving(false) }
+      if (selectedCampaignRef.current !== savedCampaignId) return
+      if (e instanceof ApiError && (e.status === 428 || (e.status === 409 && typeof e.body?.version === 'number'))) {
+        // El 409 trae la ficha vigente; el 428 no. En ambos casos se pide al backend
+        // la versión buena y se conserva el borrador.
+        const body = e.body as { version?: number; factSheet?: any; agente?: any } | null
+        setConflicto({
+          version: body?.version ?? null,
+          factSheet: body?.factSheet ?? null,
+          agente: body?.agente ?? null,
+        })
+        toast(e.status === 409
+          ? 'Otro supervisor guardó entremedio. Tu borrador sigue aquí: compáralo y elige.'
+          : 'Tu editor estaba desactualizado. Tu borrador sigue aquí: recarga la versión vigente.', 'error')
+      } else toast(e instanceof ApiError ? e.message : 'Error al guardar', 'error')
+    } finally { savingRef.current = false; setSaving(false) }
   }
 
+  // Descartar el borrador y adoptar lo que hay en el servidor (incluido el conflicto).
   const descartar = () => {
-    setBaseVersion(configQ.data?.version || 0)
-    setFactSheet(configQ.data?.factSheet || {})
-    setAgente(configQ.data?.agente || {})
+    if (savingRef.current) return
+    draftRevisionRef.current++
+    if (conflicto) {
+      setBaseVersion(conflicto.version)
+      setFactSheet(conflicto.factSheet || {})
+      setAgente(conflicto.agente || {})
+    } else {
+      setBaseVersion(configQ.data?.version ?? null)
+      setFactSheet(configQ.data?.factSheet || {})
+      setAgente(configQ.data?.agente || {})
+    }
     setDirty(false)
+    setConflicto(null)
+    qc.invalidateQueries({ queryKey: ['agentConfig', campaignId] })
   }
 
   const puedeEditar = user.role === 'ADMIN' || user.role === 'SUPERVISOR'
@@ -442,19 +496,39 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
           <div className="ap-cost" title="Costo estimado de tokens en esta sesión (Soles)">
             💰 S/ {sessionCost.toFixed(4)}
           </div>
-          <select className="btn" value={campaignId ?? ''} onChange={e => setCampaignId(Number(e.target.value))}>
+          <select className="btn" disabled={saving} value={campaignId ?? ''} onChange={e => setCampaignId(Number(e.target.value))}>
             {campaignsQ.data?.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
           </select>
           {puedeEditar && (
             <>
-              <button className="btn btn-send" onClick={guardar} disabled={!dirty || saving}>
+              <button className="btn btn-send" onClick={() => void guardar()} disabled={!dirty || saving || loadedCampaignId !== campaignId}>
                 {saving ? '⏳ Guardando...' : '💾 Guardar'}
               </button>
-              {dirty && <button className="btn" onClick={descartar}>Descartar</button>}
+              {dirty && <button className="btn" onClick={descartar} disabled={saving}>Descartar</button>}
             </>
           )}
         </div>
       </div>
+
+      {/* Conflicto de edición: el borrador sigue en el formulario; el operador elige. */}
+      {conflicto && (
+        <div className="ap-conflict" role="alert">
+          <strong>⚠️ Esta ficha cambió mientras la editabas.</strong>
+          <p>Tu borrador sigue en el formulario, sin pisar nada. Elige qué guardar:</p>
+          <div className="ap-conflict-acciones">
+            <button
+              className="btn btn-send"
+              disabled={saving || conflicto.version === null}
+              onClick={() => void guardar(conflicto.version!)}
+            >
+              {saving ? '⏳ Guardando...' : '💾 Forzar mi borrador sobre la versión del servidor'}
+            </button>
+            <button className="btn" onClick={descartar} disabled={saving}>
+              Cargar la versión del servidor (descartar mi borrador)
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="ap-split">
         <div className="ap-left">
@@ -562,7 +636,7 @@ export default function AgentPlayground({ user }: { user: AuthUser }) {
                   <textarea className={fc('fs-incluye')} rows={3} value={Array.isArray(factSheet.incluye) ? factSheet.incluye.join('\n') : ''} onChange={e => setFs('incluye', e.target.value.split('\n'))} placeholder="Beneficio 1&#10;Beneficio 2..." />
                 </label>
                 <label className="ap-label">FAQ — Objeciones comunes
-                  <textarea className={fc('fs-faqs')} rows={4} value={Array.isArray(factSheet.faqs) ? factSheet.faqs.join('\n') : ''} onChange={e => setFs('faqs', e.target.value.split('\n'))} placeholder="¿Dan certificado? Sí.&#10;Pregunta y respuesta según tu política vigente." />
+                  <textarea className={fc('fs-faqs')} rows={4} value={Array.isArray(factSheet.faqs) ? factSheet.faqs.join('\n') : ''} onChange={e => setFs('faqs', e.target.value.split('\n'))} placeholder="Pregunta y respuesta según tu política vigente" />
                 </label>
               </div>
 

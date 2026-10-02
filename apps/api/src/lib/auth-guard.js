@@ -11,6 +11,12 @@ const ROLES_VE_TODO = new Set(['ADMIN', 'SUPERVISOR'])
 export async function verifyJwt(request, reply) {
   try {
     await request.jwtVerify()
+    const u = request.user
+    if (!u || typeof u.tenantId !== 'string' || !u.tenantId.trim() ||
+        !['ADMIN', 'SUPERVISOR', 'VENDOR'].includes(u.role) ||
+        !Number.isSafeInteger(u.vendorId) || u.vendorId <= 0) {
+      return reply.code(401).send({ error: 'sesión sin identidad o tenant válido' })
+    }
   } catch {
     return reply.code(401).send({ error: 'token ausente o inválido' })
   }
@@ -22,9 +28,8 @@ export async function verifyJwt(request, reply) {
 // Pura función → testeable sin red ni BD. El fallback vendorId=-1 garantiza que un
 // VENDOR sin vendorId no vea NADA (fail-closed), en vez de ver todo por accidente.
 export function scopeWhere(user) {
-  const where = {}
-  if (!user) return where
-  if (user.tenantId) where.tenantId = user.tenantId
+  if (!user || typeof user.tenantId !== 'string' || !user.tenantId.trim()) return { id: -1 }
+  const where = { tenantId: user.tenantId }
   if (!ROLES_VE_TODO.has(user.role)) where.vendorId = user.vendorId ?? -1
   return where
 }

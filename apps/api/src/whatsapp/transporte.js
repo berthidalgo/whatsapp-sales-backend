@@ -18,7 +18,8 @@
 
 import { sendToWhatsApp as enviarEvolution, sendMediaToWhatsApp as enviarImagenEvolution } from '../webhook/sender.js'
 import { sendToWhatsAppCloud, sendImageCloud, sendTemplateCloud } from './cloud/sender.js'
-import { isCloudProvider } from './cloud/config.js'
+import { isCloudProvider, cloudConfig } from './cloud/config.js'
+import { conciliarReciboPendiente } from './cloud/statuses.js'
 
 /** 'cloud' | 'evolution' para este canal. */
 export function transporteDe(canal) {
@@ -51,22 +52,58 @@ export function credencialesCloud(canal) {
  */
 export async function enviarTexto({ canal = null, telefono, texto, instancia = null }) {
   if (transporteDe(canal) === 'cloud') {
-    return sendToWhatsAppCloud({ telefono, text: texto, credenciales: credencialesCloud(canal) })
+    const credenciales = credencialesCloud(canal)
+    const resultado = await sendToWhatsAppCloud({ telefono, text: texto, credenciales })
+    return { ...resultado, provider: 'cloud', phoneNumberId: credenciales?.phoneNumberId || cloudConfig().phoneNumberId }
   }
-  return enviarEvolution({ telefono, text: texto, instanceName: instancia })
+  return { ...await enviarEvolution({ telefono, text: texto, instanceName: instancia }), provider: 'evolution' }
 }
 
 /** Envía una imagen (base64) por el transporte del canal. */
 export async function enviarImagen({ canal = null, telefono, base64, mimetype, fileName, caption = '', instancia = null }) {
   if (transporteDe(canal) === 'cloud') {
-    return sendImageCloud({ telefono, base64, mimetype, fileName, caption, credenciales: credencialesCloud(canal) })
+    const credenciales = credencialesCloud(canal)
+    const resultado = await sendImageCloud({ telefono, base64, mimetype, fileName, caption, credenciales })
+    return { ...resultado, provider: 'cloud', phoneNumberId: credenciales?.phoneNumberId || cloudConfig().phoneNumberId }
   }
   return enviarImagenEvolution({ telefono, base64, mimetype, fileName, caption, instanceName: instancia })
 }
 
+/**
+ * Campos de recibo para persistir un mensaje que YA salió.
+ *
+ * Meta devuelve su propio id (wamid) al aceptar el envío, y después manda los recibos
+ * (entregado/leído/falló) referenciando ESE id. Guardarlo en la fila es lo único que
+ * permite engancharlos luego — sin esto, los recibos llegan y no tienen a qué pegarse.
+ * Se marca 'sent' de una: el mensaje salió, aunque todavía no se sepa si llegó.
+ * Evolution no da wamid → devuelve {} y la fila queda como siempre.
+ */
+export function reciboDeEnvio(resultado, canal = null) {
+  if (!resultado?.messageId || !(resultado.provider === 'cloud' || canal?.provider === 'cloud')) return {}
+  const phoneNumberId = resultado.phoneNumberId || credencialesCloud(canal)?.phoneNumberId || null
+  return { waMessageId: resultado.messageId, status: 'sent', statusAt: new Date(), cloudPhoneNumberId: phoneNumberId }
+}
+
+// Todos los productores salientes pasan aquí: el callback puede preceder al insert.
+// Si conciliar falla temporalmente, el pendiente durable sigue disponible al barrido.
+export async function persistirMensajeSaliente(prisma, { data, resultado, canal = null, tenantId = canal?.tenantId }) {
+  const recibo = reciboDeEnvio(resultado, canal)
+  const mensaje = await prisma.message.create({ data: { ...data, ...recibo } })
+  if (recibo.waMessageId && recibo.cloudPhoneNumberId && tenantId) {
+    try {
+      await conciliarReciboPendiente({ waMessageId: recibo.waMessageId, phoneNumberId: recibo.cloudPhoneNumberId, tenantId }, prisma)
+    } catch (err) {
+      console.error('[Transporte] conciliación de recibo pendiente:', err.message)
+    }
+  }
+  return mensaje
+}
+
 /** Plantilla aprobada (solo Meta; Evolution no tiene ese concepto). */
 export async function enviarPlantilla({ canal = null, telefono, templateName, languageCode = 'es', components = [] }) {
-  return sendTemplateCloud({ telefono, templateName, languageCode, components, credenciales: credencialesCloud(canal) })
+  const credenciales = credencialesCloud(canal)
+  const resultado = await sendTemplateCloud({ telefono, templateName, languageCode, components, credenciales })
+  return { ...resultado, provider: 'cloud', phoneNumberId: credenciales?.phoneNumberId || cloudConfig().phoneNumberId }
 }
 
 export const TRANSPORTE_VERSION = 'v1_por_canal'

@@ -15,13 +15,15 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Fastify from 'fastify'
+import { receiptFixture, receiptDeps } from './helpers/cloud-receipt-fixture.mjs'
 import { parseCloudWebhook } from '../src/whatsapp/cloud/parser.js'
 import { destinatarioCloud } from '../src/whatsapp/cloud/sender.js'
 import { verifySignature } from '../src/whatsapp/cloud/webhook.js'
 import { transporteDe, credencialesCloud } from '../src/whatsapp/transporte.js'
 import { resolveIdentity } from '../src/webhook/lead-resolver.js'
 import { politicaEnvio } from '../src/motor/followupEngine.js'
-import { procesarMensajeCloud, responderNoTexto } from '../src/whatsapp/cloud/router.js'
+import { procesarMensajeCloud, procesarEcho } from '../src/whatsapp/cloud/router.js'
+import { aplicarStatus, procesarStatuses, resumirError } from '../src/whatsapp/cloud/statuses.js'
 import { registrarJsonConCuerpoCrudo } from '../src/lib/json-crudo.js'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -127,7 +129,7 @@ test('ventana 24 h: con Meta, fuera de ventana solo sale con plantilla; con Evol
 const canalHidata = { resolvedBy: 'channel', tenantId: 'hidata', provider: 'cloud', externalKey: '1111111111', estadoSuscripcion: 'trial', activo: true }
 
 function depsFalsas(extra = {}) {
-  const llamadas = { enqueue: [], turno: [], resolveLead: [], noTexto: 0, media: 0 }
+  const llamadas = { enqueue: [], turno: [], resolveLead: [], noTexto: 0, media: 0, mediaArgs: [] }
   const deps = {
     checkAndMark: () => true,
     resolveChannel: async () => canalHidata,
@@ -135,11 +137,14 @@ function depsFalsas(extra = {}) {
     resolveLead: async (a) => { llamadas.resolveLead.push(a); return { ok: true, leadId: 42, telefono: a.senderPn ? '51987654321' : 'PE.8f3a2b', isArchived: false } },
     enqueueMessage: (a) => { llamadas.enqueue.push(a); return { queued: true } },
     procesarTurno: async (leadInfo, texto) => { llamadas.turno.push({ leadInfo, texto }) },
-    manejarMedia: async ({ ev, hayTexto }) => {
-      llamadas.media++
-      return { texto: !hayTexto && ev.messageType === 'audio' ? 'texto de la nota de voz' : null, mediaAssetId: 99 }
+    // Solo el audio se convierte en texto; documento y video se guardan y se quedan
+    // callados (el marcador del timeline lo pone responderNoTexto).
+    manejarMedia: async (a) => {
+      llamadas.media++; llamadas.mediaArgs.push(a)
+      const texto = (a.ev.messageType === 'audio' && !a.hayTexto) ? 'texto de la nota de voz' : null
+      return { texto, mediaAssetId: 7, escalado: false }
     },
-    responderNoTexto: async (a) => { llamadas.noTexto++; llamadas.ultimoNoTexto = a },
+    responderNoTexto: async () => { llamadas.noTexto++ },
     ...extra
   }
   return { deps, llamadas }
@@ -202,73 +207,43 @@ test('router: una nota de voz se transcribe y entra como texto; un sticker no', 
   assert.equal(llamadas.enqueue[0].text, 'texto de la nota de voz')
   const r2 = await procesarMensajeCloud({ ...evTexto, messageId: 'wamid.9', messageType: 'sticker', text: null, mediaId: 'M2' }, deps)
   assert.equal(r2.queued, false)
+  assert.equal(llamadas.media, 1, 'un sticker no se descarga ni se guarda')
   assert.equal(llamadas.noTexto, 1)
 })
 
-test('router: un PDF sin comentario conserva la media y entra al acuse neutro', async () => {
+// El caso que se perdía: la captura de Yape casi nunca viene sola, viene con un pie
+// ("ya pagué 🙏"). Antes la condición era `!texto && mediaId` → los bytes no se bajaban
+// nunca y la foto no llegaba a la bandeja. El pie manda como texto, la imagen se guarda.
+test('router: una foto CON pie de foto se guarda igual y el pie es el texto del lead', async () => {
   const { deps, llamadas } = depsFalsas()
-  const r = await procesarMensajeCloud({ ...evTexto, messageType: 'document', text: null, mediaId: 'M-PDF' }, deps)
-  assert.equal(r.queued, false)
-  assert.equal(r.reason, 'sin_texto (document)')
-  assert.equal(llamadas.media, 1)
-  assert.equal(llamadas.ultimoNoTexto.mediaAssetId, 99)
-})
-
-test('router: una foto con comentario se guarda y el comentario entra al turno', async () => {
-  const { deps, llamadas } = depsFalsas()
-  const r = await procesarMensajeCloud({ ...evTexto, messageType: 'image', text: 'Te comparto esta foto', mediaId: 'M-IMG' }, deps)
+  const r = await procesarMensajeCloud({ ...evTexto, messageType: 'image', text: 'ya pagué 🙏', mediaId: 'M3' }, deps)
   assert.equal(r.queued, true)
-  assert.equal(llamadas.media, 1)
-  assert.equal(llamadas.enqueue[0].text, 'Te comparto esta foto')
-})
-test('acuse real: un PDF sin comentario se guarda, se vincula y recibe respuesta', async () => {
-  const creados = []
-  const enlaces = []
-  const envios = []
-  const db = {
-    message: { create: async ({ data }) => { creados.push(data); return { id: creados.length } } },
-    mediaAsset: { update: async (args) => { enlaces.push(args); return {} } },
-    leadState: { findUnique: async () => ({ currentMode: 'AUTO_CONSULTIVO' }) }
-  }
-  await responderNoTexto(
-    { ev: { messageType: 'document' }, leadInfo: { leadId: 42, telefono: '51987654321', channel: canalHidata }, mediaAssetId: 99 },
-    { prisma: db, enviarTexto: async (args) => { envios.push(args); return { ok: true } } }
-  )
-  assert.match(creados[0].texto, /el lead envió un documento/)
-  assert.deepEqual(enlaces[0], { where: { id: 99 }, data: { messageId: 1 } })
-  assert.match(envios[0].texto, /Recibí tu documento/)
-  assert.equal(creados[1].origen, 'BOT')
+  assert.equal(llamadas.media, 1, 'la imagen se baja aunque haya texto')
+  assert.equal(llamadas.mediaArgs[0].hayTexto, true, 'manejarMedia sabe que no debe describirla')
+  assert.equal(llamadas.enqueue[0].text, 'ya pagué 🙏', 'al cerebro va lo que escribió el lead')
 })
 
-test('acuse real: si falla el guardado no afirma haber conservado el documento', async () => {
-  const creados = []
-  let respuesta = ''
-  const db = {
-    message: { create: async ({ data }) => { creados.push(data); return { id: creados.length } } },
-    mediaAsset: { update: async () => { throw new Error('no debe vincularse') } },
-    leadState: { findUnique: async () => ({ currentMode: 'AUTO_CONSULTIVO' }) }
+test('router: un documento y un video dejan rastro en la bandeja (antes desaparecían)', async () => {
+  for (const messageType of ['document', 'video']) {
+    const { deps, llamadas } = depsFalsas()
+    const r = await procesarMensajeCloud({ ...evTexto, messageType, text: null, mediaId: 'M4' }, deps)
+    assert.equal(r.queued, false)
+    assert.equal(llamadas.media, 1, `${messageType} se descarga y se guarda`)
+    assert.equal(llamadas.noTexto, 1, `${messageType} deja su marcador en el timeline`)
   }
-  await responderNoTexto(
-    { ev: { messageType: 'document' }, leadInfo: { leadId: 42, telefono: '51987654321', channel: canalHidata } },
-    { prisma: db, enviarTexto: async ({ texto }) => { respuesta = texto; return { ok: true } } }
-  )
-  assert.match(creados[0].texto, /no se pudo guardar/)
-  assert.match(respuesta, /no pude guardarlo/)
-  assert.doesNotMatch(respuesta, /Recibí tu documento/)
 })
-test('acuse real: en modo humano el PDF queda registrado sin interrumpir al vendedor', async () => {
-  let envios = 0
-  const db = {
-    message: { create: async () => ({ id: 1 }) },
-    mediaAsset: { update: async () => ({}) },
-    leadState: { findUnique: async () => ({ currentMode: 'HUMAN_ACTIVE' }) }
-  }
-  await responderNoTexto(
-    { ev: { messageType: 'document' }, leadInfo: { leadId: 42, telefono: '51987654321', channel: canalHidata } },
-    { prisma: db, enviarTexto: async () => { envios++; return { ok: true } } }
-  )
-  assert.equal(envios, 0)
+
+test('router: el comprobante de pago NO va al cerebro — escala a un humano', async () => {
+  const { deps, llamadas } = depsFalsas({
+    manejarMedia: async () => ({ texto: null, mediaAssetId: 11, escalado: true })
+  })
+  const r = await procesarMensajeCloud({ ...evTexto, messageType: 'image', text: null, mediaId: 'M5' }, deps)
+  assert.equal(r.queued, false)
+  assert.equal(r.reason, 'comprobante_escalado')
+  assert.equal(llamadas.enqueue.length, 0, 'el bot no responde: manda el vendedor')
+  assert.equal(llamadas.noTexto, 0, 'el acuse lo da el camino de comprobante, no el genérico')
 })
+
 // ── Firma de Meta sobre el cuerpo crudo ─────────────────────────────────
 
 async function appDePrueba() {
@@ -309,4 +284,157 @@ test('server: el webhook de Meta exige firma sobre req.rawBody y no depende del 
   assert.match(server, /registrarJsonConCuerpoCrudo\(app\)/)
   assert.match(server, /if \(!cloudWebhookHabilitado\(\)\)/)
   assert.match(server, /verifySignature\(req\.rawBody, sig\)/)
+})
+
+// ── Recibos de Meta: enviado / entregado / leído / falló ────────────────
+// Antes se descartaban con un `continue` y la bandeja no podía saber si un mensaje
+// llegó. Con Cloud API pura eso significaba ver "enviado" mientras el lead no recibía
+// nada (fuera de ventana de 24 h, número sin WhatsApp, plantilla no aprobada).
+
+function prismaFalso() { return receiptFixture([{ waMessageId: 'wamid.X' }, { id:2, waMessageId: 'wamid.Y' }, { id:3, waMessageId: 'wamid.2' }]) }
+
+test('recibo: el error de Meta se resume con su código, sin repetir el título', () => {
+  const r = resumirError([{ code: 131047, title: 'Re-engagement message', message: 'Re-engagement message', error_data: { details: 'Fuera de la ventana de 24 horas' } }])
+  assert.equal(r.errorCode, 131047)
+  assert.equal(r.errorDetalle, 'Re-engagement message · Fuera de la ventana de 24 horas')
+  assert.deepEqual(resumirError(null), { errorCode: null, errorDetalle: null })
+})
+
+test('recibo: un "entregado" solo pisa a null o a "enviado" — nunca retrocede desde "leído"', async () => {
+  const p = prismaFalso()
+  await aplicarStatus({ tipo: 'status', messageId: 'wamid.X', status: 'delivered', timestamp: '1759100000', phoneNumberId:'phone-test' }, p, receiptDeps)
+  const { where, data } = p.updates[0]
+  assert.equal(where.waMessageId, 'wamid.X')
+  assert.equal(where.lead.tenantId, 'receipt_test')
+  assert.equal(p.messages[0].status,'delivered')
+  assert.equal(data.status, 'delivered')
+  assert.equal(data.statusAt.getTime(), 1759100000 * 1000)
+})
+
+test('recibo: un fallo siempre manda y guarda por qué', async () => {
+  const p = prismaFalso()
+  await aplicarStatus({
+    tipo: 'status', messageId: 'wamid.Y', status: 'failed', phoneNumberId:'phone-test',
+    errors: [{ code: 131026, title: 'Message undeliverable' }]
+  }, p, receiptDeps)
+  const { where, data } = p.updates[0]
+  assert.equal(where.lead.tenantId, 'receipt_test')
+  assert.equal(p.messages[1].status, 'failed')
+  assert.equal(data.errorCode, 131026)
+  assert.equal(data.errorDetalle, 'Message undeliverable')
+})
+
+test('recibo: sin wamid o con un estado que no conocemos, no se toca la base', async () => {
+  const p = prismaFalso()
+  const a = await aplicarStatus({ tipo: 'status', messageId: null, status: 'read' }, p)
+  const b = await aplicarStatus({ tipo: 'status', messageId: 'wamid.Z', status: 'deleted' }, p)
+  assert.equal(a.aplicado, false)
+  assert.equal(b.aplicado, false)
+  assert.equal(p.updates.length, 0, 'ni un UPDATE de más')
+})
+
+test('recibo: el lote solo mira los statuses y deja pasar los mensajes', async () => {
+  const p = prismaFalso()
+  const r = await procesarStatuses([
+    { tipo: 'message', messageId: 'wamid.1' },
+    { tipo: 'status', messageId: 'wamid.2', status: 'read', phoneNumberId: 'phone-test' }
+  ], p, receiptDeps)
+  assert.equal(r.aplicados, 1)
+  assert.equal(p.updates.length, 1)
+})
+
+test('parser: un recibo fallido trae el detalle del error para poder mostrarlo', () => {
+  const evs = parseCloudWebhook(envoltura({ ...meta, statuses: [{
+    id: 'wamid.9', status: 'failed', recipient_id: '51987654321', timestamp: '1759100000',
+    errors: [{ code: 131047, title: 'Re-engagement message' }]
+  }] }))
+  assert.equal(evs[0].tipo, 'status')
+  assert.equal(evs[0].status, 'failed')
+  assert.equal(evs[0].errors[0].code, 131047)
+})
+
+// ── Coexistencia: el dueño contesta desde su celular ────────────────────
+// El número vive en la app del celular Y en la nube. Meta manda copia de lo que el
+// dueño escribe desde el teléfono. Si eso se tratara como mensaje del lead, el bot le
+// respondería a su propio dueño; si se ignorara, la bandeja mostraría la pregunta del
+// cliente sin ninguna respuesta. Ni una cosa ni la otra: se guarda como VENDEDOR y el
+// bot se calla.
+
+test('parser: un eco del celular trae al CLIENTE, no al negocio', () => {
+  const evs = parseCloudWebhook({
+    object: 'whatsapp_business_account',
+    entry: [{ id: 'WABA', changes: [{ field: 'message_echoes', value: {
+      ...meta,
+      message_echoes: [{ from: '51999999999', to: '51987654321', id: 'wamid.eco1', timestamp: '1759100000', type: 'text', text: { body: 'ya te lo envío' } }]
+    } }] }]
+  })
+  assert.equal(evs.length, 1)
+  assert.equal(evs[0].tipo, 'echo')
+  assert.equal(evs[0].telefono, '51987654321', 'el lead es el destinatario')
+  assert.equal(evs[0].desde, '51999999999', 'el negocio es quien escribe')
+  assert.equal(evs[0].text, 'ya te lo envío')
+})
+
+test('parser: una foto mandada desde el celular también se reconoce', () => {
+  const [ev] = parseCloudWebhook({
+    object: 'whatsapp_business_account',
+    entry: [{ id: 'W', changes: [{ field: 'message_echoes', value: {
+      ...meta, message_echoes: [{ from: '519', to: '51987654321', id: 'wamid.eco2', type: 'image', image: { id: 'MID', caption: 'mira' } }]
+    } }] }]
+  })
+  assert.equal(ev.messageType, 'image')
+  assert.equal(ev.mediaId, 'MID')
+  assert.equal(ev.text, 'mira')
+})
+
+test('parser: un campo que Meta agregue mañana no rompe ni inventa eventos', () => {
+  const evs = parseCloudWebhook({
+    object: 'whatsapp_business_account',
+    entry: [{ id: 'W', changes: [{ field: 'campo_del_futuro', value: { ...meta, cosa: [1, 2] } }] }]
+  })
+  assert.deepEqual(evs, [])
+})
+
+function prismaEco(existente = null) {
+  const hecho = { creados: [], modos: [] }
+  return {
+    hecho,
+    message: {
+      findUnique: async () => existente,
+      create: async (a) => { hecho.creados.push(a.data); return { id: 1 } }
+    },
+    leadState: { upsert: async (a) => { hecho.modos.push(a.create.currentMode); return a.create } }
+  }
+}
+
+const evEco = { tipo: 'echo', messageId: 'wamid.eco9', telefono: '51987654321', bsuid: null, messageType: 'text', text: 'yo me encargo', phoneNumberId: '1111111111' }
+
+test('coexistencia: lo que el dueño escribe desde el celular se guarda como VENDEDOR y pausa al bot', async () => {
+  const p = prismaEco()
+  let cancelado = null
+  const { deps } = depsFalsas({ prisma: p, cancelDebounce: (id) => { cancelado = id } })
+  const r = await procesarEcho(evEco, deps)
+  assert.equal(r.guardado, true)
+  assert.equal(p.hecho.creados[0].origen, 'VENDEDOR')
+  assert.equal(p.hecho.creados[0].texto, 'yo me encargo')
+  assert.equal(p.hecho.creados[0].waMessageId, 'wamid.eco9', 'guarda el wamid para enganchar los recibos')
+  assert.equal(p.hecho.modos[0], 'HUMAN_ACTIVE', 'el bot se calla solo')
+  assert.equal(cancelado, 42, 'y se cancela el turno que tenía en cola')
+})
+
+test('coexistencia: el eco de un mensaje que mandamos nosotros por la API no se duplica', async () => {
+  const p = prismaEco({ id: 77 })   // ese wamid ya está en la base
+  const { deps } = depsFalsas({ prisma: p })
+  const r = await procesarEcho(evEco, deps)
+  assert.equal(r.guardado, false)
+  assert.equal(r.reason, 'ya_persistido')
+  assert.equal(p.hecho.creados.length, 0)
+})
+
+test('coexistencia: un eco de un número que no está en channels no crea nada', async () => {
+  const p = prismaEco()
+  const { deps } = depsFalsas({ prisma: p, resolveChannel: async () => ({ resolvedBy: 'active_tenant_fallback', tenantId: 'x' }) })
+  const r = await procesarEcho(evEco, deps)
+  assert.equal(r.reason, 'canal_desconocido')
+  assert.equal(p.hecho.creados.length, 0)
 })

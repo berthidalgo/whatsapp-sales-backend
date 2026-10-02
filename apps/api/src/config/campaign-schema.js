@@ -53,10 +53,12 @@ function textoOk(v, max) {
 }
 
 // "S/ 1,500" contiene a 1500 · "S/ 124.50" contiene a 124.5 · "S/. 139" a 139.
-function digitosIncluidos(texto, monto) { return montosMonetarios(texto).some(n => Math.abs(n - monto) < 0.001) }
+function digitosIncluidos(texto, monto) {
+  return montosMonetarios(texto).some(n => Math.abs(n - monto) < 0.001)
+}
 
 export function normalizarTrigger(texto) {
-  return String(texto || '')
+  return (typeof texto === 'string' ? texto : '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -66,7 +68,7 @@ export function normalizarTrigger(texto) {
 }
 
 export function validarTrigger(texto) {
-  if (typeof texto !== "string") return { ok: false, error: "debe ser texto", valor: "" }
+  if (typeof texto !== 'string') return { ok: false, error: 'debe ser texto', valor: '' }
   const valor = normalizarTrigger(texto)
   if (valor.length < 2) return { ok: false, error: 'trigger vacío o de 1 letra (tras normalizar)', valor }
   if (valor.length > LIMITES.trigger) return { ok: false, error: `trigger de más de ${LIMITES.trigger} caracteres`, valor }
@@ -135,7 +137,7 @@ function validarListaCadenas(valor, campo, errores, { obligatoria = false } = {}
 }
 
 function validarFactSheet(fs, errores, tenantId) {
-  if (fs === undefined) { errores.push("factSheet: requerido"); return }
+  if (fs === undefined) { errores.push('factSheet: requerido'); return }
   if (!esObjeto(fs)) { errores.push('factSheet: debe ser un objeto'); return }
   validarPrecio(fs.precio, errores)
   if (fs.ofertaHoy !== undefined && fs.ofertaHoy !== null && String(fs.ofertaHoy).trim() !== '') {
@@ -168,8 +170,8 @@ function validarFactSheet(fs, errores, tenantId) {
       if (!esObjeto(def) || !archivoPermitido(def.archivo, tenantId)) {
         errores.push(`factSheet.imagenes.${clave}: exige archivo local registrado para el tenant o dentro de su carpeta`)
       }
-      if (esObjeto(def) && def.mimetype !== undefined && !['image/png','image/jpeg','image/webp','image/gif'].includes(def.mimetype)) {
-        errores.push(`factSheet.imagenes.${clave}.mimetype: debe empezar con "image/"`)
+      if (esObjeto(def) && def.mimetype !== undefined && !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(def.mimetype)) {
+        errores.push(`factSheet.imagenes.${clave}.mimetype: tipo de imagen no permitido`)
       }
     }
   }
@@ -201,10 +203,11 @@ function validarFollowups(followups, errores) {
 export function validarCampaignConfig(config, { tenantId } = {}) {
   const errores = []
   if (!esObjeto(config)) return { ok: false, errores: ['config: debe ser un objeto'] }
+  const peligro = buscarClavePeligrosa(config)
+  if (peligro) return { ok: false, errores: [`config rechazada: clave o estructura no permitida "${peligro}"`] }
   if (config.vertical !== undefined && !VERTICALES.includes(config.vertical)) {
     errores.push(`vertical: "${config.vertical}" desconocido (usa ${VERTICALES.join('|')})`)
   }
-  try { exigirObjetoSeguro(config) } catch (e) { return { ok: false, errores: [e.message] } }
   validarAgente(config.agente, errores)
   validarFactSheet(config.factSheet, errores, tenantId)
   validarAtribucion(config.atribucion, errores)
@@ -215,34 +218,112 @@ export function validarCampaignConfig(config, { tenantId } = {}) {
 // Fusiona el config guardado con un parche parcial, POR SECCIÓN (omitir una
 // sección la conserva; para vaciarla se manda null explícito). Es lo que evita
 // el borrado accidental de la ficha desde el CRM.
-export function exigirObjetoSeguro(valor, ruta = 'config') {
-  if (Array.isArray(valor)) { valor.forEach((v,i) => exigirObjetoSeguro(v, ruta+'['+i+']')); return }
-  if (valor === null || typeof valor !== 'object') return
-  if (!esObjeto(valor)) throw new TypeError(ruta+': objeto con prototipo no permitido')
-  for (const k of Object.keys(valor)) {
-    if (['__proto__','constructor','prototype'].includes(k)) throw new TypeError(ruta+': clave prohibida '+k)
-    exigirObjetoSeguro(valor[k], ruta+'.'+k)
+export function fusionarConfig(actual, parche) {
+  exigirObjetoSeguro(actual)
+  exigirObjetoSeguro(parche)
+  const base = esObjeto(actual) ? actual : {}
+  const p = esObjeto(parche) ? parche : {}
+  const out = { ...base }
+  for (const [k, v] of Object.entries(p)) {
+    if (v === undefined) continue
+    if (v === null) delete out[k]
+    else out[k] = esObjeto(v) ? fusionarConfig(base[k], v) : v
   }
+  return out
+}
+
+export function exigirObjetoSeguro(valor) {
+  const peligro = buscarClavePeligrosa(valor)
+  if (peligro) throw new TypeError(`config rechazada: clave o estructura no permitida "${peligro}"`)
 }
 
 export function contieneBorrado(parche, actual) {
   if (parche === null) return actual !== null && actual !== undefined
   if (!esObjeto(parche)) return false
-  return Object.entries(parche).some(([k,v]) => v === null
+  return Object.entries(parche).some(([k, v]) => v === null
     ? actual?.[k] !== null && actual?.[k] !== undefined
-    : esObjeto(v) && contieneBorrado(v,actual?.[k]))
+    : esObjeto(v) && contieneBorrado(v, actual?.[k]))
 }
 
-export function fusionarConfig(actual, parche) {
-  exigirObjetoSeguro(actual); exigirObjetoSeguro(parche)
-  const base = esObjeto(actual) ? actual : {}, p = esObjeto(parche) ? parche : {}
-  const out = { ...base }
-  for (const [k,v] of Object.entries(p)) {
-    if (v === undefined) continue
-    if (v === null) delete out[k]
-    else out[k] = esObjeto(v) ? fusionarConfig(base[k],v) : v
+// ── Claves peligrosas (prototype pollution) ───────────────────────────────
+// Todo config debe ser JSON plano y sin claves de prototipo antes del merge
+// recursivo. Se aplica también a seeds y scripts, además de las rutas HTTP:
+//   1. fusionarConfig las rechaza (defensa para TODO llamador: API, seeds, scripts);
+//   2. buscarClavePeligrosa + 400 en las rutas (el operador ve el rechazo, no un
+//      guardado a medias con una clave rara).
+const CLAVES_PELIGROSAS = new Set(['__proto__', 'prototype', 'constructor'])
+
+// Recorre el objeto y devuelve la ruta de la primera clave peligrosa, o null.
+export function buscarClavePeligrosa(valor, ruta = '', profundidad = 0) {
+  if (valor === null || typeof valor !== 'object') return null
+  if (!esObjeto(valor) && !Array.isArray(valor)) return `${ruta || 'config'}: objeto con prototipo no permitido`
+  if (profundidad > 12) return `${ruta || 'config'}: demasiado anidado`
+  if (Array.isArray(valor)) {
+    for (let i = 0; i < valor.length; i++) {
+      const hit = buscarClavePeligrosa(valor[i], `${ruta}[${i}]`, profundidad + 1)
+      if (hit) return hit
+    }
+    return null
   }
-  return out
+  for (const [k, v] of Object.entries(valor)) {
+    const aqui = ruta ? `${ruta}.${k}` : k
+    if (CLAVES_PELIGROSAS.has(k)) return aqui
+    const hit = buscarClavePeligrosa(v, aqui, profundidad + 1)
+    if (hit) return hit
+  }
+  return null
 }
 
-export const CAMPAIGN_SCHEMA_VERSION = 'v2_ficha_aislada'
+// Límite de tamaño del guion (flow_steps): un operador pegando un guion enorme
+// no es un caso de uso; 50 pasos con 2 000 caracteres cada uno es holgado.
+export const LIMITES_FLOW = Object.freeze({ pasos: 50, mensaje: 2000 })
+
+// Valida `steps` (FlowStep: tipo + mensaje; followupHrs opcional > 0).
+export function validarSteps(steps) {
+  const errores = []
+  if (!Array.isArray(steps)) return { ok: false, errores: ['steps: debe ser un array'], valores: [] }
+  if (steps.length > LIMITES_FLOW.pasos) errores.push(`steps: máx ${LIMITES_FLOW.pasos} pasos`)
+  const valores = []
+  steps.forEach((s, i) => {
+    if (!esObjeto(s)) { errores.push(`steps[${i}]: debe ser un objeto`); return }
+    const tipo = String(s.tipo || 'MSG').toUpperCase()
+    if (!['MSG', 'FOLLOWUP', 'NOTIFY'].includes(tipo)) {
+      errores.push(`steps[${i}].tipo: "${s.tipo}" desconocido (usa MSG | FOLLOWUP | NOTIFY)`)
+    }
+    if (!textoOk(s.mensaje, LIMITES_FLOW.mensaje)) {
+      errores.push(`steps[${i}].mensaje: requerido, máx ${LIMITES_FLOW.mensaje}`)
+    }
+    const fh = s.followupHrs
+    if (fh !== undefined && fh !== null && (!Number.isInteger(Number(fh)) || Number(fh) <= 0)) {
+      errores.push(`steps[${i}].followupHrs: entero positivo si viene`)
+    }
+    valores.push({
+      tipo, mensaje: String(s.mensaje || '').trim(),
+      followupHrs: fh === undefined || fh === null ? null : Number(fh),
+    })
+  })
+  return { ok: errores.length === 0, errores, valores }
+}
+
+// ── Gate de ACTIVACIÓN ───────────────────────────────────────────────────
+// El borrador permite guardar la ficha incompleta (estado de negocio válido: una
+// campaña pendiente de completar), pero el paso a `activa=true` NO puede saltarse
+// el contrato: esa transición es la que pone al bot a hablar con clientes reales.
+// El gate vive en la transición y no solo en el alta — si solo se validara al crear,
+// un borrador con precio incoherente podría activarse después, y el loader mete
+// `precio.textoExacto` literal en el prompt sin re-chequeo en runtime.
+export function validarParaActivar({ config, triggerCount = 0, steps = [], tenantId }) {
+  const errores = []
+  if (!esObjeto(config)) {
+    errores.push('config: una campaña activa necesita ficha (config)')
+  } else {
+    const vc = validarCampaignConfig(config, { tenantId })
+    if (!vc.ok) errores.push(...vc.errores)
+  }
+  if (triggerCount < 1 && config?.atribucion?.esCampanaDefault !== true) errores.push('triggers: se exige al menos 1 (una campaña sin trigger nunca dispara)')
+  if (Array.isArray(steps) && steps.length) {
+    const vs = validarSteps(steps)
+    if (!vs.ok) errores.push(...vs.errores)
+  }
+  return { ok: errores.length === 0, errores }
+}

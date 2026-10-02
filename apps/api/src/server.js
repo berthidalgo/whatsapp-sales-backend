@@ -4,6 +4,8 @@
 
 import 'dotenv/config'
 import { runtime } from './config/runtime.js'
+import { conciliarRecibosPendientes } from './whatsapp/cloud/statuses.js'
+import { verificarEsquemaCRM } from './db/readiness.js'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -28,8 +30,8 @@ import { loginVendor, getVendorNames, cambiarPin } from './routes/auth.js'
 
 // ── Hito 1 (Fase Frontend): contrato v2 del Inbox + guard JWT ──
 import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 } from './api/inbox.js'
-import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2 } from './api/inbox-actions.js'
-import { listCampaignsV2, getAgentConfigV2, saveAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
+import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2, reabrirV2, previewTurnoV2 } from './api/inbox-actions.js'
+import { listCampaignsV2, getCampaignV2, createCampaignV2, getAgentConfigV2, saveAgentConfigV2, previewAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
 import { paginaInicio, paginaPrivacidad } from './api/sitio-publico.js'
 import { verifyJwt, requireAdmin, scopeWhere } from './lib/auth-guard.js'
 
@@ -55,6 +57,15 @@ const __dirname = dirname(__filename)
 
 const prisma = new PrismaClient({ log: ['error'] })
 const app = Fastify({ logger: false })
+let dbReadiness = { ready: false }
+
+// IDs are database integers. Reject malformed/oversized values before Prisma.
+app.addHook('onRoute', route => {
+  if (!route.url.startsWith('/v2/leads/:id')) return
+  const properties = { id: { type: 'integer', minimum: 1, maximum: 2147483647 } }
+  if (route.url.includes(':mediaId')) properties.mediaId = { type: 'integer', minimum: 1, maximum: 2147483647 }
+  route.schema = { ...route.schema, params: { type: 'object', required: Object.keys(properties), additionalProperties: false, properties } }
+})
 
 // Sentry: captura los errores que Fastify atrapa en los handlers de ruta (los
 // no atrapados ya los toma la SDK por los handlers globales). INERTE si no hay
@@ -129,6 +140,16 @@ app.get('/health', async () => ({
   cerebro: resumenSalud(),
   timestamp: new Date().toISOString()
 }))
+
+// A process can be alive while the CRM database is unavailable.
+app.get('/ready', async (_req, reply) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    return reply.send({ status: 'ready', database: dbReadiness })
+  } catch {
+    return reply.code(503).send({ status: 'not_ready', database: { ready: false } })
+  }
+})
 
 // ── Web pública del negocio ──────────────────────────────────
 // `/` es la web que va en el portafolio de Meta (su revisor la lee para aprobar la cuenta de
@@ -747,15 +768,26 @@ app.get('/v2/leads/:id/conversation', { preHandler: verifyJwt }, (req, reply) =>
 app.get('/v2/leads/:id/media/:mediaId', { preHandler: verifyJwt }, (req, reply) => serveMediaV2(req, reply, prisma))
 // Hito 2 — acciones de escritura (responder, tomar/devolver control, reasignar)
 app.post('/v2/leads/:id/reply',       { preHandler: verifyJwt }, (req, reply) => replyV2(req, reply, prisma))
+app.post('/v2/leads/:id/reabrir',     { preHandler: verifyJwt }, (req, reply) => reabrirV2(req, reply, prisma))
 app.post('/v2/leads/:id/mode',        { preHandler: verifyJwt }, (req, reply) => setModeV2(req, reply, prisma))
 app.post('/v2/leads/:id/assign',      { preHandler: verifyJwt }, (req, reply) => assignV2(req, reply, prisma))
 app.post('/v2/leads/:id/label',       { preHandler: verifyJwt }, (req, reply) => setLabelV2(req, reply, prisma))
 app.post('/v2/leads/:id/debrief',     { preHandler: verifyJwt }, (req, reply) => debriefV2(req, reply, prisma))
 app.post('/v2/leads/:id/debrief/save',{ preHandler: verifyJwt }, (req, reply) => saveDebriefV2(req, reply, prisma))
 app.get('/v2/campaigns',              { preHandler: verifyJwt }, (req, reply) => listCampaignsV2(req, reply, prisma))
-app.get('/v2/agent-config',             { preHandler: verifyJwt }, (req, reply) => getAgentConfigV2(req, reply, prisma))
-app.put('/v2/agent-config',             { preHandler: verifyJwt }, (req, reply) => saveAgentConfigV2(req, reply, prisma))
-app.post('/v2/flow/copilot',            { preHandler: verifyJwt }, (req, reply) => copilotV2(req, reply, prisma))
+// Alta de programas desde el CRM (borrador o activa). Solo ADMIN/SUPERVISOR —
+// el check también vive en el handler (defensa en profundidad); la ruta lo declara
+// para que el test de rutas protegidas lo vea.
+app.post('/v2/campaigns',             { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => createCampaignV2(req, reply, prisma))
+// El detalle incluye la ficha comercial y el guion del bot: se lee con el mismo rol
+// que se escribe. Un VENDOR que puede ver precios y el script del bot es una fuga
+// de datos de otro tenant cuando el CRM crece (y contradice "VENDOR solo sus leads").
+app.get('/v2/campaigns/:id',          { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => getCampaignV2(req, reply, prisma))
+app.get('/v2/agent-config',             { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => getAgentConfigV2(req, reply, prisma))
+app.put('/v2/agent-config',             { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => saveAgentConfigV2(req, reply, prisma))
+app.post('/v2/agent-config/preview',    { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => previewAgentConfigV2(req, reply, prisma))
+app.post('/v2/leads/:id/preview',       { preHandler: verifyJwt }, (req, reply) => previewTurnoV2(req, reply, prisma))
+app.post('/v2/flow/copilot',            { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => copilotV2(req, reply, prisma))
 app.post('/v2/transcribe',            { preHandler: verifyJwt }, (req, reply) => transcribeV2(req, reply))
 app.post('/v2/me/pin',                { preHandler: verifyJwt }, (req, reply) => cambiarPin(req, reply, prisma))
 
@@ -767,7 +799,17 @@ const HOST = process.env.HOST || '0.0.0.0'
 
 try {
   await prisma.$connect()
+  dbReadiness = await verificarEsquemaCRM(prisma)
   console.log('✅ PostgreSQL conectado')
+  // Los recibos quedan durables aunque el callback llegue antes del insert o haya reinicio.
+  const recuperarRecibos = () => conciliarRecibosPendientes(prisma, { limit: 100 })
+    .catch(() => console.error('[CloudStatus] recuperación de recibos pendiente; se reintentará'))
+  if (!SOLO_LECTURA) {
+    void recuperarRecibos()
+    const timerRecibos = setInterval(recuperarRecibos, 60_000)
+    timerRecibos.unref()
+    app.addHook('onClose', async () => clearInterval(timerRecibos))
+  }
   await app.listen({ port: PORT, host: HOST })
 
   // Chequeo de la cadena de proveedores del cerebro al ARRANCAR (sep 2026). Queda en
@@ -775,7 +817,7 @@ try {
   // el día que el primario fallaba (así estuvo el bot semanas, sin ningún seguro vivo).
   // No bloquea: el webhook ya atiende mientras corre.
   console.log(`[LLM] cadena del cerebro: ${describirCadena(construirCadena())}`)
-  verificarCadena()
+  if (process.env.NODE_ENV !== 'test') verificarCadena()
     .then(r => console.log(`[LLM] salud al arrancar: ${r.overall.toUpperCase()} (${r.vivos}/${r.total} vivos) · ${r.pasos.map(p => `${p.id} ${p.ok ? 'OK' : 'FALLA ' + p.error}`).join(' · ')}`))
     .catch(err => console.error('[LLM] no se pudo verificar la cadena al arrancar:', err.message))
   console.log(`
@@ -786,7 +828,7 @@ try {
 ╚════════════════════════════════════════╝
   `)
 } catch (error) {
-  console.error('❌ Error arrancando servidor:', error)
+  console.error('❌ Error arrancando servidor:', error.code || error.errorCode || 'BOOT_FAILED')
   await prisma.$disconnect()
   process.exit(1)
 }
