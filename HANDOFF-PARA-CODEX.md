@@ -65,12 +65,40 @@
 | PostgreSQL + HTTP + migraciones | `npm run test:db` | **14 / 14** |
 | Durabilidad sobre PostgreSQL | `npm run test:db:hitoa` (`RUN_POSTGRES_TESTS=1`) | **15 / 15** |
 | Recorrido completo | `npm run recorrido` | **55 / 55** |
+| **Ensayo de migración desde el esquema antiguo** | `npm run migracion:ensayo` | **35 / 35** |
 | Web: lógica | `node --test "tests/*.test.mjs"` (apps/web) | **19 / 19** |
 | Web: tipos + build | `npm run build` (apps/web) | aprobado |
 | Capturas con navegador | `npm run capturas` | 9 PNG en `docs/capturas/` |
 
 PostgreSQL local: instalación efímera, puerto no estándar, bases desechables `crm_*` creadas y
 destruidas por cada suite. **La base real no se tocó.**
+
+### El ensayo que importa antes de publicar
+
+Un plan de migración generado sobre una base vacía no dice nada sobre una base con historia.
+`npm run migracion:ensayo` hace lo contrario: levanta el esquema **anterior** (`20261001`, el que
+corre hoy en producción), lo puebla con las 19 tablas llena de datos con forma de los reales
+(vendedores, campañas con ficha, leads de dos empresas, mensajes con `wamid` y recibos de Meta,
+`lead_state` con `_pedido` dentro de los slots, compromisos, followups, `turn_trace`,
+notificaciones, media, canales, ajustes de tenant), aplica la migración y comprueba:
+
+| Comprobación | Resultado |
+| --- | --- |
+| El plan no borra ni reconvierte nada | ✓ solo `CREATE` / `ADD COLUMN` / `INDEX` / FK |
+| Ninguna tabla o columna nueva nace sin acotar por tenant | ✓ |
+| Se aplica con candado y es idempotente | ✓ 19 sentencias; **la segunda pasada escribe 0** |
+| Verificación completa del contrato | ✓ sin incidencias |
+| Filas intactas en las 19 tablas | ✓ |
+| La ficha comercial del cliente sigue idéntica | ✓ |
+| Los slots siguen idénticos, incluido `_pedido` | ✓ |
+| Los recibos de Meta no se pierden | ✓ 5/5 |
+| Ninguna relación cruza empresas después de migrar | ✓ |
+| **El cliente de Prisma viejo lee el estado igual** | ✓ |
+| La bandeja rechaza el `wamid` repetido | ✓ `P2002` |
+
+Ese penúltimo punto es la **vuelta atrás**: como la migración es aditiva, el código anterior
+sigue funcionando contra el esquema nuevo. Volver atrás es revertir el código, no restaurar
+la base. En CI es puerta obligatoria (`migracion:ensayo`).
 
 **Consumo de modelos: 0 llamadas generativas, 0 USD.** Todo se probó con mocks, PostgreSQL
 local y un proveedor de Meta ficticio en `localhost`. Las cadenas quedan sin tocar
@@ -85,19 +113,28 @@ configuración en móvil.
 
 ## 5. Checklist de publicación
 
+> Esta tanda está **probada y sin publicar**. Render despliega `main` automáticamente: revisar
+> el diff y esperar CI en verde **antes** de tocar `main`. Nada de lo de abajo se ejecuta solo.
+
 ### Antes
 
-1. [ ] **Backup de la base de producción** y anotar el punto de restauración.
-2. [ ] Confirmar que `DATABASE_URL` apunta a la base real y que `CRM_DATABASE_URL` está
+1. [ ] **Revisar el diff completo**: `git log --oneline 298b32b..HEAD` y
+       `git diff 298b32b..HEAD -- apps/api/src apps/api/prisma`. Lo que se publica son 61
+       archivos, +6526/−930, en tres commits (`853af4d`, `6990585`, `86a8229`).
+2. [ ] **CI en verde** en la rama: incluye el ensayo de migración (§4), que es la única forma
+       de saber que la base con historia aguanta el salto.
+3. [ ] **Backup de la base de producción** y anotar el punto de restauración.
+4. [ ] Confirmar que `DATABASE_URL` apunta a la base real y que `CRM_DATABASE_URL` está
        definida **solo** para el comando de migración.
-3. [ ] `npm run db:plan` (revisión offline, sin conectar) y revisar que solo hay `CREATE TABLE`,
+5. [ ] `npm run db:plan` (revisión offline, sin conectar) y revisar que solo hay `CREATE TABLE`,
        `ALTER TABLE … ADD COLUMN`, `CREATE INDEX` y claves foráneas. **Nada** de `DROP`,
        `INSERT` ni `TRUNCATE`.
-4. [ ] `CRM_DATABASE_URL=… node scripts/preparar-db-crm.js --aplicar` (aditivo, atómico, con
-       candado de concurrencia).
-5. [ ] `CRM_DATABASE_URL=… node scripts/verificar-db-crm.js --verificar` → sin incidencias,
+6. [ ] `CRM_DATABASE_URL=… node scripts/preparar-db-crm.js --aplicar` (aditivo, atómico, con
+       candado de concurrencia). Debe reportar 19 sentencias; si aplicara 0, la base ya estaba
+       al día y se puede saltar.
+7. [ ] `CRM_DATABASE_URL=… node scripts/verificar-db-crm.js --verificar` → sin incidencias,
        incluidas las comprobaciones nuevas de tenant de entrada y salida.
-6. [ ] Fijar el candidato: `git rev-parse HEAD` y anotar el commit.
+8. [ ] Fijar el candidato: `git rev-parse HEAD` y anotar el commit.
 
 ### Variables de entorno (por nombre, sin valores)
 
@@ -114,23 +151,29 @@ publica un enlace por cliente, incluir el parámetro: `https://…/?tenant=<slug
 
 ### Después
 
-7. [ ] `GET /health` → `ok` con el commit nuevo.
-8. [ ] `GET /ready` → `status: ready`, `database.schemaVersion: "20261002"`,
-       `database.models: 22` y `durabilidad` con `inbox` y `outbox`.
-9. [ ] `POST /webhook/cloud` sin firma → **401**.
-10. [ ] `GET /v2/metricas` con token ADMIN → **200**, cada métrica con `definicion` y `fuente`.
-11. [ ] Entrar por el CRM con un vendedor de cada empresa: las bandejas deben verse distintas.
-12. [ ] Enviar **un** mensaje de prueba a un número de pruebas: la entrada debe aparecer en
+9. [ ] Publicar: `git push origin codex/crm-v1-cierre` y abrir PR contra `main`. Render
+       despliega al **fusionar**, no al hacer push de la rama.
+10. [ ] `GET /health` → `ok` con el commit nuevo.
+11. [ ] `GET /ready` → `status: ready`, `database.schemaVersion: "20261002"`,
+       `database.models: 22` y `durabilidad` con `inbox` y `outbox`. Si aquí sigue
+       `20261001`, el backend no vio la base nueva: no seguir.
+12. [ ] `POST /webhook/cloud` sin firma → **401**.
+13. [ ] `GET /v2/metricas` con token ADMIN → **200**, cada métrica con `definicion` y `fuente`.
+14. [ ] Entrar por el CRM con un vendedor de cada empresa: las bandejas deben verse distintas.
+15. [ ] Enviar **un** mensaje de prueba a un número de pruebas: la entrada debe aparecer en
        `inbound_events` y el historial con su `wamid`. No enviar a clientes reales sin
        autorización explícita.
+16. [ ] A las 24 h: `inbound_events` sin filas `PENDING` Older de 2 min y `outbound_messages`
+       sin `UNCERTAIN` sin resolver. Cualquier fila que se quede ahí es una alerta.
 
 ### Rollback
 
-- **Código:** volver al commit anterior en Render. La aplicación es aditiva: el backend viejo
-  ignora las tablas nuevas (no las lee).
-- **Base:** las tablas y columnas nuevas **no afectan** al código viejo, así que la reversión
-  de datos solo es necesaria si se decide retirar la funcionalidad. Restaurar el backup solo
-  si hay que deshacer contenido escrito por el CRM nuevo.
+- **Código:** volver al commit anterior en Render. Está **probado**: el ensayo de migración
+  confirma que el cliente de Prisma viejo lee igual contra el esquema nuevo, porque la
+  migración es aditiva y el backend viejo ignora las tablas nuevas.
+- **Base:** revertir el código **no** exige restaurar la base. Las tablas y columnas nuevas
+  quedan inertes. Restaurar el backup solo si hay que deshacer contenido escrito por el CRM
+  nuevo, y solo con el punto de restauración anotado en el paso 3.
 - `/ready` es el gate: si el esquema no corresponde al código, el arranque falla con
   `CRM_SCHEMA_NOT_READY` en lugar de atender con un contrato incompatible.
 

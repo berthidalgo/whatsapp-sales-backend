@@ -98,3 +98,14 @@ jobs:
           DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
           OPENROUTER_API_KEY: ''
           MISTRAL_API_KEY: ''
+      # Ensayo de publicacion: levanta el esquema ANTERIOR (20261001, el que corre en
+      # produccion), lo puebla con historia parecida a la real, aplica la migracion
+      # aditiva y comprueba que no se pierde nada, que una segunda pasada no escribe,
+      # que el aislamiento por empresa sigue limpio y que el codigo VIEJO sigue
+      # funcionando contra el esquema NUEVO (sin esto no hay vuelta atras).
+      - run: npm run migracion:ensayo
+        env:
+          CRM_TEST_DATABASE_URL: postgresql://crm_test:crm_test@127.0.0.1:5432/postgres
+          DATABASE_URL: postgresql://offline:offline@127.0.0.1:1/offline
+          OPENROUTER_API_KEY: ''
+          MISTRAL_API_KEY: ''

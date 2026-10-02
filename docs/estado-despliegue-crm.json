@@ -5,7 +5,8 @@
     "base": "298b32b",
     "commits": [
       "853af4d feat(hito-a): entrada y salida durables, estado comercial honesto y CRM v1 utilizable",
-      "6990585 feat(crm): metricas con definicion y fuente, tenant en el login y recorrido verificable"
+      "6990585 feat(crm): metricas con definicion y fuente, tenant en el login y recorrido verificable",
+      "86a8229 docs(handoff): contrato 20261002, estado del candidato, handoff y guia actualizada"
     ],
     "desplegado": false,
     "nota": "Este es el CÓDIGO LOCAL probado. La version que corre en produccion sigue siendo 298b32b con el esquema 20261001. No se publico nada de esta rama."
@@ -26,6 +27,21 @@
     "postgresHttpMigraciones": { "pass": 14, "fail": 0, "comando": "npm run test:db (apps/api) con CRM_TEST_DATABASE_URL local" },
     "durabilidadPostgres": { "pass": 15, "fail": 0, "comando": "npm run test:db:hitoa con RUN_POSTGRES_TESTS=1" },
     "recorridoCrm": { "pass": 55, "fail": 0, "comando": "npm run recorrido (apps/api)" },
+    "ensayoMigracionDesdeEsquemaAntiguo": {
+      "pass": 35,
+      "fail": 0,
+      "comando": "npm run migracion:ensayo (apps/api)",
+      "queHace": "Levanta el esquema 20261001 (el que corre en produccion), lo puebla con las 19 tablas llenas de datos con forma de los reales, aplica la migracion aditiva y comprueba que la historia queda intacta, que una segunda pasada no escribe nada, que el aislamiento por empresa sigue limpio y que el codigo viejo sigue leyendo bien.",
+      "comprobacionesClave": [
+        "plan sin DROP/TRUNCATE/DELETE",
+        "19 sentencias aplicadas y 0 en la segunda pasada",
+        "filas intactas en las 19 tablas, ficha comercial y slots con _pedido incluidos",
+        "recibos de Meta intactos (5/5)",
+        "ninguna relacion cruza empresas",
+        "el cliente de Prisma viejo lee el estado igual -> volver atras es revertir codigo, no restaurar la base"
+      ],
+      "puertaEnCI": true
+    },
     "webLogica": { "pass": 19, "fail": 0, "comando": "node --test \"tests/*.test.mjs\" (apps/web)" },
     "webTypecheckBuild": { "resultado": "aprobado", "comando": "npm run build (apps/web)" },
     "capturasNavegador": { "resultado": "9 capturas", "ruta": "docs/capturas/", "comando": "npm run capturas (apps/api)" }
@@ -61,6 +77,8 @@
       "GET /ready -> ready, database.schemaVersion 20261002, database.models 22, durabilidad con inbox y outbox",
       "POST /webhook/cloud sin firma -> 401",
       "GET /v2/metricas con token ADMIN -> 200 con definicion y fuente en cada metrica"
-    ]
+    ],
+    "publicacionEjecutada": false,
+    "notaDeAlcance": "Esta tanda se detubo ANTES de publicar. El ensayo de migracion y la revision del diff estan hechos; el backup, la migracion contra la base real, el despliegue y la verificacion en produccion los ejecuta una persona con acceso a Render y a la base, siguiendo HANDOFF-PARA-CODEX.md seccion 5. No hay forma desde este entorno de tomar un backup de la base real ni de ordenar un despliegue."
   }
 }
