@@ -24,8 +24,15 @@ test('reopening uses the channel template and language; duplicated request sends
 })
 test('24h warning preserves draft and offers only a template owned by that tenant',async()=>{
   const r=reply()
-  await replyV2(request({texto:'draft'}),r,{lead:{findFirst:async()=>({id:1,tenantId:user.tenantId,telefono:'1'})}},{defaultChannelForTenant:async()=>channel,sendToWhatsApp:async()=>({ok:false,error:'fuera_de_ventana_24h'})})
+  // `outboundMessage` está porque la respuesta pasa por la outbox (Hito A2): la intención se
+  // escribe ANTES de llamar a Meta, y si la ventana está cerrada vuelve a PENDING sin
+  // marcar nada como enviado ni reintentarse sola.
+  const boxes=[];let actualizadas=0
+  const db={lead:{findFirst:async()=>({id:1,tenantId:user.tenantId,telefono:'1'})},outboundMessage:{create:async a=>{boxes.push(a);return {id:'b1',estado:'PENDING'}},update:async()=>{actualizadas++;return{}}}}
+  await replyV2(request({texto:'draft'}),r,db,{defaultChannelForTenant:async()=>channel,sendToWhatsApp:async()=>({ok:false,error:'fuera_de_ventana_24h'})})
   assert.equal(r.status,409);assert.equal(r.body.plantilla,'propia');assert.equal(r.body.textoPendiente,'draft')
+  assert.equal(boxes.length,1,'la intención se registró antes de enviar')
+  assert.equal(actualizadas,1,'y vuelve a la cola: nada salió, nada se marca como enviado')
   assert.equal(plantillaReapertura({...channel,credenciales:{}},user.tenantId,{CLOUD_TEMPLATE_REAPERTURA:'foreign'}),null)
 })
 test('Meta credentials never mix another number with the global token',()=>{

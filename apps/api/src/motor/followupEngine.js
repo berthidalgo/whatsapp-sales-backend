@@ -180,12 +180,123 @@ function interpolar(plantilla, { nombre, producto, curso }) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
+// ════════════════════════════════════════════════════════════════════════
+// HITO A4 — RESERVA ATÓMICA DEL FOLLOWUP (oct 2026)
+//
+// El flag `cronEjecutandose` de server.js serializa las corridas DENTRO del proceso. No
+// alcanza: dos procesos, o dos disparos que se solapan tras un reintento, leen el mismo lead
+// y mandan el mismo texto dos veces. La garantía tiene que estar en la BD.
+//
+// Aquí se reserva el trabajo ANTES de enviar, con una clave única
+// (lead_id, followup_type, último mensaje del lead, ciclo). Si otra corrida —o la misma, en
+// paralelo— intenta reservar lo mismo, el índice único la rechaza y esa sigue con el
+// siguiente lead. La reserva se completa (executed) si el envío salió, o se libera si al
+// revalidar descubrimos que el lead ya no era elegible.
+//
+// NO se confunde con `followup_queue`: esa tabla es el REGISTRO de lo ejecutado (auditoría y
+// la regla "no repetir el mismo followup tras el último mensaje del lead"). Esta reserva es
+// el candado de "nadie más está trabajando en esto ahora mismo".
+// ════════════════════════════════════════════════════════════════════════
+
+/** Clave de reserva: qué silencio se está atendiendo, para qué lead y con qué tipo. */
+function claveReserva({ leadId, tipo, ultimoLeadAt }) {
+  return `${leadId}:${tipo}:${ultimoLeadAt ? new Date(ultimoLeadAt).toISOString() : 'sin-mensaje'}`
+}
+
+/**
+ * Intenta reservar el followup. Devuelve `{reservado:true, id}` o `{reservado:false, motivo}`.
+ * El INSERT condicional (`WHERE NOT EXISTS`) hace la comprobación y la escritura en una
+ * sola sentencia atómica: no hay ventana entre "comprobaré que nadie lo tiene" y "lo tomo".
+ */
+export async function reservarFollowup(prisma, { leadId, tipo, horas = null, ahora = null, cycle = null, db = null }) {
+  const client = db || prisma
+  const ciclo = cycle || new Date().toISOString().slice(0, 13)   // hora ISO: agrupa por hora
+  try {
+    const r = await client.$executeRaw`
+      INSERT INTO followup_reservations (id, lead_id, followup_type, cycle_key, context_snapshot, created_at)
+      SELECT ${randomUUID()}::uuid, ${leadId}, ${tipo}, ${ciclo},
+             ${JSON.stringify({ horas_silencio: horas, hora_peru: ahora })}::jsonb, now()
+      WHERE NOT EXISTS (
+        SELECT 1 FROM followup_reservations
+        WHERE lead_id = ${leadId} AND followup_type = ${tipo} AND cycle_key = ${ciclo}
+      )
+    `
+    if (r === 0) return { reservado: false, motivo: 'ya_reservado_en_este_ciclo' }
+    const fila = await client.$queryRaw`
+      SELECT id FROM followup_reservations
+      WHERE lead_id = ${leadId} AND followup_type = ${tipo} AND cycle_key = ${ciclo}
+      ORDER BY created_at DESC LIMIT 1
+    `
+    return { reservado: true, id: fila?.[0]?.id || null }
+  } catch (err) {
+    // Conflicto de unicidad = otra corrida ganó la carrera entre el NOT EXISTS y el INSERT.
+    if (err?.code === 'P2002' || /unique|duplicate/i.test(String(err.message || ''))) {
+      return { reservado: false, motivo: 'carrera_otro_worker' }
+    }
+    // Sin tabla (instalación anterior al upgrade) no se bloquea el cron, pero tampoco se
+    // finge protección: se avisa y se sigue con la lógica de siempre.
+    console.error(`[Followup] reserva no disponible (${err.message}); siguiendo sin candado de BD`)
+    return { reservado: true, id: null, sinCandado: true }
+  }
+}
+
+/** Revalida antes de enviar: el mundo pudo cambiar entre la consulta y ahora. */
+export async function revalidarParaEnvio(prisma, leadId, db = null) {
+  const client = db || prisma
+  const st = await client.leadState.findUnique({ where: { leadId }, select: { currentMode: true, slotsFilled: true } })
+  if (!st) return { ok: false, motivo: 'sin_estado' }
+  if (st.currentMode !== 'AUTO_CONSULTIVO') return { ok: false, motivo: `modo_${st.currentMode}` }
+  if (st.slotsFilled && typeof st.slotsFilled === 'object' && st.slotsFilled._pedido) {
+    return { ok: false, motivo: 'pedido_registrado' }
+  }
+  const lead = await client.lead.findFirst({ where: { id: leadId }, select: { archivedAt: true } })
+  if (lead?.archivedAt) return { ok: false, motivo: 'lead_archivado' }
+  return { ok: true }
+}
+
+export async function completarReserva(prisma, id, messageId = null, db = null) {
+  if (!id) return { count: 0 }
+  const client = db || prisma
+  return client.$executeRaw`
+    UPDATE followup_reservations
+       SET executed = true, executed_at = now(), message_id = ${messageId ? String(messageId) : null},
+           result = ${'sent:' + (messageId || 'ok')}
+     WHERE id = ${id}::uuid
+  `
+}
+
+export async function marcarReservaFallida(prisma, id, motivo, db = null) {
+  if (!id) return { count: 0 }
+  const client = db || prisma
+  return client.$executeRaw`
+    UPDATE followup_reservations SET result = ${'failed:' + String(motivo || '').slice(0, 300)}
+     WHERE id = ${id}::uuid
+  `
+}
+
+/** Libera la reserva cuando la revalidación dice que ya no toca (nada se envió). */
+export async function liberarReserva(prisma, id, db = null) {
+  if (!id) return { count: 0 }
+  const client = db || prisma
+  return client.$executeRaw`DELETE FROM followup_reservations WHERE id = ${id}::uuid`
+}
+
 // ════════════════════════════════════════════════════════
 // CONSULTA — candidatos a followup
 // El SILENCIO se mide desde el último mensaje del LEAD (no del bot: así los propios
 // followups, que son mensajes BOT, no resetean el reloj). "del ciclo" = followups
 // posteriores a ese último mensaje del lead → si el lead responde, el ciclo se reinicia.
 // ════════════════════════════════════════════════════════
+// HITO A4 (oct 2026) — EL FILTRO VA EN SQL, ANTES DEL LÍMITE.
+//
+// El bug: el SELECT traía cualquier lead en silencio ≥ 2 h y el `LIMIT 15` se aplicaba
+// ANTES de decidir si el lead era elegible. Los 15 primeros filas solían ser leads viejísimos
+// (48 h, semanas) que no entran en ninguna ventana, así que el lote se llenaba de inelegibles
+// y los elegibles de verdad nunca recibían su followup. El tipo se decide AHORA en SQL y el
+// límite aplica a candidatos YA filtrados por ventana, y el segundo turno usa un techo
+// mayor porque su ventana es más estrecha (24-48 h) y, al empezar más tarde, acumulaba más.
+//
+// `horas_silencio` se devuelve ya acotado por el tipo elegido, así que el JS solo lo registra.
 const SQL_CANDIDATOS = `
   SELECT
     ls.lead_id                                                   AS "leadId",
@@ -194,13 +305,25 @@ const SQL_CANDIDATOS = `
     COALESCE(NULLIF(ls.slots_filled->>'nombre',''), NULLIF(l."nombreDetectado",'')) AS nombre,
     ls.slots_filled->>'producto'                                 AS producto,
     EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600        AS horas_silencio,
-    last_any.origen                                              AS ultimo_origen,
-    (SELECT count(*) FROM followup_queue fq
-       WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_2h'
-         AND fq.created_at > lead_msg.last_at)                   AS ya_2h,
-    (SELECT count(*) FROM followup_queue fq
-       WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_24h'
-         AND fq.created_at > lead_msg.last_at)                   AS ya_24h
+    CASE
+      WHEN EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 >= ${PISO_24H}
+       AND EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 < ${TECHO_24H}
+       AND NOT EXISTS (SELECT 1 FROM followup_queue fq
+                        WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_24h'
+                          AND fq.created_at > lead_msg.last_at)
+      THEN 'followup_24h'
+      WHEN EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 >= ${PISO_2H}
+       AND EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 < ${TECHO_2H}
+       AND NOT EXISTS (SELECT 1 FROM followup_queue fq
+                        WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_2h'
+                          AND fq.created_at > lead_msg.last_at)
+       AND NOT EXISTS (SELECT 1 FROM followup_queue fq
+                        WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_24h'
+                          AND fq.created_at > lead_msg.last_at)
+      THEN 'followup_2h'
+      ELSE NULL
+    END                                                         AS tipo,
+    last_any.origen                                              AS ultimo_origen
   FROM lead_state ls
   JOIN leads l ON l.id = ls.lead_id
   JOIN LATERAL (
@@ -222,8 +345,25 @@ const SQL_CANDIDATOS = `
     AND l.archived_at IS NULL
     AND lead_msg.last_at IS NOT NULL
     AND last_any.origen <> 'LEAD'
-    AND now() - lead_msg.last_at >= interval '${PISO_2H} hours'
-  ORDER BY lead_msg.last_at ASC
+  -- El filtro de ELEGIBILIDAD va antes del límite: sin tipo, un lead fuera de ventana
+  -- ocupa una plaza del lote y desplaza a los que sí la cumplen.
+  AND (
+    (EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 >= ${PISO_24H}
+     AND EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 < ${TECHO_24H}
+     AND NOT EXISTS (SELECT 1 FROM followup_queue fq
+                      WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_24h'
+                        AND fq.created_at > lead_msg.last_at))
+    OR
+    (EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 >= ${PISO_2H}
+     AND EXTRACT(EPOCH FROM (now() - lead_msg.last_at)) / 3600 < ${TECHO_2H}
+     AND NOT EXISTS (SELECT 1 FROM followup_queue fq
+                      WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_2h'
+                        AND fq.created_at > lead_msg.last_at)
+     AND NOT EXISTS (SELECT 1 FROM followup_queue fq
+                      WHERE fq.lead_id = ls.lead_id AND fq.followup_type = 'followup_24h'
+                        AND fq.created_at > lead_msg.last_at))
+  )
+  ORDER BY lead_msg.last_at DESC
   LIMIT ${MAX_POR_CICLO}
 `
 
@@ -253,15 +393,9 @@ export async function ejecutarFollowups() {
 
   for (const c of candidatos) {
     const horas = Number(c.horas_silencio)
-    const ya2h = Number(c.ya_2h) > 0
-    const ya24h = Number(c.ya_24h) > 0
-
-    // Decidir qué followup toca. Cada uno SOLO dentro de su ventana [piso, techo):
-    // fuera de ventana no se manda (followup tardío = absurdo + huele a bot).
-    let tipo = null
-    if (horas >= PISO_24H && horas < TECHO_24H && !ya24h) tipo = 'followup_24h'
-    else if (horas >= PISO_2H && horas < TECHO_2H && !ya2h && !ya24h) tipo = 'followup_2h'
-
+    // El tipo ya viene decidido y filtrado en SQL (ventana + no repetido). Si por lo que sea
+    // no hay tipo, el lead no es elegible: se omite y se libera la plaza para otro.
+    const tipo = c.tipo || null
     if (!tipo) { omitidos++; continue }
 
     // Sin tenant no se envía: adivinarlo es como mandarlo por otro número.
@@ -287,6 +421,36 @@ export async function ejecutarFollowups() {
     const politica = politicaEnvio(transporte, tipo, tenantId === ACTIVE_TENANT ? process.env : {}, canal)
     if (politica.accion === 'omitir') { omitidos++; continue }
 
+    // ═══ HITO A4 — RESERVA ATÓMICA ANTES DE ENVIAR ═══
+    // El cron puede solaparse (UptimeRobot reintenta, dos deployments, un retry manual) y el
+    // flag en memoria solo protege dentro del proceso. Con dos corridas simultáneas, ambas
+    // leen el mismo lead como "en silencio" y ambas envían: el cliente recibe el mismo
+    // recordatorio dos veces con segundos de diferencia (pasó real con Óscar).
+    //
+    // La reserva es un INSERT con una clave única derivada de (lead, tipo, último mensaje del
+    // lead): si la segunda corrida intenta reservar lo ya reservado, el índice la rechaza y
+    // sigue. No es una marque de memoria: es la BD, y funciona entre procesos e instancias.
+    const reservation = await reservarFollowup(prisma, {
+      leadId: c.leadId, tipo, horas, ahora: horaPeru(),
+    })
+    if (!reservation.reservado) {
+      omitidos++
+      detalle.push({ leadId: c.leadId, tipo, omitido: reservation.motivo })
+      continue
+    }
+
+    // Re-validación JUSTO antes de enviar. Entre la consulta y este punto pudo pasar: que el
+    // lead escribiera, que un humano tomara el control, que se cerrara el pedido. Enviar un
+    // followup de venta a un lead que acaba de responder, o que ya tiene a un humano encima,
+    // es exactamente el fallo que más daña la confianza. Si algo cambió, se libera la reserva.
+    const reval = await revalidarParaEnvio(prisma, c.leadId)
+    if (!reval.ok) {
+      await liberarReserva(prisma, reservation.id)
+      omitidos++
+      detalle.push({ leadId: c.leadId, tipo, omitido: `revalidacion: ${reval.motivo}` })
+      continue
+    }
+
     try {
       let r
       // Por plantilla, lo que el cliente lee es el texto APROBADO en Meta, no `texto` (el copy
@@ -306,26 +470,30 @@ export async function ejecutarFollowups() {
       } else {
         r = await enviarTexto({ canal, telefono: c.telefono, texto, instancia })
       }
-      if (!r.ok) { errores++; detalle.push({ leadId: c.leadId, tipo, error: r.error }); continue }
+      if (!r.ok) {
+        // Falló el envío: NO se marca como enviado (no lo salió). La reserva queda con su
+        // motivo; se puede reintentar en otro ciclo, pero solo si la revalidación sigue valiendo.
+        errores++
+        await marcarReservaFallida(prisma, reservation.id, r.error)
+        detalle.push({ leadId: c.leadId, tipo, error: r.error })
+        continue
+      }
 
       // Persistir el followup como mensaje BOT (queda en el historial; no afecta el
       // reloj de silencio, que se mide desde el último mensaje del LEAD).
       await persistirMensajeSaliente(prisma, { data: { leadId: c.leadId, origen: 'BOT', texto: enviado }, resultado: r, canal, tenantId: c.tenantId })
 
-      // Registrar el followup ejecutado (idempotencia por ciclo + auditoría).
-      await prisma.$executeRaw`
-        INSERT INTO followup_queue (id, lead_id, scheduled_for, context_snapshot, followup_type, executed, executed_at, result, created_at)
-        VALUES (${randomUUID()}::uuid, ${c.leadId}, now(),
-                ${JSON.stringify({ horas_silencio: Number(horas.toFixed(2)), hora_peru: horaPeru() })}::jsonb,
-                ${tipo}, ${true}, now(), ${'sent:' + (r.messageId || 'ok')}, now())`
+      // La reserva pasa a ejecutada (auditoría + idempotencia por ciclo).
+      await completarReserva(prisma, reservation.id, r.messageId)
 
       enviados++
       detalle.push({ leadId: c.leadId, tipo, horas: Number(horas.toFixed(1)) })
-      console.log(`[Followup] ✅ ${tipo} a lead ${c.leadId} (${horas.toFixed(1)}h silencio)`)
+      console.log(`[Followup] ${tipo} a lead ${c.leadId} (${horas.toFixed(1)}h silencio)`)
 
       if (enviados < candidatos.length) await sleep(PAUSA_ENTRE_MS) // cadencia humana
     } catch (err) {
       errores++
+      await marcarReservaFallida(prisma, reservation.id, err.message)
       console.error(`[Followup] Error enviando ${tipo} a lead ${c.leadId}:`, err.message)
     }
   }
@@ -397,6 +565,18 @@ export async function ejecutarRecordatoriosCompromiso() {
     }
     const politica = politicaEnvio(transporte, 'compromiso', c.tenantId === ACTIVE_TENANT ? process.env : {}, canal)
     if (politica.accion === 'omitir') continue
+
+    // Misma reserva y misma revalidación que los followups por silencio: el recordatorio de
+    // compromiso también es un envío a un cliente real y no puede duplicarse por dos corridas
+    // simultáneas del cron.
+    const reserva = await reservarFollowup(prisma, { leadId: c.leadId, tipo: 'compromiso', ahora: horaPeru(), cycle: `compromiso:${c.commitment_id}` })
+    if (!reserva.reservado) continue
+    const reval = await revalidarParaEnvio(prisma, c.leadId)
+    if (!reval.ok) {
+      await liberarReserva(prisma, reserva.id)
+      continue
+    }
+
     try {
       const porPlantilla = politica.accion === 'plantilla'
       const variables = [primerNombre(c.nombre) || 'qué tal']
@@ -407,7 +587,7 @@ export async function ejecutarRecordatoriosCompromiso() {
             languageCode: politica.idioma,
             components: [{ type: 'body', parameters: variables.map(v => ({ type: 'text', text: v })) }] })
         : await enviarTexto({ canal, telefono: c.telefono, texto, instancia })
-      if (!r.ok) { errores++; continue }
+      if (!r.ok) { errores++; await marcarReservaFallida(prisma, reserva.id, r.error); continue }
 
       // Marcar PRIMERO el recordatorio como enviado (idempotencia: si el insert del mensaje
       // falla, no reintentamos el envío en el próximo ciclo).
@@ -415,12 +595,14 @@ export async function ejecutarRecordatoriosCompromiso() {
         UPDATE commitments SET reminder_sent = true, reminder_sent_at = now(), updated_at = now()
         WHERE id = ${c.commitment_id}::uuid`
       await persistirMensajeSaliente(prisma, { data: { leadId: c.leadId, origen: 'BOT', texto: enviado }, resultado: r, canal, tenantId: c.tenantId })
+      await completarReserva(prisma, reserva.id, r.messageId)
 
       enviados++
-      console.log(`[Compromiso] ✅ recordatorio a lead ${c.leadId} (commitment ${c.commitment_id})`)
+      console.log(`[Compromiso] recordatorio a lead ${c.leadId} (commitment ${c.commitment_id})`)
       if (enviados < vencidos.length) await sleep(PAUSA_ENTRE_MS)   // cadencia humana
     } catch (err) {
       errores++
+      await marcarReservaFallida(prisma, reserva.id, err.message)
       console.error(`[Compromiso] Error enviando a lead ${c.leadId}:`, err.message)
     }
   }
@@ -511,4 +693,4 @@ export async function rescatarEscaladosHuerfanos() {
   }
 }
 
-export const FOLLOWUP_ENGINE_VERSION = 'v9_followups_por_campana'
+export const FOLLOWUP_ENGINE_VERSION = 'v10_filtro_antes_de_limit_y_reserva_atomica'

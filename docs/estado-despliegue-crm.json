@@ -1,0 +1,84 @@
+{
+  "actualizadoEn": "2026-10-02",
+  "candidatoLocal": {
+    "rama": "codex/crm-v1-cierre",
+    "base": "298b32b",
+    "commits": [
+      "853af4d feat(hito-a): entrada y salida durables, estado comercial honesto y CRM v1 utilizable",
+      "6990585 feat(crm): metricas con definicion y fuente, tenant en el login y recorrido verificable",
+      "86a8229 docs(handoff): contrato 20261002, estado del candidato, handoff y guia actualizada"
+    ],
+    "desplegado": false,
+    "nota": "Este es el CÓDIGO LOCAL probado. La version que corre en produccion sigue siendo 298b32b con el esquema 20261001. No se publico nada de esta rama."
+  },
+  "produccionSinCambios": {
+    "url": "https://whatsapp-sales-backend.onrender.com",
+    "commit": "298b32bcec8338082de8405baaa678a26fac4dcb",
+    "deployStatus": "live",
+    "health": "ok",
+    "ready": "ready",
+    "schemaVersion": "20261001",
+    "models": 19,
+    "verificadoEn": "2026-10-02T02:18:20Z",
+    "nota": "Cifras heredadas del despliegue registrado del 1-oct-2026. Este trabajo NO los ha vuelto a consultar ni los ha modificado."
+  },
+  "pruebasLocales": {
+    "backendOffline": { "pass": 636, "fail": 0, "comando": "npm run test:offline (apps/api)" },
+    "postgresHttpMigraciones": { "pass": 14, "fail": 0, "comando": "npm run test:db (apps/api) con CRM_TEST_DATABASE_URL local" },
+    "durabilidadPostgres": { "pass": 15, "fail": 0, "comando": "npm run test:db:hitoa con RUN_POSTGRES_TESTS=1" },
+    "recorridoCrm": { "pass": 55, "fail": 0, "comando": "npm run recorrido (apps/api)" },
+    "ensayoMigracionDesdeEsquemaAntiguo": {
+      "pass": 35,
+      "fail": 0,
+      "comando": "npm run migracion:ensayo (apps/api)",
+      "queHace": "Levanta el esquema 20261001 (el que corre en produccion), lo puebla con las 19 tablas llenas de datos con forma de los reales, aplica la migracion aditiva y comprueba que la historia queda intacta, que una segunda pasada no escribe nada, que el aislamiento por empresa sigue limpio y que el codigo viejo sigue leyendo bien.",
+      "comprobacionesClave": [
+        "plan sin DROP/TRUNCATE/DELETE",
+        "19 sentencias aplicadas y 0 en la segunda pasada",
+        "filas intactas en las 19 tablas, ficha comercial y slots con _pedido incluidos",
+        "recibos de Meta intactos (5/5)",
+        "ninguna relacion cruza empresas",
+        "el cliente de Prisma viejo lee el estado igual -> volver atras es revertir codigo, no restaurar la base"
+      ],
+      "puertaEnCI": true
+    },
+    "webLogica": { "pass": 19, "fail": 0, "comando": "node --test \"tests/*.test.mjs\" (apps/web)" },
+    "webTypecheckBuild": { "resultado": "aprobado", "comando": "npm run build (apps/web)" },
+    "capturasNavegador": { "resultado": "9 capturas", "ruta": "docs/capturas/", "comando": "npm run capturas (apps/api)" }
+  },
+  "consumoDeModelos": {
+    "llamadasGenerativasEnEstaTanda": 0,
+    "gastoOpenRouter": "0 USD (no se usó ninguna llamada: la validación se hizo con mocks, PostgreSQL local y un proveedor de Meta ficticio en localhost)",
+    "politicaDePruebasGenerativas": "No se ejecutó ninguna validación generativa real. Las cadenas de modelo quedan sin tocar (Luna -> Laguna -> Gemini -> Mistral directo, igual que en produccion).",
+    "healthEsPruebaDeIA": false,
+    "nota": "La lectura de /health usa salud almacenada del arranque y no demuestra una prueba nueva de IA ni de ningun proveedor."
+  },
+  "enviosAClientes": 0,
+  "mensajesRealesEnviados": 0,
+  "postgresLocal": {
+    "usadoPara": ["migraciones", "HTTP", "durabilidad", "recorrido", "capturas"],
+    "base": "instalacion local efimera, Puerto no estandar, datos de prueba",
+    "toqueLaBdReal": false,
+    "nota": "Cada suite crea y destruye su propia base (prefijo crm_*) y se niega a ejecutar si CRM_TEST_DATABASE_URL no es local. No se borro ni se resembro la base real."
+  },
+  "defectosCorregidosEnElRecorrido": [
+    "El login no declaraba tenant: la pantalla listaba siempre los vendedores del tenant por defecto del despliegue (no se podia entrar por el CRM de la segunda empresa).",
+    "La respuesta del vendedor no pasaba por la outbox: un rechazo de Meta no dejaba rastro estructurado.",
+    "El preview de la ficha era una simulacion local con los valores del formulario, presentado como si fuera lo que dira el bot.",
+    "El copiloto mostraba un 'costo' multiplicando tokens por unos precios fijos, sin que el proveedor informara ese gasto.",
+    "El filtro de la bandeja se aplicaba en el navegador sobre la pagina cargada y rotulaba 'ningun lead coincide' cuando el lead existia en otra pagina."
+  ],
+  "loQueSiguePendienteDePublicacion": {
+    "migracion": "apps/api/prisma/sql/20261002_crm_schema.sql (aditiva: inbound_events, outbound_messages, followup_reservations + 4 columnas de lead_state + turnos_ia_mes_actual en tenant_settings)",
+    "variablesNuevas": ["CLOUD_GRAPH_BASE (solo pruebas locales)", "CORS_ORIGINS (ya existia; ahora es obligatorio para el front del CRM)", "VITE_TENANT y VITE_API_URL (front)"],
+    "variablesQueNoSeTocan": ["BRAIN_PROVIDER", "BRAIN_FALLBACKS", "JWT_SECRET", "CLOUD_APP_SECRET", "DATABASE_URL", "CRON_SECRET", "WEBHOOK_SECRET"],
+    "verificarDespues": [
+      "GET /health -> ok con el commit nuevo",
+      "GET /ready -> ready, database.schemaVersion 20261002, database.models 22, durabilidad con inbox y outbox",
+      "POST /webhook/cloud sin firma -> 401",
+      "GET /v2/metricas con token ADMIN -> 200 con definicion y fuente en cada metrica"
+    ],
+    "publicacionEjecutada": false,
+    "notaDeAlcance": "Esta tanda se detubo ANTES de publicar. El ensayo de migracion y la revision del diff estan hechos; el backup, la migracion contra la base real, el despliegue y la verificacion en produccion los ejecuta una persona con acceso a Render y a la base, siguiendo HANDOFF-PARA-CODEX.md seccion 5. No hay forma desde este entorno de tomar un backup de la base real ni de ordenar un despliegue."
+  }
+}

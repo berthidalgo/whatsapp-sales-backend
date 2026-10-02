@@ -1,0 +1,101 @@
+MISIÓN PARA SPACE BUNNY: CERRAR BACKEND OPERATIVO V1 Y COMPLETAR EL CRM PARA VENDER
+
+Actúa como Staff Engineer responsable de terminar un producto utilizable. Implementa, verifica y entrega; un plan por sí solo no completa esta misión. Trabaja por hitos pequeños, conserva lo validado y continúa al frontend cuando se cumpla el cierre de backend definido abajo. No conviertas esta tarea en una refactorización interminable.
+
+1. CONTEXTO Y FUENTES OBLIGATORIAS
+
+Repositorio: berthidalgo/whatsapp-sales-backend.
+Workspace: C:\Users\HP\Documents\wsp_back.
+Snapshot al redactar este brief: rama codex/crm-ready, HEAD 298b32b.
+Stack: Node 24, Fastify, Prisma/PostgreSQL; React + TypeScript + Vite en apps/web; contratos compartidos en packages/shared.
+Es un backend para CRM multitenant. El cerebro del bot es uno de sus componentes principales. Empresas actuales: Perú Exporta, BIOAYUR e Hidata. El transporte operativo es la API oficial de Meta. No reintroduzcas Baileys ni Evolution en el recorrido activo.
+
+Lee antes de editar:
+- AGENTS.md aplicables.
+- docs/guia-backend-crm.md: arquitectura, 19 modelos y pendientes concretos.
+- docs/estado-despliegue-crm.json y docs/despliegue-crm-2026-10-01.md.
+- docs/contrato-crm.md y packages/shared/types.ts.
+- apps/api/prisma/schema.prisma y las rutas/componentes de cada tarea.
+
+Producción registrada: https://whatsapp-sales-backend.onrender.com, commit 298b32b, /health ok y /ready ready, esquema 20261001, 19 modelos. Verificación anterior: 619 tests offline, 11 PostgreSQL/HTTP y 5 de historial web aprobados; builds aprobados. Estas cifras son históricas: registra tus resultados actuales. Algunas cabeceras antiguas de docs todavía dicen “despliegue pendiente”; usa la evidencia de despliegue y revalida el estado antes de una publicación.
+
+Hay cambios/documentos locales sin commit y trabajos anteriores preservados. Inspecciona git status y worktrees. No uses reset --hard, clean, ni apliques stashes a ciegas. Usa checkpoints y una rama codex/ apropiada. No toques .env ni imprimas claves, tokens, PIN, teléfonos o conversaciones reales.
+
+2. ALCANCE Y PRINCIPIOS
+
+Meta de esta versión: atender ventas reales desde CRM, editar campañas/fichas, usar bot o humano, conservar historial y medir resultados verificables. Ya existe frontend: continúa apps/web.
+
+Datos comerciales variables deben vivir en BD y administrarse por API/CRM: precios, oferta, condiciones, identidad comercial y configuración por empresa/campaña. Campaign.config es la ficha operativa. Código conserva seguridad, validación y comportamiento; “sin hardcode comercial” no significa convertir reglas de seguridad en texto editable.
+
+No amplíes ahora a inventario, facturación, cobros automáticos, marketplace, onboarding SaaS completo o infraestructura distribuida. Conserva operación de una instancia y documenta ese límite. Añade contratos o tablas solo cuando una tarea de esta versión lo justifique.
+
+3. HITO A — CIERRE DEL BACKEND OPERATIVO
+
+A1. Recepción recuperable de Meta (prioridad alta).
+Hoy se responde 200 antes de persistir y el debounce está en memoria. Diseña la solución mínima con PostgreSQL: guardar de forma durable la entrada autenticada/ruteada antes de confirmarla, identidad estable del evento, estados de procesamiento, reintentos limitados y recuperación tras reinicio. Coordina procesamiento por lead; preserva agrupación de ráfagas y takeover humano. No des por solucionado esto con PendingCloudReceipt: esa tabla cubre recibos, no toda entrada.
+Aceptación: reinicio tras recepción no pierde el mensaje; replay no duplica historial/respuesta; fallo de BD no confirma trabajo que no quedó guardado. Aislamiento de tenant/canal intacto. Verificar con fallos simulados, sin Meta real.
+
+A2. Envío y registro recuperables (prioridad alta).
+Hoy Meta puede aceptar y fallar luego el insert del historial. Registra intención durable y resultado/identificador; recupera trabajo pendiente y separa fallos reintentables de resultado incierto.
+NO reenvíes automáticamente cuando pudo haberse aceptado: un timeout o caída tras aceptación puede duplicar el mensaje. No supongas que Meta ofrece una clave de idempotencia sin verificarlo en documentación oficial. Cuando no sea posible conciliar, conserva un estado incierto visible y una resolución controlada. No prometas exactly-once.
+Aceptación: probar antes del envío, rechazo de Meta, aceptación seguida de fallo de BD y resultado incierto. Sin marcar como enviado un rechazo ni duplicar por reintento ciego. Sent/delivered/read/failed siguen siendo distintos.
+
+A3. Estado comercial coherente (prioridad alta).
+Revisa brain-pipeline.js y handler.js: stage/slots se guardan antes del envío y sobreviven a respuestas obsoletas. Separa datos realmente aportados por el lead de avances que dependen de una acción saliente. Define cuándo se confirma cada transición; protege concurrencia/versiones y takeover. Una cancelación no debe pisar información de un turno nuevo. Pago, llamada confirmada y venta cerrada requieren evidencia/acción humana apropiada.
+Aceptación: entrada nueva, takeover y fallo de envío no dejan una confirmación comercial falsa ni pierden datos válidos del cliente.
+
+A4. Corregir consumo y defensas existentes.
+- Conservar y mostrar medios recibidos, pero comprobar humano/pausa antes de transcripción o visión automática no solicitada. Revisar también comprobantes: PAUSED debe permanecer pausado sin respuesta automática ni cambio de modo no autorizado.
+- Corregir followupEngine.js: filtrar elegibilidad antes del LIMIT para que contactos viejos no bloqueen a los elegibles; reservar trabajos atómicamente y revalidar modo/pedido/canal antes de enviar, incluso ante dos ejecuciones simultáneas. Mantener horario y reglas de Meta.
+- Revisar flags de promesas prohibidas: convertir los vetos críticos definidos en salida segura o escalamiento; no asumir que un flag bloquea. Preservar C022, llamadas, pedidos, precios y comprobantes con pruebas de regresión.
+- Distinguir turnos atendidos de consumo real IA. Una regla de cero tokens no debe presentarse como gasto de modelo. No cambiar política de cuotas ni cortar atención silenciosamente; documentar la política aplicada.
+- Eliminar la estimación de costo fija engañosa del copiloto o marcarla explícitamente como estimación no verificada. No inventar gasto real cuando el proveedor no lo informa.
+
+A5. Contrato y cierre finito.
+Revisa permisos/tenant en toda ruta nueva y conserva 400/401/403/404/409/428, medios privados, cursor opaco, recibos monotónicos y versión atómica de ficha.
+Entrega migraciones aditivas/versionadas, ensayo de upgrade y recuperación sobre PostgreSQL local; no borres ni reseedees la BD real. Actualiza contrato, tipos, readiness y documentación a lo que implementaste.
+Cuando A1–A5 pasen sus pruebas y no queden defectos críticos de ese alcance, registra “backend operativo v1 cerrado” con evidencia y continúa Hito B. No esperes resolver funcionalidades empresariales ajenas al alcance.
+
+4. HITO B — CRM V1 UTILIZABLE
+
+B1. Corregir primero los riesgos ya encontrados por lectura.
+- api.ts/App.tsx/main.tsx: 401 debe cerrar sesión visualmente, cancelar/limpiar consultas y aislar caché por usuario/tenant, también en logout/login.
+- Inbox.tsx/Conversation.tsx: borrador y estado de acciones pertenecen a un lead. Escribir para A, cambiar a B y enviar nunca debe mandar el texto de A a B. Proteger resultados tardíos y conservar borradores ante fallos.
+- AgentPlayground.tsx: conservar/confirmar borrador al cambiar campaña; asociar petición del copiloto a campaña/revisión e ignorar resultados obsoletos. No aplicar propuesta de A a B.
+Reproduce los escenarios y añade regresiones de comportamiento; no te limites a compilar.
+
+B2. Completar el recorrido principal de ventas.
+Login → Inbox paginado → conversación e historial → medios/recibos → responder → tomar/devolver control → etiquetas/reasignación → resumen de llamada. UI móvil y escritorio, estados de carga/error y acciones claras. Conectar leadsPage; decidir y documentar si búsqueda/filtros se hacen en servidor para no filtrar solo la página visible. No mostrar una lista parcial como resultado completo.
+Ventana Meta cerrada: conservar texto pendiente, ofrecer plantilla del tenant y mostrar “esperando respuesta”; no habilitar texto libre solo por enviar plantilla.
+
+B3. Configurar el bot desde CRM.
+Crear campaña borrador → editar ficha/agente en BD → validar con preview del servidor sin IA → configurar triggers/pasos → activar. Resolver versiones 409/428 sin perder borrador; distinguir conflicto de edición de confirmación de borrado, enviar force solo en el contrato correspondiente. No eliminar campos obligatorios. Reemplazar preview local ficticio por validación/simulación correctamente etiquetada. Copiloto opcional: edición manual siempre debe funcionar sin créditos IA.
+
+B4. Gestión y aprendizaje mínimos.
+Añadir vistas/acciones de compromisos y seguimientos si son necesarias para el vendedor, con API tenant/rol correspondiente; reutilizar modelos actuales. Mostrar resultados confirmados por humanos: pendiente, contactado, llamada, venta confirmada y motivo de no venta, sin confundirlos con stage inferido.
+Medir inicialmente actividad, derivaciones, errores de envío, conversaciones atendidas y ventas confirmadas. Cada métrica debe indicar su definición y fuente; si falta dato, mostrar no disponible. Aprovechar trazas existentes, sin exponer PII ni prompts sensibles por defecto. Registrar correcciones del operador para revisión posterior; no modificar automáticamente el prompt en producción ni entrenar con chats reales sin una política definida.
+Paneles avanzados, billing SaaS, catálogo de plantillas, canales y assets completos quedan en backlog si no son necesarios para este recorrido v1. Documenta qué se administra aún por scripts.
+
+5. PRUEBAS, PRESUPUESTO Y ENTREGA
+
+Primero mocks/offline y PostgreSQL local: no gastar OpenRouter para depurar lógica. No enviar WhatsApp a clientes como parte de tests. No cambiar el modelo productivo: cadena registrada Luna → Laguna → Gemini → Mistral directo.
+Si una validación generativa real resulta imprescindible y está autorizada, usar Laguna S 2.1: máximo 3 turnos y presupuesto máximo USD 0.05 para esta tanda, estimado antes de llamar y registrado después. Si no puedes controlar ese límite, mantener mocks y reportarlo. No barrer modelos ni correr el banco completo pagado. Respeta las autorizaciones concretas de pruebas/envíos y registra llamadas, tokens y costo disponible; nunca inventes saldo. La lectura de /health usa salud almacenada y no demuestra una prueba nueva de IA.
+
+Gates de cierre:
+- Tests backend y de integración PostgreSQL/HTTP/migraciones sobre el candidato actual.
+- Typecheck/build web y recorridos de navegador para sesión, cambio de lead/campaña, conflicto de ficha, historial/medios, envío fallido y reapertura.
+- Fallos/reinicios/replay para entrada y salida durables; takeover y estado comercial.
+- Dos tenants y dos vendedores: ninguna lectura, acción o caché cruza permisos.
+- Campaña creada desde CRM, ficha persistida y utilizada por el cerebro.
+- Sin datos comerciales reales nuevos incrustados en código ni secretos en Git/artefactos.
+
+Produce al finalizar:
+1) Resumen breve: qué quedó cerrado, qué ya permite vender y límites vigentes.
+2) Commits y archivos modificados; contrato/types y migraciones exactas.
+3) Comandos, resultados y evidencia de las pruebas actuales, incluidos fallos corregidos.
+4) Capturas o recorrido verificable del CRM en móvil/escritorio.
+5) Checklist de publicación, backup/rollback y variables nuevas por nombre, sin valores secretos. Distingue código local probado de versión realmente desplegada; prepara el candidato para revisión final de Codex.
+6) Backlog separado de mejoras que NO impiden operar este CRM v1.
+7) HANDOFF-PARA-CODEX.md con estos puntos y próximos pasos concretos.
+
+No declares “todo listo” por un build verde, por tablas existentes o por mocks. Entrega evidencia del recorrido completo. Si surge un bloqueo real, explica qué información falta y avanza las tareas independientes. Queremos terminar esta versión, empezar a vender y mejorar con resultados reales.

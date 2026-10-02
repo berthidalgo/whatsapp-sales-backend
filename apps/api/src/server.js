@@ -5,6 +5,8 @@
 import 'dotenv/config'
 import { runtime } from './config/runtime.js'
 import { conciliarRecibosPendientes } from './whatsapp/cloud/statuses.js'
+import { recuperarEntradas, leadsListosParaTurno, pendientesDeInbox } from './webhook/inbox.js'
+import { recuperarOutbox, resumenOutbox } from './whatsapp/outbox.js'
 import { verificarEsquemaCRM } from './db/readiness.js'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +16,9 @@ import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import * as Sentry from '@sentry/node'
 import { PrismaClient } from '@prisma/client'
-import { handleWebhook } from './webhook/handler.js'
+import { handleWebhook, procesarTurno } from './webhook/handler.js'
+import { correrTurnoDesdeBandeja } from './webhook/inbox.js'
+import { defaultChannelForTenant } from './webhook/channel-resolver.js'
 import {
   getLeads, updateLead, sendMensaje, doAccion, getReportes, getMensajes
 } from './api/leads.js'
@@ -33,6 +37,7 @@ import { listLeadsV2, leadDetailV2, conversationV2, serveMediaV2, listVendorsV2 
 import { replyV2, setModeV2, assignV2, setLabelV2, debriefV2, saveDebriefV2, reabrirV2, previewTurnoV2 } from './api/inbox-actions.js'
 import { listCampaignsV2, getCampaignV2, createCampaignV2, getAgentConfigV2, saveAgentConfigV2, previewAgentConfigV2, copilotV2, transcribeV2 } from './api/flow.js'
 import { paginaInicio, paginaPrivacidad } from './api/sitio-publico.js'
+import { metricasV2 } from './api/metrica.js'
 import { verifyJwt, requireAdmin, scopeWhere } from './lib/auth-guard.js'
 
 import { verificarCadena, resumenSalud, estadoDetallado, construirCadena, describirCadena } from './lib/llm-cadena.js'
@@ -58,6 +63,72 @@ const __dirname = dirname(__filename)
 const prisma = new PrismaClient({ log: ['error'] })
 const app = Fastify({ logger: false })
 let dbReadiness = { ready: false }
+
+/**
+ * Barrido de la bandeja de entrada (Hito A1).
+ *
+ * El webhook normal encola la ráfaga con un temporizador en memoria: si el proceso muere
+ * entre la recepción y el turno, nadie volvía a mirar esa fila. Este barrido la encuentra:
+ * claims las entradas PENDING cuya ventana de 6 s ya venció, agrupadas por lead, y corre el
+ * turno con el MISMO camino que el webhook. Es idempotente (lo ya reclamado no aparece) y
+ * acotado (un lote por vez), así que no duplica respuestas ni satura al cerebro.
+ *
+ * El claim es atómico en la BD (`FOR UPDATE SKIP LOCKED`): si el webhook está procesando ese
+ * lead en este momento, el barrido no lo toca.
+ */
+let backlogCorriendo = false
+async function runBacklogDeEntrada({ limite = 5 } = {}) {
+  if (backlogCorriendo) return { procesados: 0, motivo: 'barrido_en_curso' }
+  backlogCorriendo = true
+  let procesados = 0
+  try {
+    const leads = await leadsListosParaTurno(prisma, { limite })
+    for (const { leadId } of leads) {
+      try {
+        const r = await correrTurnoDesdeBandeja(prisma, leadId, async (texto, meta) => {
+          await procesarTurnoDesdeInbox(prisma, leadId, texto, meta)
+        })
+        if (r.procesado) {
+          procesados++
+          console.log(`[Inbox] lead ${leadId}: ráfaga recuperada del backlog (${r.entradas} entradas)`)
+        }
+      } catch (err) {
+        console.error(`[Inbox] lead ${leadId}: no se pudo procesar la ráfaga recuperada: ${err.message}`)
+      }
+    }
+  } catch (err) {
+    console.error('[Inbox] barrido falló:', err.message)
+  } finally {
+    backlogCorriendo = false
+  }
+  return { procesados }
+}
+
+/**
+ * Reconstruye el contexto del lead para procesar una ráfaga recuperada. Es lo mismo que
+ * hace el camino normal del webhook (canal + tenant + datos del lead); aquí se resuelve desde
+ * la BD porque el evento ya no viene en memoria.
+ */
+async function procesarTurnoDesdeInbox(db, leadId, texto, meta) {
+  const lead = await db.lead.findUnique({
+    where: { id: leadId },
+    select: { id: true, telefono: true, tenantId: true, vendorId: true, nombreDetectado: true },
+  })
+  if (!lead) throw new Error('lead no encontrado')
+  const canal = await defaultChannelForTenant(lead.tenantId)
+  if (!canal || canal.tenantId !== lead.tenantId) throw new Error(`sin canal de salida para ${lead.tenantId}`)
+  const vendor = lead.vendorId
+    ? await db.vendor.findUnique({ where: { id: lead.vendorId }, select: { nombre: true } })
+    : null
+  await procesarTurno({
+    leadId: lead.id,
+    telefono: lead.telefono,
+    tenantId: lead.tenantId,
+    vendorNombre: vendor?.nombre || 'asesor',
+    channel: canal,
+    vendorId: lead.vendorId,
+  }, texto, meta)
+}
 
 // IDs are database integers. Reject malformed/oversized values before Prisma.
 app.addHook('onRoute', route => {
@@ -142,10 +213,22 @@ app.get('/health', async () => ({
 }))
 
 // A process can be alive while the CRM database is unavailable.
+// `durabilidad` (Hito A): el trabajo pendiente real, no un adorno. Si hay entradas PENDING
+// (&lt; 30 s, normal por el agrupado de 6 s) no es un problema; si hay FAILED o UNCERTAIN
+// acumulados, SÍ lo es y el operador tiene que verlo sin abrir la base.
 app.get('/ready', async (_req, reply) => {
   try {
     await prisma.$queryRaw`SELECT 1`
-    return reply.send({ status: 'ready', database: dbReadiness })
+    let durabilidad = null
+    if (!SOLO_LECTURA) {
+      try {
+        const [inbox, outbox] = await Promise.all([pendientesDeInbox(prisma), resumenOutbox(prisma)])
+        durabilidad = { inbox, outbox }
+      } catch (err) {
+        console.error('[ready] no se pudo leer el estado de durabilidad:', err.message)
+      }
+    }
+    return reply.send({ status: 'ready', database: dbReadiness, durabilidad })
   } catch {
     return reply.code(503).send({ status: 'not_ready', database: { ready: false } })
   }
@@ -685,9 +768,28 @@ app.post('/webhook/cloud', async (req, reply) => {
     return reply.code(401).send('invalid signature')
   }
 
-  // Meta espera respuesta <5s o reintenta → responder ya y procesar en segundo plano.
+  // HITO A1 — LA PERSISTENCIA PRECEDE AL 200.
+  // Antes se respondía 'EVENT_RECEIVED' y el trabajo se hacía en segundo plano: si el proceso
+  // moría después del 200 y antes de persistir, el mensaje se perdía para siempre y Meta ya
+  // lo daba por recibido (no lo reintentaba). Ahora `procesarWebhookCloud` escribe la
+  // entrada en PostgreSQL ANTES de responder. Si esa escritura falla, devolvemos 500:
+  // Meta reintenta y el mensaje no se pierde. Solo después del 200 sigue el trabajo pesado
+  // (descargar media, resolver lead, correr el turno), que ya tiene su copia en la BD.
+  if (SOLO_LECTURA) {
+    reply.code(200).send('EVENT_RECEIVED')
+    return
+  }
+  try {
+    const r = await procesarWebhookCloud(req.body)
+    if (r.ok === false) {
+      console.error(`[CloudWebhook] entrada no durable (${r.error}: ${r.detalle || ''}); se devuelve 500 para que Meta reintente`)
+      return reply.code(500).send('EVENT_RETRY')
+    }
+  } catch (e) {
+    console.error('[CloudWebhook] error persistiendo:', e.message)
+    return reply.code(500).send('EVENT_RETRY')
+  }
   reply.code(200).send('EVENT_RECEIVED')
-  procesarWebhookCloud(req.body).catch(e => console.error('[CloudWebhook] error:', e.message))
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -789,6 +891,9 @@ app.post('/v2/agent-config/preview',    { preHandler: [verifyJwt, requireAdmin] 
 app.post('/v2/leads/:id/preview',       { preHandler: verifyJwt }, (req, reply) => previewTurnoV2(req, reply, prisma))
 app.post('/v2/flow/copilot',            { preHandler: [verifyJwt, requireAdmin] }, (req, reply) => copilotV2(req, reply, prisma))
 app.post('/v2/transcribe',            { preHandler: verifyJwt }, (req, reply) => transcribeV2(req, reply))
+// Métricas v1 (Hito B4): cada número con su definición y su fuente; "no disponible" cuando
+// no hay dato. El alcance es el mismo del inbox: un vendedor no ve el volumen de otro.
+app.get('/v2/metricas',                { preHandler: verifyJwt }, (req, reply) => metricasV2(req, reply, prisma))
 app.post('/v2/me/pin',                { preHandler: verifyJwt }, (req, reply) => cambiarPin(req, reply, prisma))
 
 
@@ -809,6 +914,26 @@ try {
     const timerRecibos = setInterval(recuperarRecibos, 60_000)
     timerRecibos.unref()
     app.addHook('onClose', async () => clearInterval(timerRecibos))
+
+    // ── HITO A: RECUPERACIÓN AL ARRANCAR ────────────────────────────────────
+    // Un reinicio en mitad de un turno dejaba antes un mensaje en memoria y se perdía. Ahora:
+    //   1. La ENTRADA: lo que quedó PROCESSING con un reclamo caducado vuelve a PENDING, y las
+    //      ráfagas ya vencidas se reprocesan (el agrupado sigue agrupando igual tras reiniciar).
+    //   2. La SALIDA: lo que quedó SENDING se reconcilia por wamid si Meta alcanzó a aceptar
+    //      (se crea el historial SIN reenviar) y, si no se sabe, pasa a UNCERTAIN — visible,
+    //      reenviable solo a mano. Nunca se reenvía a ciegas.
+    const recuperarTodo = async () => {
+      const [inbox, outbox] = await Promise.all([
+        recuperarEntradas(prisma).catch(e => ({ error: e.message })),
+        recuperarOutbox(prisma).catch(e => ({ error: e.message })),
+      ])
+      const backlog = await runBacklogDeEntrada()
+      console.log(`[HitoA] recuperación | entrada=${JSON.stringify(inbox)} salida=${JSON.stringify(outbox)} backlog_leads=${backlog.procesados}`)
+    }
+    void recuperarTodo()
+    const timerDurable = setInterval(recuperarTodo, 60_000)
+    timerDurable.unref()
+    app.addHook('onClose', async () => clearInterval(timerDurable))
   }
   await app.listen({ port: PORT, host: HOST })
 

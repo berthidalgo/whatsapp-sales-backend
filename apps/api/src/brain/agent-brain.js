@@ -566,11 +566,42 @@ export function partirOraciones(texto) {
   return partes
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// PROMESAS PROHIBIDAS (Hito A4, oct 2026) — el veto que bloquea, no el que avisa
+// ════════════════════════════════════════════════════════════════════════
+//
+// Estas frases prometen un resultado que la empresa NO controla (que el cliente exporte,
+// que recupere la inversión, que la plataforma devuelva el dinero). Son promesas de dinero:
+// en un ticket alto son la causa más típica de reclamo y desconfianza.
+// Que el sistema las detecte y las registre en la traza NO las detenía. Ahora la oración
+// completa se sustituye por una frase que no promete nada y devuelve el caso a un humano,
+// que es lo único honesto cuando no podemos cumplir.
+//
+// NO es una decisión de estilo: es la diferencia entre decir la verdad y decir algo que
+// después no se puede sostener. Por eso vive junto al guardrail de precios y se aplica con
+// la misma mecánica (`neutralizarOraciones`), y por eso las dos salidas posibles son
+// "frase segura" o "escalamiento", nunca "dejar pasar la frase".
+export const PROMESAS_PROHIBIDAS = [
+  /garantiz\w*/i,
+  /te devuelvo/i,
+  /devoluci[oó]n garantizada/i,
+  /vas a vender seguro/i,
+  /venta asegurada/i,
+  /recuperas la inversi[oó]n/i,
+  /se paga sola/i,
+  /lo recuperas r[aá]pido/i,
+  /te paso (?:los |los\s)?(?:compradores|clientes|contactos)\b/i,
+  /te consigo (?:los |los\s)?(?:compradores|clientes|contactos)\b/i,
+]
+export const FRASE_PROMESA_SEGURA = 'Lo que sí puedo decirte es lo que el programa trabaja y cómo te acompaña. Cualquier resultado depende de tu caso, así que no te lo prometo: lo revisamos con el equipo.'
+export const FRASE_PROMESA_ESCALADA = 'Esa te la responde mejor el equipo: no quiero prometerte algo que no depende de mí. Paso tu caso para que te confirmen los detalles por aquí.'
+
 /**
  * Cambia la PRIMERA oración que cumple `esMala` por `frase` y borra las demás que la
  * cumplan. Reemplazar solo la cifra rompe la gramática (caso real JH, jun 2026:
  * "tiene una inversión de el detalle de la inversión..."); la oración completa no.
  */
+
 export function neutralizarOraciones(mensaje, esMala, frase) {
   let puesta = false
   const out = partirOraciones(String(mensaje || ''))
@@ -676,15 +707,26 @@ function validarSalida(parsed, fs, nombreConocido = null, yaSaludo = false, vert
     for (const p of preciosMalos) flags.push(`precio_no_coincide_factsheet:${p}`)
   }
 
-  // ── Guardrail 2: promesas prohibidas ──
-  const promesasProhibidas = [
-    /garantiz/i,
-    /te devuelvo/i, /devoluci[oó]n garantizada/i,
-    /vas a vender seguro/i, /venta asegurada/i
-  ]
-  for (const patron of promesasProhibidas) {
-    if (patron.test(mensaje)) {
-      flags.push(`promesa_prohibida:${patron.source}`)
+  // ── Guardrail 2: promesas prohibidas → SALIDA SEGURA, no solo un flag ──
+  //
+  // Lo que había: un `flags.push` y nada más. Es decir, el bot decía "te garantizo que
+  // exportarás" y el sistema solo lo anotaba en la traza: el cliente leía la promesa igual.
+  // Un flag no bloquea; describe. Por eso ahora la frase se neutraliza antes de salir, con
+  // el mismo criterio que los precios: se sustituye la ORACIÓN completa (no un fragmento,
+  // que dejaría un texto Frankenstein) por una frase cerrada que no promete nada.
+  //
+  // "Convierte el veto crítico en salida segura o escalamiento": aquí es salida segura. Si
+  // el mensaje entero era promesa (quedaría vacío al neutralizar), se degrada a una
+  // respuesta que devuelve el caso a un humano — que es lo que corresponde cuando no
+  // podemos decir la verdad de otra forma.
+  const patronesPromesa = PROMESAS_PROHIBIDAS
+  if (patronesPromesa.some(p => p.test(mensaje))) {
+    const conPromesa = o => patronesPromesa.some(p => p.test(o))
+    mensaje = neutralizarOraciones(mensaje, conPromesa, FRASE_PROMESA_SEGURA)
+    flags.push('promesa_prohibida_neutralizada')
+    if (!mensaje.trim()) {
+      mensaje = FRASE_PROMESA_ESCALADA
+      flags.push('promesa_prohibida_escalada')
     }
   }
 

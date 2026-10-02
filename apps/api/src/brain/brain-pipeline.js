@@ -122,8 +122,15 @@ const HUMAN_ACTIVE_RESUME_HORAS = Number(process.env.HUMAN_ACTIVE_RESUME_HORAS ?
 // NO corta el servicio al superar la cuota, a propósito: un pico legítimo de campaña
 // dejaría al cliente sin bot en su mejor día. Se mide y se avisa en el log; el corte
 // es una decisión administrativa (estadoSuscripcion, ver channel-resolver).
+//
+// HITO A4 (oct 2026) — LA MÉTRICA DE AHORRO, SEPARADA. `contabilizarTurno` cuenta turnos
+// ATENDIDOS: incluye los que se resolvieron por regla determinista (vulnerabilidad grave,
+// llamada solicitada, pedido completo) sin llamar a ningún modelo. Eso es correcto para
+// la cuota y NO se cambia (sigue contando turnos, la atención nunca se corta). Pero
+// presentarlo como "gasto de IA" era engañoso: son cero tokens. Por eso el turno que sí
+// consumió proveedor se cuenta aparte en `turnosIaMesActual`, y `usaModelo` decide cuál.
 // ─────────────────────────────────────────────────────────────────────────
-async function contabilizarTurno(tenantId) {
+async function contabilizarTurno(tenantId, usaModelo = true) {
   if (!tenantId) return
 
   const t = await prisma.tenantSettings.findUnique({
@@ -154,8 +161,15 @@ async function contabilizarTurno(tenantId) {
   await prisma.tenantSettings.update({
     where: { tenantId },
     data: mesVencido
-      ? { turnosConsumidosMesActual: 1, mesActualInicio: new Date() }
-      : { turnosConsumidosMesActual: { increment: 1 } }
+      ? {
+          turnosConsumidosMesActual: 1,
+          turnosIaMesActual: usaModelo ? 1 : 0,
+          mesActualInicio: new Date(),
+        }
+      : {
+          turnosConsumidosMesActual: { increment: 1 },
+          ...(usaModelo ? { turnosIaMesActual: { increment: 1 } } : {}),
+        }
   })
 
   const consumidos = mesVencido ? 1 : (t.turnosConsumidosMesActual || 0) + 1
@@ -165,6 +179,164 @@ async function contabilizarTurno(tenantId) {
   if (incluidos > 0 && consumidos > incluidos && consumidos % 100 === 0) {
     console.warn(`[Quota] ⚠️ tenant ${tenantId} va en ${consumidos} turnos y su plan incluye ${incluidos} — revisar facturación`)
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// HITO A3 — QUÉ ES HECHO Y QUÉ ES PROMESA (oct 2026)
+//
+// Un turno del bot mezclaba dos cosas muy distintas:
+//   1. HECHOS: lo que el lead dijo. "Me llamo Rosa", "vivo en Surco", "quiero 3 packs",
+//      "el jueves a las 10". Son datos de la conversación: valen aunque nadie los lea.
+//   2. PROMESAS / AVANCES: lo que el bot hace o promete hacer. "Ya te confirmo la
+//      llamada", "registro tu pedido", "paso tu caso al equipo". Solo tienen sentido si
+//      el cliente RECIBE ese mensaje.
+//
+// Antes se guardaban juntos y en el mismo instante, ANTES de enviar. Resultado: una
+// respuesta descartada por obsoleta, o un envío que Meta rechazó, dejaban el lead marcado
+// como "pedido cerrado" o "escalado a humano" sin que el cliente hubiera visto nada. Una
+// venta fantasma en el embudo y un vendedor que persigue un lead que nadie atendió.
+//
+// AHORA: los hechos se guardan siempre; los avances viven en `turnoPendiente` y se
+// confirman con `confirmarTurno` solo si Meta aceptó el envío (llama el handler). Un
+// descarte (respuesta obsoleta, takeover humano, envío rechazado) llama `descartarTurno`,
+// que limpia SOLO su propio turnoId: nunca pisa la información de un turno más nuevo.
+//
+// CONCURRENCIA: `stateVersion` incrementa en cada escritura de estado, y tanto confirmar
+// como descartar exigen que el turnoId siga siendo el vigente. Un turno lento que
+// termina después de que otro ya empezó no puede escribir su avance.
+// ════════════════════════════════════════════════════════════════════════
+
+// Claves internas (prefijo _) que representan estado del BOT, nunca algo que dijo el lead:
+// el resumen del closer, el pedido reconocido y el canal de contacto preferido.
+const CLAVES_DEL_BOT = new Set(['_cierre', '_pedido', '_canal_contacto'])
+
+/** Nombre que dijo el lead (o null). */
+export function nombreSlotDe(slots) {
+  const n = slots?.nombre
+  return typeof n === 'string' && n.trim() ? n.trim() : null
+}
+
+/**
+ * Parte los slots fusionados en "lo que dijo el lead" y "lo que administra el bot".
+ * Un dato es del lead si NO es una clave interna. Lo demás (nombre incluido) es un hecho.
+ */
+export function slotsAportadosPorLead(slotsFusionados) {
+  const out = {}
+  for (const [k, v] of Object.entries(slotsFusionados || {})) {
+    if (CLAVES_DEL_BOT.has(k)) continue
+    out[k] = v
+  }
+  return out
+}
+
+/**
+ * Fusiona los datos del lead sobre lo ya guardado, preservando las claves internas que el
+ * bot manage (cierre acumulado, pedido ya reconocido). No pisa lo que ya está confirmado.
+ */
+export function fusionarSlotsPersistidos(anteriores, delLead) {
+  const slots = { ...(anteriores || {}) }
+  for (const [k, v] of Object.entries(delLead || {})) slots[k] = v
+  return slots
+}
+
+/**
+ * Confirma el avance de un turno DESPUÉS de que Meta aceptó el envío. Verificada por
+ * turnoId dentro del propio predicado del UPDATE: si otro turno ya empezó, esta escritura
+ * no toca nada (no hay carrera entre leer y escribir).
+ *
+ * Aquí es donde el avance se vuelve real: stage, pedido, cierre, aviso al vendedor y
+ * compromiso fechado. Solo se llega si el cliente recibió el mensaje.
+ *
+ * @returns {{ confirmado: boolean, motivo?: string }}
+ */
+export async function confirmarTurno(prisma, leadId, turnoId, { tenantId = null } = {}) {
+  const st = await prisma.leadState.findUnique({
+    where: { leadId },
+    select: { turnoId: true, turnoPendiente: true, currentStage: true, slotsFilled: true },
+  })
+  if (!st) return { confirmado: false, motivo: 'sin_estado' }
+  const pend = st.turnoPendiente
+  if (!pend) return { confirmado: false, motivo: 'sin_turno_pendiente' }
+  // El turnoId debe seguir siendo el vigente: si no, otro turno ya empezó y este es viejo.
+  if (pend.turnoId !== turnoId || st.turnoId !== turnoId) {
+    return { confirmado: false, motivo: 'turno_superado' }
+  }
+
+  const slots = { ...(st.slotsFilled || {}) }
+  const nuevos = pend.slots && typeof pend.slots === 'object' ? pend.slots : {}
+  for (const [k, v] of Object.entries(nuevos)) slots[k] = v
+  const stagePropuesto = pend.stage || st.currentStage
+
+  const escrito = await prisma.leadState.updateMany({
+    where: { leadId, turnoId },
+    data: {
+      currentStage: stageRank(stagePropuesto) >= stageRank(st.currentStage) ? stagePropuesto : st.currentStage,
+      slotsFilled: slots,
+      turnoPendiente: null,
+      stateVersion: { increment: 1 },
+    },
+  })
+  // Si otro turno escribió entre la lectura y aquí, el count es 0: este turno ya no manda
+  // y NO disparamos efectos (aviso ni compromiso) sobre un estado que cambió.
+  if (escrito.count === 0) return { confirmado: false, motivo: 'turno_superado' }
+
+  // Efectos que solo existen si el cliente recibió el mensaje.
+  if (pend.aviso) {
+    notificarEscalamiento({
+      leadId, telefono: pend.aviso.telefono,
+      nombre: pend.nombreSlot || null,
+      slots: pend.slots || {},
+      vendorId: pend.aviso.vendorId,
+      motivo: pend.motivoEscalamiento || 'El asistente derivó este lead a un humano',
+      ultimoMensajeLead: pend.aviso.mensajeLead,
+      respuestaBot: pend.aviso.respuestaBot,
+      stage: stagePropuesto,
+      dataExtra: pend.comoCerrarlo ? { comoCerrarlo: pend.comoCerrarlo } : null,
+      nombrePrograma: pend.aviso.nombrePrograma || '',
+      verticalId: pend.aviso.verticalId,
+      tenantId,
+    }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
+  }
+  if (pend.compromiso?.fecha_iso) {
+    persistirCompromiso(leadId, pend.compromiso)
+      .catch(err => console.error(`[BrainPipeline] compromiso lead ${leadId}:`, err.message))
+  }
+  return { confirmado: true, stage: stagePropuesto }
+}
+
+/**
+ * Descarta el avance de un turno (respuesta obsoleta, takeover, envío rechazado, error).
+ * Los HECHOS que el lead aportó NO se tocan: ya están en slotsFilled y siguen siendo
+ * ciertos. Solo se limpia lo que dependía de que el cliente recibiera el mensaje.
+ */
+export async function descartarTurno(prisma, leadId, turnoId) {
+  const st = await prisma.leadState.findUnique({ where: { leadId }, select: { turnoId: true } })
+  if (!st || st.turnoId !== turnoId) return { descartado: false, motivo: 'turno_superado' }
+  await prisma.leadState.updateMany({
+    where: { leadId, turnoId },
+    data: { turnoPendiente: null, stateVersion: { increment: 1 } },
+  })
+  return { descartado: true }
+}
+
+/**
+ * Lo que el pipeline devuelve al handler para cerrar el turno: el leadId, el turnoId, el
+ * texto que se-va-a-enviar y el stage propuesto. El handler lo usa para confirmar o
+ * descartar según el resultado del envío, sin releer el estado (evita la carrera entre
+ * leer y escribir: la confirmación vuelve a verificar turnoId y versión dentro del WHERE).
+ */
+export function turnoParaConfirmar({ leadId, turnoId, texto, stage, slots, escalado }) {
+  return { leadId, turnoId, texto, stage, slots, escalado }
+}
+
+// Hito A4: ¿este turno realmente llamó a un proveedor de IA?
+// Las reglas deterministas (vulnerability, llamada, pedido, evidencia) devuelven
+// `audit.proveedor='regla'` con tokens 0 y cost_usd 0: no costaron nada. Solo los turnos
+// con proveedor real se cuentan como consumo de IA. Se decide por el campo que ya existe
+// en la respuesta del cerebro, sin inventar una métrica nueva.
+export function consumioModelo(brainResult) {
+  const p = brainResult?.audit?.proveedor
+  return !!p && p !== 'regla' && p !== 'local'
 }
 
 export function debeAutoReanudar(leadState) {
@@ -533,7 +705,10 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
     // el turno IGUAL costó dinero y debe facturarse. Ponerlo tras el return de error
     // (como estaba) subcontaba justo los turnos más caros —los que reintentan/fallan—.
     // Idempotente y fire-and-forget: nunca rompe la conversación por la contabilidad.
-    contabilizarTurno(tenantId)
+    // Hito A4: se distingue el turno ATENDIDO del que gastó modelo. Un turno resuelto por
+    // regla determinista cuenta para cuota (no se corta la atención) pero NO como consumo
+    // de IA:|reportar "0.01 USD" por una regla de cero tokens era falso.
+    contabilizarTurno(tenantId, consumioModelo(brainResult))
       .catch(err => console.error(`[BrainPipeline] contador de turnos (${tenantId}):`, err.message))
 
     const estadoAntes = { stage: estadoLead.stage, mode: modoActual }
@@ -608,14 +783,55 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       }
     }
 
+    // ─── 6c. SEPARAR: qué aportó el LEAD y qué depende de una acción SALIENTE ───
+    // Hito A3 (oct 2026). Lo que el lead dijo (nombre, producto, distrito, dirección,
+    // cantidad, su horario) es un HECHO de la conversación: se guarda siempre, aunque el
+    // envío falle. Lo que solo tiene sentido si el cliente RECIBE la respuesta (avanzar de
+    // etapa, registrar el pedido, marcar el cierre, escalar) NO se escribe todavía: queda
+    // en `turnoPendiente` con su turnoId y el handler lo confirma con `confirmarTurno`
+    // cuando Meta aceptó el envío. Un turno descartado por ser obsoleto, o un envío
+    // rechazado, ya no dejan un "pedido confirmado" que el cliente nunca recibió.
+    const slotsDelLead = slotsAportadosPorLead(slotsFusionados)
+    const turnoId = randomUUID()
+    // El aviso al vendedor y el compromiso fechado también dependen de que el lead reciba
+    // el mensaje: si se descarta, avisar "el cliente pidióX" sería fiction comercial. Se
+    // guardan aquí y `confirmarTurno` los ejecuta.
+    const turnoPendiente = {
+      turnoId,
+      leadId,
+      creadoEn: new Date().toISOString(),
+      stage: stageFinal,
+      slots: slotsFusionados,
+      pedido: slotsFusionados._pedido || null,
+      cierre: brainResult.cierre || null,
+      escalado: brainResult.debe_escalar_humano === true,
+      motivoEscalamiento: brainResult.razon_escalamiento || null,
+      comoCerrarlo: brainResult.como_cerrarlo || null,
+      compromiso: brainResult.compromiso?.fecha_iso ? brainResult.compromiso : null,
+      nombreSlot: nombreSlotDe(slotsFusionados),
+      // Contexto mínimo para poder avisar al vendedor cuando se confirme (sin releer la
+      // campaña entera). Sin secretos ni prompts: solo lo que va en la notificación.
+      aviso: brainResult.debe_escalar_humano ? {
+        telefono,
+        vendorId: lead?.vendorId || 1,
+        nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || '',
+        verticalId: vertical.VERTICAL_ID,
+        mensajeLead: mensajeActual,
+        respuestaBot: brainResult.mensaje || null,
+      } : null,
+    }
+
     // ─── 7. Guardar el estado actualizado en la BD ───
-    // currentMode usa el catálogo MODES (NO strings a mano — eso causó el bug #4).
+    // currentMode usa el catálogo MODES (NO strings a mano — eso DEFICIó el bug #4).
     await prisma.leadState.upsert({
       where: { leadId },
       update: {
-        currentStage: stageFinal,
-        slotsFilled: slotsFusionados,
+        // Solo lo que el lead aportó. El stage NO avanza todavía: espera confirmación.
+        slotsFilled: fusionarSlotsPersistidos(leadState?.slotsFilled, slotsDelLead),
         lastMessageAt: new Date(),
+        turnoId,
+        turnoPendiente,
+        stateVersion: { increment: 1 },
         // Al escalar arrancamos el reloj del auto-resume (modeEnteredAt = ahora).
         // Sin esto el reloj quedaba en la fecha de creación del lead → el bot
         // retomaría casi al instante (bug cazado al diseñar el Bloque #4). El
@@ -624,18 +840,23 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       },
       create: {
         leadId,
-        currentStage: stageFinal,
-        slotsFilled: slotsFusionados,
-        currentMode: brainResult.debe_escalar_humano ? MODES.HUMAN_ACTIVE : MODES.AUTO_CONSULTIVO
+        // Lead nuevo: el estado de partida es first_contact. El avance proposed queda en
+        // turnoPendiente hasta que el envío se confirme; así nunca nace "en post_close".
+        currentStage: STAGES.FIRST_CONTACT,
+        slotsFilled: slotsDelLead,
+        currentMode: brainResult.debe_escalar_humano ? MODES.HUMAN_ACTIVE : MODES.AUTO_CONSULTIVO,
+        turnoId,
+        turnoPendiente,
       }
     })
+
+    const nombreSlot = nombreSlotDe(slotsFusionados)
 
     // ─── 7b. Sincronizar lead.nombreDetectado con el slot nombre (Sprint A.2) ───
     // Antes leads.nombreDetectado se quedaba con el pushName de WhatsApp ("JH")
     // mientras el cerebro ya sabía el nombre real ("Jorge") — el CRM mostraba el
     // dato viejo. El slot del cerebro (dicho por el lead) manda sobre el pushName.
     // Un fallo aquí no tumba el turno: es dato de vitrina, no de flujo.
-    const nombreSlot = slotsFusionados.nombre
     if (nombreSlot && nombreSlot !== lead?.nombreDetectado) {
       try {
         await prisma.lead.update({ where: { id: leadId }, data: { nombreDetectado: nombreSlot } })
@@ -644,44 +865,21 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       }
     }
 
-    // ─── 7c. NOTIFICAR AL VENDEDOR si el cerebro escaló (Fase B.1+) ───
-    // Fire-and-forget: NO bloquea la respuesta al lead (el lead recibe su mensaje
-    // cálido ya; el ping al vendedor viaja en paralelo). Sin esto, el lead escalado
-    // quedaba en un agujero negro (HUMAN_ACTIVE sin que nadie se entere).
-    if (brainResult.debe_escalar_humano) {
-      notificarEscalamiento({
-        leadId, telefono, nombre: nombreSlot || lead?.nombreDetectado || null,
-        slots: slotsFusionados,
-        vendorId: lead?.vendorId || 1,
-        motivo: brainResult.razon_escalamiento || 'El asistente derivó este lead a un humano',
-        ultimoMensajeLead: mensajeActual,
-        respuestaBot: brainResult.mensaje,
-        stage: stageFinal,
-        // Inteligencia comercial: el cerebro la generó en ESTE mismo turno (cero
-        // llamada extra). Solo viaja si vino con contenido; si no, el briefing
-        // sale igual sin el bloque 🎯.
-        dataExtra: brainResult.como_cerrarlo ? { comoCerrarlo: brainResult.como_cerrarlo } : null,
-        nombrePrograma: campaignConfig?.agente?.nombreProducto || campaignConfig?.nombreProducto || '',
-        verticalId: vertical.VERTICAL_ID,
-        tenantId
-      }).catch(err => console.error(`[BrainPipeline] Notificación de escalamiento falló (lead ${leadId}):`, err.message))
-    }
-
-    // ─── 7d. Registrar COMPROMISO del lead (motor de compromisos, Fase D) ───
-    // Fire-and-forget: si el lead prometió algo con fecha ("te pago el viernes"), lo
-    // guardamos para que el motor lo recuerde al vencer. NO bloquea la respuesta al lead.
-    // null en la inmensa mayoría de turnos → cero efecto.
-    if (brainResult.compromiso?.fecha_iso) {
-      persistirCompromiso(leadId, brainResult.compromiso)
-        .catch(err => console.error(`[BrainPipeline] compromiso lead ${leadId}:`, err.message))
-    }
-
-    // (La contabilización del turno ocurre justo tras pensarYResponder — ver arriba.
-    // Aquí ya no, porque el costo se incurre en la llamada al LLM, no en el éxito.)
+    // ─── 7c/7d. AVISO AL VENDEDOR Y COMPROMISO: TARDE, Y SOLO SI SE CONFIRMA ───
+    // Antes estos dos efectos salían aquí mismo, antes de enviar. Consecuencia real: si el
+    // envío se descartaba por obsoleto o Meta lo rechazaba, el vendedor recibía "este cliente
+    // pidió el pack y hay que llamar YA" sin que el cliente hubiera visto nada, y el motor de
+    // compromisos programaba un recordatorio de un acuerdo que nunca se являются.
+    // Ahora viajan DENTRO de turnoPendiente y `confirmarTurno` (tras aceptación de Meta)
+    // dispara la notificación y registra el compromiso. Si el turno se descarta, no hay
+    // aviso falso ni recordatorio fantasma.
+    //
+    // La traza del turno se sigue escribiendo siempre: registrar qué decidió el cerebro es
+    // parte del histórico, aunque luego no se envíe.
 
     registrarTurno({
       leadId, mensajeActual, estadoAntes,
-      estadoDespues: { stage: stageFinal, escalado: brainResult.debe_escalar_humano === true, pedido: !!slotsFusionados._pedido },
+      estadoDespues: { stage: stageFinal, escalado: brainResult.debe_escalar_humano === true, pedido: !!slotsFusionados._pedido, pendiente: true },
       brainResult, latencyMs: Date.now() - startTime, tenantId
     }).catch(err => console.error(`[BrainPipeline] turn_trace lead ${leadId}:`, err.message))
 
@@ -710,6 +908,10 @@ export async function procesarConCerebro({ leadId, telefono, mensajeActual, tena
       },
       brainResult,
       stateAfter: { stage: stageFinal, slots: slotsFusionados, escalado: brainResult.debe_escalar_humano },
+      // Hito A3: el handler necesita esto para cerrar el turno según cómo termine el envío.
+      // El texto va aquí porque es la MISMA cadena que se intentó enviar; el handler no
+      // vuelve a leer el estado (la confirmación vuelve a verificar turnoId en el WHERE).
+      turno: { leadId, turnoId, texto: brainResult.mensaje, stage: stageFinal, slots: slotsFusionados, escalado: brainResult.debe_escalar_humano === true },
       _pipeline_ms: Date.now() - startTime
     }
 

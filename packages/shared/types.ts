@@ -40,6 +40,14 @@ export interface LeadListItem {
   vendedor: string | null
   esRecurrente: boolean
   label: string | null           // etiqueta MANUAL del vendedor (tag CRM, ver labels.js)
+  // ── Resultado comercial CONFIRMADO POR UN HUMANO (Hito B4) ──
+  // `stage` es una INFERENCIA del bot y va aparte a propósito: no se usa para medir.
+  // Estos tres vienen de `call_events` (lo que el vendedor registró en el debrief).
+  // Sin llamada registrada: `null` en los tres, y la pantalla dice "no disponible"
+  // en vez de suponer. El bot NUNCA escribe aquí.
+  resultado: string | null       // valores de DEBRIEF_OUTCOMES (call-debrief.js)
+  resultadoEtiqueta: string | null
+  resultadoFuente: 'call_events' | null
 }
 
 export interface LeadDetail {
@@ -55,6 +63,11 @@ export interface LeadDetail {
   label: string | null             // etiqueta MANUAL del vendedor (tag CRM, ver labels.js)
   creadoEn: string                 // ISO
   pedido?: PedidoCerrado | null    // venta cerrada por el bot (marca _pedido), si la hay
+  // Resultado comercial confirmado por un humano (mismo contrato que en la lista).
+  resultado: string | null
+  resultadoEtiqueta: string | null
+  resultadoFuente: 'call_events' | null
+  resultadoFecha?: string | null
 }
 
 // Venta que el cerebro cerró por chat (hoy: vertical colágeno, contraentrega).
@@ -279,9 +292,15 @@ export interface CampaignDetail {
   steps: unknown[]
 }
 
-// Paginación opt-in de GET /v2/leads (?limit&?offset). Sin params, la API devuelve
-// el array legacy LeadListItem[].
+// Paginación opt-in de GET /v2/leads (?limit&?offset&?q&?stage&?label). Sin ?limit ni
+// ?offset, la API devuelve el array legacy LeadListItem[].
+//
+// Búsqueda y filtros se resuelven en el SERVIDOR sobre toda la bandeja (Hito B2). Filtrar en
+// el navegador solo habría trabajado sobre la página visible, y eso se presenta como resultado
+// completo cuando no lo es: el lead que el vendedor buscaba podía estar en la página 3 y no
+// aparecer nunca. `total` es el número de leads que cumplen el filtro (no el de la página),
+// para que la interfaz pueda decirlo con verdad.
 export interface LeadsPage {
   items: LeadListItem[]
-  page: { limit: number; offset: number; hasMore: boolean }
+  page: { limit: number; offset: number; hasMore: boolean; total: number }
 }

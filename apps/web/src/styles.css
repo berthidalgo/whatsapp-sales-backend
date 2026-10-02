@@ -151,6 +151,50 @@ button { font-family: inherit; cursor: pointer; }
 .pill-human { background: #fdeede; color: var(--warm); }
 .pill-label { background: #f0ecfb; color: #6b4ea8; }
 .stage { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #eef7f1; color: var(--green); font-weight: 600; }
+/* ── Métricas (Hito B4) ──────────────────────────────────────────────────
+   El diseño obliga a que la definición viaje con el número: la tarjeta no puede
+   "verse bien" sin decir qué cuenta y de dónde sale. */
+.metricas { padding: 18px 22px; overflow: auto; flex: 1; }
+.metricas-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.metricas-head h2 { margin: 0 0 4px; font-size: 18px; color: #e9e9f2; }
+.metricas-controls { display: flex; align-items: center; gap: 10px; }
+.metricas-scope { color: #8b8b9e; font-size: 12px; }
+.metricas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 16px; }
+.metrica-card { background: #16161d; border: 1px solid #26262f; border-radius: 10px; padding: 12px 14px; }
+.metrica-label { text-transform: uppercase; font-size: 10px; letter-spacing: .08em; color: #8b8b9e; }
+.metrica-valor { font-size: 26px; font-weight: 600; color: #f2f2f8; margin: 4px 0 6px; }
+.metrica-valor small { font-size: 12px; color: #8b8b9e; font-weight: 400; }
+.metrica-nd { font-size: 15px; color: #8b8b9e; font-weight: 400; font-style: italic; }
+.metrica-def { font-size: 12px; color: #b9b9c8; line-height: 1.35; }
+.metrica-fuente { font-size: 10px; color: #6b6b7b; margin-top: 4px; word-break: break-all; }
+.metricas-sec { margin-top: 20px; }
+.metricas-sec h3 { font-size: 14px; color: #e9e9f2; margin: 0 0 8px; }
+.resultados-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.resultados-list li { background: #16161d; border: 1px solid #26262f; border-radius: 8px; padding: 6px 10px; font-size: 13px; color: #cfcfdd; }
+.resultados-list b { color: #7ee2b8; margin-left: 6px; }
+.metricas-nota { margin-top: 18px; font-size: 12px; color: #8b8b9e; border-left: 2px solid #2c2c36; padding-left: 10px; }
+
+/* Alta de campaña, disparadores y guion (Hito B3) */
+.ap-alta { max-width: 520px; }
+.ap-note { font-size: 12px; color: #8b8b9e; line-height: 1.4; }
+.ap-errores { background: #2a1414; border: 1px solid #6b2626; color: #f3b3b3; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.ap-ok { background: #10281c; border: 1px solid #1c6b4d; color: #7ee2b8; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.trg-list { list-style: none; padding: 0; margin: 0 0 10px; }
+.trg-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid #22222b; color: #cfcfdd; }
+.ap-test { margin-top: 10px; }
+.ap-bottom { padding: 0 22px 18px; }
+.copilot-panel { border: 1px solid #26262f; border-radius: 10px; background: #16161d; padding: 12px; }
+.fc-foot { font-size: 11px; color: #6b6b7b; margin-top: 6px; }
+.sim-placeholder { color: #8b8b9e; font-size: 13px; }
+.sim-hint { font-size: 12px; color: #8b8b9e; line-height: 1.4; }
+.sb-clear, .sb-more { align-self: center; margin: 6px 0; }
+.empty.small { font-size: 11px; padding: 6px; }
+
+/* Resultado comercial confirmado por un humano (Hito B4). Va con su propio color para que
+   nadie lo lea como la etapa inferida del bot: verde = registrado por alguien. */
+.pill-resultado { background: #0f3d2e; color: #7ee2b8; border-color: #1c6b4d; }
+.pill-sindato { background: #2a2a33; color: #8b8b9e; border-color: #3a3a46; }
+
 .obj { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #fdeaea; color: var(--hot); font-weight: 600; }
 .prod { font-size: 10px; padding: 2px 7px; border-radius: 99px; background: #f1f3f6; color: var(--text-2); }
 

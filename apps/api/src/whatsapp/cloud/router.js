@@ -13,9 +13,12 @@
 // y audios/fotos se convierten en texto antes de entrar al cerebro (mismo patrón que
 // event-router.js: una foto descrita es un mensaje más y hereda debounce, lock y memoria).
 
-import prisma from '../../db/prisma.js'
+import prisma, { prisma as prismaDefault } from '../../db/prisma.js'
 import { resolveLead } from '../../webhook/lead-resolver.js'
 import { enqueueMessage, cancelDebounce, invalidarTurnoEnVuelo } from '../../webhook/debounce.js'
+import {
+  registrarEntrada, actualizarEntrada, descartarEntradas, correrTurnoDesdeBandeja,
+} from '../../webhook/inbox.js'
 import { checkAndMark } from '../../webhook/idempotency.js'
 import { resolveChannel, tenantAtiende, summarizeChannelResolution } from '../../webhook/channel-resolver.js'
 import { procesarTurno } from '../../webhook/handler.js'
@@ -27,21 +30,36 @@ import { esPosibleComprobante, escalarAHumano, avisarComprobante, ACUSE_COMPROBA
 import { transcribirAudio } from '../../lib/groq.js'
 import { enviarTexto, credencialesCloud, persistirMensajeSaliente } from '../transporte.js'
 import { parseCloudWebhook } from './parser.js'
+import { randomUUID } from 'node:crypto'
 import { descargarMediaCloud } from './media.js'
 import { procesarStatuses } from './statuses.js'
 import { indicarEscribiendo } from './escribiendo.js'
 import { describirEventoDePlantilla } from './plantillas-catalogo.js'
 
 export async function procesarWebhookCloud(payload) {
+  // HITO A1: primero se PERSISTE lo que Meta entregó (bandeja durable) y solo después se
+  // responde. Si persistir falla, el llamador debe devolver error para que Meta reintente:
+  // nunca se confirma trabajo que no quedó guardado. Los recibos ya eran durables por su
+  // propia vía (pending_cloud_receipts); aquí se procesan igualmente antes del 200.
   const eventos = parseCloudWebhook(payload)
-
-  // Los recibos (enviado/entregado/leído/falló) van por su propio carril: no abren un
-  // turno del bot, solo marcan la fila del mensaje que YA salió. Antes se descartaban
-  // con un `continue` y la bandeja no tenía forma de saber si algo se entregó.
-  const recibos = await procesarStatuses(eventos)
-  if (recibos.aplicados || recibos.fallidos) {
-    console.log(`[CloudRouter] recibos | aplicados=${recibos.aplicados} no_entregados=${recibos.fallidos}`)
+  let persistencia = { guardadas: 0, duplicadas: 0, errores: 0, fallidas: 0 }
+  try {
+    persistencia = await persistirEntrada(payload, eventos)
+  } catch (err) {
+    console.error(`[CloudRouter] no se pudo persistir la entrada (${err.message}); se devuelve error para que Meta reintente`)
+    return { ok: false, error: 'inbox_persist_failed', detalle: err.message }
   }
+  if (persistencia.fallidas > 0) {
+    console.error(`[CloudRouter] ${persistencia.fallidas} entradas sin guardar; se devuelve error para que Meta reintente`)
+    return { ok: false, error: 'inbox_persist_incomplete', detalle: `${persistencia.fallidas} entradas no guardadas` }
+  }
+  if (persistencia.guardadas || persistencia.duplicadas) {
+    console.log(`[CloudRouter] bandeja | nuevas=${persistencia.guardadas} duplicadas=${persistencia.duplicadas}`)
+  }
+  // Los ids de la bandeja se pasan al despacho: así cada desenlace (encolado, escalado,
+  // sin texto, duplicado) puede marcar SU fila con el motivo, y no queda trabajo pendiente
+  // que parezca sin procesar.
+  const inboxIds = persistencia.ids || new Map()
 
   // Avisos de Meta sobre plantillas (aprobada, pausada, recategorizada, calidad): no abren
   // turno ni tocan la base; se registran diciendo QUÉ parte del bot afectan, porque una
@@ -52,52 +70,196 @@ export async function procesarWebhookCloud(payload) {
     console[nivel === 'warn' ? 'warn' : 'log'](`[CloudRouter] ${linea}`)
   }
 
-  // Coexistencia: lo que el dueño contestó desde su celular. No abre turno del bot —
-  // al revés, lo calla. Va antes que los mensajes para que si en el mismo webhook viene
-  // la pregunta del lead y la respuesta del dueño, el bot ya encuentre el modo en HUMANO.
+  // Los recibos (enviado/entregado/leído/falló) van por su propio carril: no abren un turno
+  // del bot, solo marcan la fila del mensaje que YA salió. Son durables por su propia cola
+  // (pending_cloud_receipts) y se aplican antes de despachar: si un turno sale ahora y su
+  // recibo ya llegó, el mensaje nace con el estado correcto.
+  const recibos = await procesarStatuses(eventos)
+  if (recibos.aplicados || recibos.fallidos) {
+    console.log(`[CloudRouter] recibos | aplicados=${recibos.aplicados} no_entregados=${recibos.fallidos}`)
+  }
+
+  // A partir de aquí, el trabajo pesado (descarga de media, resolución de lead, turno del
+  // cerebro) se hace SOBRE lo que quedó guardado. Si el proceso muere aquí, la bandeja
+  // tiene el mensaje y el barrido lo retoma: no se perdió.
+  const trabajo = await despacharEntrada(eventos, { inboxIds })
+
+  if (trabajo.queued || trabajo.skipped || trabajo.errores) {
+    console.log(`[CloudRouter] webhook | encolados=${trabajo.queued} omitidos=${trabajo.skipped} errores=${trabajo.errores}`)
+  }
+  return { ok: true, queued: trabajo.queued, skipped: trabajo.skipped, errores: trabajo.errores, persistencia, trabajo }
+}
+
+/**
+ * Procesa lo que ya está en la bandeja. Es idempotente: una entrada DISCARDED/DONE no se
+ * vuelve a procesar, y una reentrega de Meta no duplica nada.
+ *
+ * · Eco (coexistencia): el dueño contestó desde el celular. No abre turno; al revés, calla
+ *   al bot. Se procesa antes que los mensajes para que, si en el mismo webhook vienen la
+ *   pregunta del lead y la respuesta del dueño, el bot ya encuentre el modo en HUMANO.
+ * · Message: se guarda en la bandeja (arriba) y aquí se encola al turno con el debounce
+ *   durable. `procesarMensajeCloud` sigue siendo la unidad de trabajo y su lógica de
+ *   canal/lead/media no cambia; lo que cambia es que ahora hay una fila detrás.
+ */
+export async function despacharEntrada(eventos, deps = {}) {
+  const d = {
+    procesarMensajeCloud, procesarEcho, indicarEscribiendo, inboxIds: new Map(),
+    descartarEntrada: (id, motivo) => descartarEntradas(prisma, [id], motivo),
+    ...deps,
+  }
+  let queued = 0, skipped = 0, errores = 0
+
   for (const ev of eventos) {
     if (ev.tipo !== 'echo') continue
     try {
-      const r = await procesarEcho(ev)
+      const r = await d.procesarEcho(ev)
       if (!r.guardado && r.reason) console.log(`[CloudRouter] eco ${ev.messageId} sin guardar: ${r.reason}`)
+      // El eco es un mensaje del dueño: si no se guardó, su fila no debe quedar PENDING para
+      // siempre (nadie la va a reclamar: no abre turno). Se marca con el motivo real.
+      if (!r.guardado) await d.descartarEntrada(d.inboxIds.get(ev.messageId), r.reason || 'eco_no_guardado')
     } catch (e) {
+      errores++
       console.error(`[CloudRouter] error en eco ${ev.messageId}:`, e.message)
     }
   }
 
-  let queued = 0, skipped = 0, errores = 0
   for (const ev of eventos) {
     if (ev.tipo !== 'message') continue
     try {
       // `indicarEscribiendo` solo se inyecta aquí (producción): los tests del router llaman a
       // procesarMensajeCloud con sus propias dependencias y no tocan Meta ni la base.
-      const r = await procesarMensajeCloud(ev, { indicarEscribiendo })
+      const r = await d.procesarMensajeCloud(ev, {
+        indicarEscribiendo: d.indicarEscribiendo,
+        inboxId: d.inboxIds.get(ev.messageId) || null,
+        enlazarEntrada: leadId => actualizarEntrada(prisma, d.inboxIds.get(ev.messageId), { leadId }),
+        descartarEntrada: (id, motivo) => descartarEntradas(prisma, [id], motivo),
+        // El turno lee la ráfaga desde la BD, no desde el buffer en memoria: así un
+        // reinicio a mitad de ráfaga no pierde ni duplica lo que ya estaba guardado.
+        correrTurnoDesdeBandeja: (leadInfo, meta) => correrTurnoDesdeBandeja(
+          prisma, leadInfo.leadId,
+          (texto, metaTurno) => procesarTurno(leadInfo, texto, metaTurno),
+          { meta },
+        ),
+      })
       if (r.queued) queued++
       else { skipped++; if (r.reason) console.log(`[CloudRouter] mensaje ${ev.messageId} sin procesar: ${r.reason}`) }
     } catch (e) {
       errores++
       console.error(`[CloudRouter] error en mensaje ${ev.messageId}:`, e.message)
+      await d.descartarEntrada(d.inboxIds.get(ev.messageId), `error_despacho: ${e.message}`)
     }
   }
-  if (queued || skipped || errores) {
-    console.log(`[CloudRouter] webhook | encolados=${queued} omitidos=${skipped} errores=${errores}`)
+  return { queued, skipped, errores }
+}
+
+/**
+ * HITO A1 — Write-ahead de la entrada (idempotente).
+ *
+ * Cada mensaje y cada eco se escribe en `inbound_events` ANTES de que se intente procesar
+ * nada. La clave única (tenant, provider, eventKey) hace que un replay del mismo wamid
+ * devuelva la fila existente en vez de crear otra: por eso el reintento de Meta no
+ * duplica historial ni respuesta, y por eso un reinicio no pierde el mensaje.
+ *
+ * Lo que NO entra en la bandeja: los recibos (tienen su propia cola durable) y los avisos
+ * de plantilla (no abren turno ni escriben). Lo que no se puede guardar (canal
+ * desconocido, sin remitente) se descarta de forma explícita y contada en `fallidas`
+ * cuando el fallo es de persistencia, no de enrutado.
+ */
+export async function persistirEntrada(payload, eventos, deps = {}) {
+  const d = { prisma: prismaDefault, registrarEntrada, resolveChannel, tenantAtiende, ...deps }
+  const ids = new Map()
+  let guardadas = 0, duplicadas = 0, errores = 0, fallidas = 0
+
+  for (const ev of eventos) {
+    if (ev.tipo !== 'message' && ev.tipo !== 'echo') continue
+    try {
+      // El canal se resuelve para escribir el tenantId correcto. Sin canal verificado no
+      // hay entrada durable posible: es un rechazo de enrutado, no un fallo de guardado.
+      const canal = await d.resolveChannel(ev.phoneNumberId)
+      if (canal.resolvedBy === 'active_tenant_fallback' && process.env.ALLOW_TENANT_FALLBACK !== 'true') {
+        console.error(`[CloudRouter] entrada ${ev.messageId}: phone_number_id "${ev.phoneNumberId}" no está en channels → no se guarda`)
+        continue
+      }
+      const servicio = d.tenantAtiende(canal)
+      if (!servicio.atiende) continue
+      if (!canal.tenantId) continue
+
+      // El eventKey es el wamid de Meta: identidad estable del evento en el proveedor.
+      // Sin wamid no hay identidad fiable → no se guarda (sería un duplicado silencioso
+      // esperando a ocurrir en cada reintento de Meta).
+      if (!ev.messageId) {
+        console.warn(`[CloudRouter] entrada sin messageId (${ev.tipo}) → no se guarda`)
+        continue
+      }
+
+      const r = await d.registrarEntrada(d.prisma, {
+        tenantId: canal.tenantId,
+        provider: 'cloud',
+        eventKey: ev.messageId,
+        tipo: ev.tipo,
+        phoneNumberId: ev.phoneNumberId,
+        // El texto final a procesar se completa después: si hubo media, el texto puede ser
+        // una transcripción o una descripción hecha aquí. Se guarda entonces en la fila
+        // (payload.texto) para que la recuperación pueda retomar sin volver a bajar la media.
+        payload: {
+          messageId: ev.messageId,
+          messageType: ev.messageType,
+          text: ev.text || null,
+          telefono: ev.telefono || null,
+          bsuid: ev.bsuid || null,
+          pushName: ev.pushName || null,
+          mediaId: ev.mediaId || null,
+          interactiveId: ev.interactiveId || null,
+          adContext: ev.adContext || null,
+          timestamp: ev.timestamp || null,
+        },
+      })
+      if (r.estado === 'duplicado') duplicadas++
+      else { guardadas++; ids.set(ev.messageId, r.id) }
+    } catch (err) {
+      errores++
+      fallidas++
+      console.error(`[CloudRouter] no se pudo guardar la entrada ${ev.messageId}: ${err.message}`)
+    }
   }
-  return { ok: true, queued, skipped, errores }
+  return { guardadas, duplicadas, errores, fallidas, ids }
 }
 
 /**
  * Decide qué hacer con un mensaje entrante de Meta. Exportada para tests: todas las
  * dependencias con efectos se pueden inyectar.
+ *
+ * HITO A1: el mensaje YA está guardado en la bandeja (`inboxId`) antes de llegar aquí. Esta
+ * función pasa de "encolar en memoria" a "enlazar la entrada con su lead y reprogramar la
+ * ráfaga", y toda salida que no vaya a producir un turno marca la entrada como DISCARDED
+ * con su motivo. Si el proceso muere en cualquier punto, la fila sigue PENDING y el
+ * barrido la retoma: el mensaje no se pierde.
  */
 export async function procesarMensajeCloud(ev, deps = {}) {
   const d = {
     checkAndMark, resolveChannel, tenantAtiende, resolveLead, enqueueMessage, procesarTurno,
-    manejarMedia, responderNoTexto,
+    manejarMedia, responderNoTexto, inboxId: null,
+    enlazarEntrada: (leadId, id) => actualizarEntrada(prisma, id, { leadId }),
+    descartarEntrada: (id, motivo) => descartarEntradas(prisma, [id], motivo),
     ...deps
   }
+  // El cierre del turno (reclamar la ráfaga de la BD y ejecutarla) se resuelve AQUÍ y no en
+  // el literal de defaults para que use el `procesarTurno` ya inyectado: los tests del router
+  // pasan su propio `procesarTurno` y no deben tocar la base.
+  if (!d.correrTurnoDesdeBandeja) {
+    // Con entrada en la bandeja (producción), el turno lee la ráfaga desde la BD. Sin
+    // `inboxId` no hay fila que reclamar — es el caso de los llamadores que tests y
+    // utilidades inyectan sus dependencias — y se procesa el texto combinado directamente.
+    d.correrTurnoDesdeBandeja = d.inboxId
+      ? (leadInfo, meta) => correrTurnoDesdeBandeja(prisma, leadInfo.leadId, (t, m) => d.procesarTurno(leadInfo, t, m), { meta })
+      : (leadInfo, texto, meta) => d.procesarTurno(leadInfo, texto, meta)
+  }
 
-  // 1. Meta reintenta webhooks: el mismo mensaje puede llegar dos veces.
+  // 1. Meta reintenta webhooks: el mismo mensaje puede llegar dos veces. La garantía REAL ya
+  // no es esta marca en memoria sino el índice único de la bandeja (arriba): si llegamos
+  // aquí con una fila ya DONE, no hay nada que reprocesar.
   if (ev.messageId && !d.checkAndMark(`cloud:${ev.messageId}`, { provider: 'cloud' })) {
+    await d.descartarEntrada?.(d.inboxId, 'duplicado')
     return { queued: false, reason: 'duplicado' }
   }
 
@@ -105,15 +267,16 @@ export async function procesarMensajeCloud(ev, deps = {}) {
   const canal = await d.resolveChannel(ev.phoneNumberId)
   if (canal.resolvedBy === 'active_tenant_fallback' && process.env.ALLOW_TENANT_FALLBACK !== 'true') {
     console.error(`[CloudRouter] ⛔ phone_number_id "${ev.phoneNumberId}" no está en channels → ignorado. Registrá el canal (scripts/canal-cloud.js).`)
+    await d.descartarEntrada?.(d.inboxId, 'canal_desconocido')
     return { queued: false, reason: 'canal_desconocido' }
   }
   const servicio = d.tenantAtiende(canal)
-  if (!servicio.atiende) return { queued: false, reason: `tenant_sin_servicio: ${servicio.motivo}` }
+  if (!servicio.atiende) { await d.descartarEntrada?.(d.inboxId, `tenant_sin_servicio: ${servicio.motivo}`); return { queued: false, reason: `tenant_sin_servicio: ${servicio.motivo}` } }
   console.log(`[CloudRouter] ${summarizeChannelResolution(canal)}`)
 
   // 3. Identidad: teléfono si viene; si el usuario usa username, su BSUID.
   const remitente = ev.telefono || ev.bsuid
-  if (!remitente) return { queued: false, reason: 'sin_remitente' }
+  if (!remitente) { await d.descartarEntrada?.(d.inboxId, 'sin_remitente'); return { queued: false, reason: 'sin_remitente' } }
   if (ev.adContext?.hasAdContext) {
     console.log(`[CloudRouter] 📢 llegó de un anuncio: "${ev.adContext.adReplyTitle || '(sin titular)'}" (ad ${ev.adContext.sourceId || '?'})`)
   }
@@ -127,11 +290,14 @@ export async function procesarMensajeCloud(ev, deps = {}) {
     firstMessageText: ev.text || '',
     tenantId: canal.tenantId
   })
-  if (!resolution.ok) return { queued: false, reason: 'lead_resolution_failed' }
-  if (resolution.isArchived) return { queued: false, reason: 'lead_archivado' }
+  if (!resolution.ok) { await d.descartarEntrada?.(d.inboxId, 'lead_resolution_failed'); return { queued: false, reason: 'lead_resolution_failed' } }
+  if (resolution.isArchived) { await d.descartarEntrada?.(d.inboxId, 'lead_archivado'); return { queued: false, reason: 'lead_archivado' } }
 
   // El canal viaja dentro del turno: el envío sale por ESTE número y con SUS credenciales.
   const leadInfo = { ...resolution, channel: canal, tenantId: canal.tenantId }
+  // La entrada ya sabe a quién pertenece. Esto es lo que permite retomarla tras un reinicio:
+  // el barrido encuentra las filas por lead sin volver a resolver el canal ni el remitente.
+  await d.enlazarEntrada?.(leadInfo.leadId)
 
   // 3b. «Leído» + «escribiendo…» YA, antes de bajar la media: una nota de voz tarda en
   // descargarse y transcribirse, y es justo cuando más se nota el silencio. Solo para los
@@ -148,30 +314,34 @@ export async function procesarMensajeCloud(ev, deps = {}) {
   // ANTES (bug encontrado al preparar el cutover a Cloud, sep 2026): la condición era
   // `!texto && ev.mediaId`, o sea que si el lead mandaba su captura de Yape CON un pie
   // ("ya pagué 🙏") —el caso más común de todos— los bytes no se descargaban nunca. La
-  // foto no entraba a media_assets, no se veía en la bandeja y el cerebro solo leía el
+  // foto no entraba a media_assets, no se vea en la bandeja y el cerebro solo leía el
   // pie. El vendedor tenía que pedirle la captura otra vez. Ahora el pie decide quién
   // habla (el texto del lead manda), pero la imagen se guarda igual.
   let texto = ev.text
   let mediaAssetId = null
   if (ev.mediaId && TIPOS_CON_MEDIA.has(ev.messageType)) {
     const r = await d.manejarMedia({ ev, leadInfo, hayTexto: !!texto })
-    if (r.escalado) return { queued: false, reason: 'comprobante_escalado', leadId: leadInfo.leadId }
+    if (r.escalado) { await d.descartarEntrada?.(d.inboxId, 'comprobante_escalado'); return { queued: false, reason: 'comprobante_escalado', leadId: leadInfo.leadId } }
     mediaAssetId = r.mediaAssetId ?? null
     if (!texto) texto = r.texto
   }
   if (!texto) {
     await d.responderNoTexto({ ev, leadInfo, mediaAssetId })
+    await d.descartarEntrada?.(d.inboxId, `sin_texto (${ev.messageType})`)
     return { queued: false, reason: `sin_texto (${ev.messageType})` }
   }
 
-  // 5. Mismo camino que Evolution: el debounce agrupa ráfagas y el turno corre una vez.
+  // 5. Ráfaga: la ventana de 6 s vive en la fila de la bandeja (disponibleEn), no en un
+  // SetTimeout. El temporizador en memoria solo marca "cuándo revisar"; los mensajes que el
+  // turno procesa salen de la BD, así que tras un reinicio el agrupado sigue funcionando.
   const r = d.enqueueMessage({
     leadId: leadInfo.leadId,
     text: texto,
-    processFn: (combinedText, meta) => d.procesarTurno(leadInfo, combinedText, meta),
+    processFn: (combinedText, meta) => d.correrTurnoDesdeBandeja(leadInfo, combinedText, meta),
+    // En producción la ráfaga se lee de la bandeja; sin fila, el texto combinado va directo.
     metadata: { messageId: ev.messageId, messageType: ev.messageType, provider: 'cloud', interactiveId: ev.interactiveId || null }
   })
-  if (!r?.queued) return { queued: false, reason: `debounce: ${r?.error || 'rechazado'}` }
+  if (!r?.queued) { await d.descartarEntrada?.(d.inboxId, `debounce: ${r?.error || 'rechazado'}`); return { queued: false, reason: `debounce: ${r?.error || 'rechazado'}` } }
   return { queued: true, leadId: leadInfo.leadId }
 }
 
@@ -306,13 +476,23 @@ async function manejarMedia({ ev, leadInfo, hayTexto }) {
     // guardada y visible, pero no se gasta un LLM en describir lo que él ya explicó.
     if (hayTexto) return { texto: null, mediaAssetId, escalado: false }
 
+    // HITO A4: con un humano delante (o la conversación en pausa), NO se transcribe ni se
+    // describe. La transcripción automática es una decisión del bot sobre una conversación
+    // que ya no es suya: se guarda el adjunto, lo ve el vendedor y, si quiere, lo transcribe
+    // desde el CRM (acción explícita y suya).
+    const permiso = await puedeLeerAutomaticamente(prisma, leadInfo.leadId)
+    if (!permiso.permitido) {
+      console.log(`[CloudRouter] media del lead ${leadInfo.leadId} guardada sin lectura automática (modo ${permiso.modo})`)
+      return { texto: null, mediaAssetId, escalado: false, sinLectura: true, modo: permiso.modo }
+    }
+
     if (ev.messageType === 'audio') {
       const tr = await transcribirAudio({
         base64: media.base64, mimeType: media.mimeType || 'audio/ogg', language: 'es',
         vertical: verticalPorTenant(leadInfo.tenantId)
       })
       if (tr.ok && tr.texto) {
-        console.log(`[CloudRouter] 🎙️→📝 audio del lead ${leadInfo.leadId} transcrito (${tr.texto.length} chars)`)
+        console.log(`[CloudRouter] audio del lead ${leadInfo.leadId} transcrito (${tr.texto.length} chars)`)
         return { texto: tr.texto, mediaAssetId, escalado: false }
       }
       return { texto: null, mediaAssetId, escalado: false }
@@ -351,10 +531,14 @@ async function escalarComprobante({ ev, leadInfo, media }) {
     tipo: 'image', mimeType: media.mimeType, base64: media.base64
   }).catch(e => console.error(`[CloudRouter] persistir comprobante lead ${leadId}:`, e.message))
 
-  // Lo crítico primero: el bot se calla pase lo que pase con el resto.
-  await escalarAHumano(prisma, leadId)
+  // Lo crítico primero: el bot se calla pase lo que pase con el resto. HITO A4: si el lead
+  // está PAUSED no se reescribe su modo (es terminal) — solo se avisa al humano.
+  const escalado = await escalarAHumano(prisma, leadId)
 
-  if (st?.currentMode !== MODES.HUMAN_ACTIVE && st?.currentMode !== MODES.PAUSED) {
+  // El acuse al lead solo sale si el BOT tenía el control. Con un humano delante no se
+  // intercalan mensajes (confundiría al cliente); con PAUSED tampoco: la conversación está
+  // cerrada y un "dame un momento" automático la reanimaría sin que nadie lo pidiera.
+  if (st?.currentMode === MODES.AUTO_CONSULTIVO && escalado.escalado) {
     const r = await enviarTexto({ canal: leadInfo.channel, telefono: leadInfo.telefono, texto: ACUSE_COMPROBANTE })
     if (r.ok) {
       await persistirMensajeSaliente(prisma, { data: { leadId, origen: 'BOT', texto: ACUSE_COMPROBANTE }, resultado: r, canal: leadInfo.channel, tenantId: leadInfo.tenantId })
@@ -403,4 +587,26 @@ async function responderNoTexto({ ev, leadInfo, mediaAssetId = null }) {
   }
 }
 
-export const CLOUD_ROUTER_VERSION = 'v3_media_siempre_guardada_y_comprobante'
+// ════════════════════════════════════════════════════════════════════════
+// HITO A4 — MEDIA SIN GASTO DE IA CUANDO NO HACE FALTA
+//
+// El webhook guardaba los bytes SIEMPRE (bien: la bandeja los necesita), pero transcripción
+// de audio y descripción de visión se hacían ANTES de mirar el modo de atención. Un humano
+// que estaba contestando recibía igual una transcripción que nunca iba a usar: dinero
+// (Groq/Gemini) y tiempo, para nada. El texto del lead ya escrito manda y nunca se toca.
+//
+// Regla: la media se conserva siempre; la LECTURA AUTOMÁTICA solo si el bot está a cargo.
+// Con humano o pausa, se guarda el archivo y no se transcribe ni describe. El vendedor ve
+// el adjunto y lo escucha él mismo (o se lo transcribe desde la UI, que es una acción suya
+// y explícita).
+// ════════════════════════════════════════════════════════════════════════
+
+/**
+ * ¿Puede el bot leer este medio automáticamente? Con humano/pausa, NO.
+ * Se consulta el estado real del lead (no el cacheado de antes de la media).
+ */
+export async function puedeLeerAutomaticamente(prisma, leadId) {
+  const st = await prisma.leadState.findUnique({ where: { leadId }, select: { currentMode: true } })
+  const modo = st?.currentMode || MODES.AUTO_CONSULTIVO
+  return { permitido: modo === MODES.AUTO_CONSULTIVO, modo }
+}

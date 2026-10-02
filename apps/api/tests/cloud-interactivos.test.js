@@ -773,7 +773,11 @@ test('webhook: un aviso de plantilla se registra y NO abre turnos ni toca la bas
     const r = await procesarWebhookCloud(avisoDePlantilla('message_template_status_update', {
       event: 'DISABLED', message_template_id: 9, message_template_name: 'hidata_aviso_vendedor', message_template_language: 'es', reason: 'NONE'
     }))
-    assert.deepEqual(r, { ok: true, queued: 0, skipped: 0, errores: 0 })
+    // Hito A1: el webhook devuelve también el resumen de la escritura durable. Un aviso de
+    // plantilla no abre turnos NI toca la bandeja, así que no debe guardar nada.
+    assert.equal(r.ok, true)
+    assert.equal(r.queued, 0); assert.equal(r.skipped, 0); assert.equal(r.errores, 0)
+    assert.deepEqual({ guardadas: r.persistencia.guardadas, duplicadas: r.persistencia.duplicadas, fallidas: r.persistencia.fallidas }, { guardadas: 0, duplicadas: 0, fallidas: 0 })
   } finally {
     console.warn = original
   }

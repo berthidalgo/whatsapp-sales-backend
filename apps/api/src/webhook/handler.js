@@ -29,8 +29,11 @@ import prisma from '../db/prisma.js'
 import { checkAndMark } from './idempotency.js'
 import { routeEvent, summarizeEventResult } from './event-router.js'
 import { enqueueMessage, getMessageGeneration } from './debounce.js'
-import { enviarTexto, enviarImagen, transporteDe, persistirMensajeSaliente } from '../whatsapp/transporte.js'
-import { procesarConCerebro } from '../brain/brain-pipeline.js'
+import { enviarTexto, enviarImagen, transporteDe } from '../whatsapp/transporte.js'
+import { procesarConCerebro, confirmarTurno, descartarTurno } from '../brain/brain-pipeline.js'
+import {
+  registrarIntencion, confirmarEnvio, marcarRechazado, marcarIncierto, clasificarEnvio,
+} from '../whatsapp/outbox.js'
 import { ACTIVE_TENANT } from '../lib/tenant.js'
 import { getImagen } from '../lib/assets.js'
 
@@ -273,10 +276,16 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
     // quedó OBSOLETA (no leyó lo último que dijo). La DESCARTAMOS sin enviar ni persistir:
     // el mensaje nuevo ya está encolado en el debounce y producirá la respuesta FINAL que
     // lee todo. Así se evita la cascada (2 mensajes seguidos, cada uno con su pregunta).
-    // El avance del lead (slots/stage que el cerebro ya guardó) NO se pierde; solo se
-    // descarta el ENVÍO obsoleto. MUTE-SAFE: el mensaje nuevo encolado siempre responde.
+    //
+    // HITO A3: los HECHOS que el lead aportó (su nombre, su distrito, el pedido que
+    // pidió) se conservan — se guardaron al recibir el turno. Lo que se descarta es el
+    // AVANCE que dependía de que el cliente recibiera ESTA respuesta (subir de etapa,
+    // marcar el pedido, avisar al vendedor). Antes ese avance sobrevivía a un descarte y
+    // producía ventas fantasma.
     if (getMessageGeneration(leadId) > genAtStart) {
-      console.warn(`[Pipeline] 🗑️ Lead ${leadId}: llegó mensaje nuevo mientras el cerebro pensaba (gen ${genAtStart}→${getMessageGeneration(leadId)}) → DESCARTO respuesta obsoleta; responde el turno nuevo (anti-cascade)`)
+      console.warn(`[Pipeline] Lead ${leadId}: llegó mensaje nuevo mientras el cerebro pensaba (gen ${genAtStart}→${getMessageGeneration(leadId)}) → DESCARTO respuesta obsoleta; responde el turno nuevo (anti-cascade)`)
+      if (stateResult.turno?.turnoId) await descartarTurno(prisma, stateResult.turno.leadId, stateResult.turno.turnoId)
+        .catch(err => console.error(`[Pipeline] no se pudo descartar el turno obsoleto (lead ${leadId}):`, err.message))
       return
     }
 
@@ -290,7 +299,32 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
     // Evolution; en Meta el número de salida es el phone_number_id del canal.
     const canal = leadInfo.channel || null
     const instancia = transporteDe(canal) === 'evolution' ? instanciaDeSalida(leadInfo) : null
+    const tenantId = leadInfo.tenantId || ACTIVE_TENANT
     const sendStart = Date.now()
+
+    // ═══ HITO A2 — INTENCIÓN DURABLE ANTES DE ENVIAR ═══
+    // Antes se llamaba a Meta y, solo si salía bien, se guardaba el historial. Si el
+    // insert fallaba, el cliente tenía el mensaje y la bandeja no: el vendedor veía
+    // silencio y el bot podía repetir. Ahora la intención se persiste ANTES. Si esta
+    // escritura falla, NO se envía (fallo de BD no confirma trabajo sin guardar) y el turno
+    // se descarta para que otro intento lo retome con la entrada aún en la bandeja.
+    let outboxId = null
+    try {
+      const intencion = await registrarIntencion(prisma, {
+        tenantId,
+        leadId,
+        origen: 'BOT',
+        tipo: 'text',
+        payload: { texto: botResponse.text },
+        canalRef: canal?.externalKey || null,
+      })
+      outboxId = intencion.id
+    } catch (err) {
+      console.error(`[Pipeline] lead ${leadId}: no se pudo registrar la intención de envío; NO se envía:`, err.message)
+      if (stateResult.turno?.turnoId) await descartarTurno(prisma, stateResult.turno.leadId, stateResult.turno.turnoId).catch(() => {})
+      throw err
+    }
+
     const sendResult = await enviarTexto({
       canal,
       telefono,
@@ -298,17 +332,24 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
       instancia
     })
     const sendMs = Date.now() - sendStart
+    const clase = clasificarEnvio(sendResult, transporteDe(canal))
 
     if (sendResult.ok) {
-      console.log(`[Pipeline] ✅ Sent to ${telefono} (${botResponse.text.length} chars, ${sendMs}ms)`)
-      // FIX jun 2026 — persistir la respuesta del BOT (la otra mitad de la memoria:
-      // construirHistorial lee de `messages` y aquí nadie escribía). Solo si el
-      // envío fue OK: un mensaje NO entregado no debe entrar al historial.
-      // Un fallo del insert no tumba el pipeline: se loguea y se sigue.
-      try {
-        await persistirMensajeSaliente(prisma, { data: { leadId, origen: 'BOT', texto: botResponse.text }, resultado: sendResult, canal, tenantId: leadInfo.tenantId || ACTIVE_TENANT })
-      } catch (err) {
-        console.error(`[Pipeline] No se pudo persistir mensaje BOT lead ${leadId}:`, err.message)
+      console.log(`[Pipeline] Enviado a ${telefono} (${botResponse.text.length} chars, ${sendMs}ms)`)
+      // El historial se persiste junto con el resultado del envío, en la MISMA fila de la
+      // outbox. Si el insert falla, la outbox queda SENT con wamid y la recuperación la
+      // reconcilia por wamid (único) SIN volver a enviar: nunca se duplica el mensaje.
+      await confirmarEnvio(prisma, outboxId, {
+        resultado: sendResult,
+        mensajeData: { leadId, origen: 'BOT', texto: botResponse.text },
+        canal,
+        tenantId,
+      }).catch(err => console.error(`[Pipeline] No se pudo persistir mensaje BOT lead ${leadId}:`, err.message))
+
+      // HITO A3: el envío fue aceptado → el avance comercial del turno es real.
+      if (stateResult.turno?.turnoId) {
+        await confirmarTurno(prisma, leadId, stateResult.turno.turnoId, { tenantId })
+          .catch(err => console.error(`[Pipeline] No se pudo confirmar el turno del lead ${leadId}:`, err.message))
       }
 
       // ─── 5b. ADJUNTAR IMAGEN si el cerebro la pidió (vertical colágeno, foto de
@@ -337,9 +378,23 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
             canal, telefono, base64: img.base64, mimetype: img.mimetype, fileName: img.fileName,
             instancia
           })
+          // La imagen también pasa por la outbox: es un envío con las mismas dudas
+          // (aceptada y sin historial, o rechazo que el vendedor debe ver).
           if (mediaRes.ok) {
-            await persistirMensajeSaliente(prisma, { data: { leadId, origen: 'BOT', texto: 'Imagen enviada' }, resultado: mediaRes, canal, tenantId: leadInfo.tenantId || ACTIVE_TENANT })
-              .catch(e => console.error('[Pipeline] persistir imagen saliente:', e.message))
+            try {
+              const imgBox = await registrarIntencion(prisma, {
+                tenantId, leadId, origen: 'BOT', tipo: 'image',
+                payload: { texto: 'Imagen enviada', clave: botResponse.enviar_imagen },
+                canalRef: canal?.externalKey || null,
+              })
+              await confirmarEnvio(prisma, imgBox.id, {
+                resultado: mediaRes,
+                mensajeData: { leadId, origen: 'BOT', texto: 'Imagen enviada' },
+                canal, tenantId,
+              })
+            } catch (e) {
+              console.error('[Pipeline] persistir imagen saliente:', e.message)
+            }
           }
           console.log(mediaRes.ok
             ? `[Pipeline] 📎 Imagen "${botResponse.enviar_imagen}" enviada a ${telefono} (${mediaRes.latency_ms}ms)`
@@ -349,7 +404,35 @@ async function processPipelineFn(leadInfo, combinedText, bufferMetadata) {
         }
       }
     } else {
-      console.error(`[Pipeline] ❌ Send failed:`, sendResult.error)
+      // HITO A2 — tres desenlaces distintos, con tres tratamientos distintos:
+      //   · RECHAZADO: Meta respondió que no. Se registra como fallido con su código para
+      //     que el vendedor lo vea en la bandeja. NUNCA se marca como enviado.
+      //   · NO ENVIADO: ni se construyó la petición (sin credenciales, sin canal). Se
+      //     puede reintentar sin riesgo, porque nada salió.
+      //   · INCIERTO: timeout o error de red. Pudo aceptarse. NO se reenvía: queda visible
+      //     para que un humano lo resuelva (o lo concilie si llega un recibo con ese wamid).
+      console.error(`[Pipeline] Send no ok (${clase.clase}):`, sendResult.error)
+      if (clase.clase === 'rechazado') {
+        await marcarRechazado(prisma, outboxId, {
+          resultado: sendResult,
+          mensajeData: { leadId, origen: 'BOT', texto: botResponse.text },
+          leadId,
+        }).catch(e => console.error('[Pipeline] registrar rechazo:', e.message))
+      } else if (clase.clase === 'no_enviado') {
+        await prisma.outboundMessage.update({
+          where: { id: outboxId },
+          data: { estado: 'PENDING', attempts: { increment: 1 }, lastError: String(sendResult.error || '').slice(0, 500), claimId: null, claimedAt: null, updatedAt: new Date() },
+        }).catch(e => console.error('[Pipeline] outbox PENDING:', e.message))
+      } else {
+        await marcarIncierto(prisma, outboxId, { resultado: sendResult })
+          .catch(e => console.error('[Pipeline] marcar incierto:', e.message))
+      }
+      // HITO A3: el cliente NO recibió la respuesta → el avance comercial de este turno
+      // no se confirma. Los datos que el lead aportó se conservan.
+      if (stateResult.turno?.turnoId) {
+        await descartarTurno(prisma, leadId, stateResult.turno.turnoId)
+          .catch(err => console.error(`[Pipeline] no se pudo descartar el turno (lead ${leadId}):`, err.message))
+      }
     }
 
     // ─── Log final ───

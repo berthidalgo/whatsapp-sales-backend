@@ -26,17 +26,23 @@ function simular(t, { filas, fallaLectura = false }) {
     tenantId: TENANT, telefono: '51900000000', nombre: 'Ana Pérez' }
   const consulta = t.mock.method(prisma, '$queryRawUnsafe', async () => [candidato])
   // Los delegates Prisma son proxies; sustituirlos evita conectar la BD.
-  const delegates = { lead: prisma.lead, channel: prisma.channel, message: prisma.message }
+  // `leadState` entra porque el recordatorio REVALIDA el modo del lead antes de enviar
+  // (Hito A4): si un humano tomó el control entre la consulta y el envío, no se manda.
+  const delegates = { lead: prisma.lead, channel: prisma.channel, message: prisma.message, leadState: prisma.leadState }
   t.after(() => { Object.assign(prisma, delegates) })
+  prisma.leadState = { findUnique: t.mock.fn(async () => ({ currentMode: 'AUTO_CONSULTIVO', slotsFilled: {} })) }
   prisma.lead = { findMany: t.mock.fn(async () => {
     if (fallaLectura) throw new Error('lectura ficticia fallida')
     return filas
-  }) }
+  }), findFirst: t.mock.fn(async () => ({ archivedAt: null })) }
   const canal = t.mock.fn(async ({ where }) => ({
     id: 'canal-test', tenantId: where.tenantId, provider: 'evolution', externalKey: 'instancia-test'
   }))
   prisma.channel = { findFirst: canal }
   const marcas = t.mock.method(prisma, '$executeRaw', async () => 1)
+  // La reserva atómica (Hito A4) inserta y luego lee su id; sin este mock intentaría
+  // conectar a la BD real en una prueba offline.
+  const reservas = t.mock.method(prisma, '$queryRaw', async () => [{ id: '11111111-1111-1111-1111-111111111111' }])
   const mensajes = t.mock.fn(async ({ data }) => ({ id: 1, ...data }))
   prisma.message = { create: mensajes }
   const envios = []
@@ -45,7 +51,7 @@ function simular(t, { filas, fallaLectura = false }) {
     envios.push(JSON.parse(opciones.body))
     return { ok: true, status: 200, json: async () => ({ key: { id: 'envio-ficticio' }, status: 'PENDING' }) }
   })
-  return { consulta, canal, marcas, mensajes, envios }
+  return { consulta, canal, marcas, reservas, mensajes, envios }
 }
 
 for (const caso of [
@@ -67,8 +73,10 @@ for (const caso of [
     assert.equal(resultado.errores, 0)
     assert.equal(fake.envios.length, caso.envia ? 1 : 0)
     assert.equal(fake.canal.mock.callCount(), caso.envia ? 1 : 0)
-    assert.equal(fake.marcas.mock.callCount(), caso.envia ? 1 : 0)
     assert.equal(fake.mensajes.mock.callCount(), caso.envia ? 1 : 0)
+    // Escrituras crudas por envío válido: reservar el trabajo (candado atómico del Hito A4),
+    // marcar reminder_sent (idempotencia del cobro) y cerrar la reserva (auditoría).
+    assert.equal(fake.marcas.mock.callCount(), caso.envia ? 3 : 0)
     if (caso.envia) {
       assert.equal(fake.envios[0].number, '51900000000')
       const texto = fake.envios[0].text

@@ -6,3 +6,8 @@ const prisma = new PrismaClient({
 })
 
 export default prisma
+
+// Mismo cliente con nombre: los módulos que aceptan `prisma` como dependencia inyectable
+// (bandeja, outbox, tests) importan el nombre en vez del default, para que quede explícito
+// que es el cliente real y no un doble accidental.
+export { prisma }

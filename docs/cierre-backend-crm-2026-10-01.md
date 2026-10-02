@@ -1,5 +1,7 @@
 # Cierre de auditoría y preparación del backend del CRM
 
+**Actualización posterior:** el backend está desplegado como `298b32b`, con `/health` y `/ready` aprobados. [Informe del despliegue](despliegue-crm-2026-10-01.md). Las tablas siguientes conservan el cierre previo a la publicación; sus pendientes de push/despliegue ya se completaron.
+
 Revisión del 1 de octubre de 2026 (America/Lima). El backend comprende identidad/roles, tenants, campañas y fichas, leads, conversaciones, medios, operadores, seguimiento y canales. El cerebro del bot es un componente principal.
 
 ## Estado comprobado

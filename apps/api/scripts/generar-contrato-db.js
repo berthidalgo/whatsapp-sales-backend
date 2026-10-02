@@ -21,7 +21,7 @@ if (process.argv.length !== 3 || process.argv[2] !== '--actualizar') {
     const generated = execFileSync(process.execPath, [path.join(API_ROOT, 'node_modules', 'prisma', 'build', 'index.js'), 'migrate', 'diff', '--from-empty', '--to-schema-datamodel', schemaCopy, '--script'], {
       cwd: temporary, env, encoding: 'utf8', timeout: 60000, stdio: ['ignore','pipe','pipe']
     });
-    const sql = '-- Contrato CRM 20261001: esquema completo sin datos comerciales.\n-- Bootstrap en BD vacía; upgrades mediante preparar-db-crm.js (nunca ejecutar a ciegas en producción).\n' + qualifySql(generated);
+    const sql = '-- Contrato CRM 20261002: esquema completo sin datos comerciales.\n-- Bootstrap en BD vacía; upgrades mediante preparar-db-crm.js (nunca ejecutar a ciegas en producción).\n' + qualifySql(generated);
     const contract = parseSchemaSql(sql, source);
     fs.mkdirSync(path.dirname(SQL_PATH), { recursive: true });
     fs.writeFileSync(SQL_PATH, sql);

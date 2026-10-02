@@ -62,10 +62,17 @@ export async function esPosibleComprobante(prisma, leadId, leadState = undefined
  * descarga jamás deje un pago sin dueño.
  */
 export async function escalarAHumano(prisma, leadId) {
-  await prisma.leadState.updateMany({
-    where: { leadId },
+  // HITO A4 (oct 2026): PAUSED es TERMINAL y no se toca. Antes este update escribía
+  // HUMAN_ACTIVE sin condición: un lead en pausa (rechazo/cierre del cerebro) que mandaba
+  // su comprobante se reanimaba solo — un cambio de modo NO autorizado, hecho por una regla
+  // automática, sobre una conversación que el operador había cerrado. Ahora solo se escala
+  // lo que está en modo bot; PAUSED se queda quieto (y su aviso al humano se manda igual,
+  // porque un pago sigue siendo un pago).
+  const r = await prisma.leadState.updateMany({
+    where: { leadId, NOT: { currentMode: MODES.PAUSED } },
     data: { currentMode: MODES.HUMAN_ACTIVE, modeEnteredAt: new Date() }
   })
+  return { escalado: r.count > 0 }
 }
 
 /**
